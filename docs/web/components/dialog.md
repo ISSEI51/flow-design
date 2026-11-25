@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/dialog.tsx`](../../../registry/components/ui/dialog.tsx) |
 | 元にした実装 | shadcn/ui の Dialog（Base UI 版） |
 | 依存 | `@base-ui/react`、`lucide-react`、[Button](button.md)、[`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -94,7 +94,7 @@
 | `unsavedChanges` | 未保存の変更がある。製品が判断して渡す |
 | `onDiscardRequest` | `unsavedChanges` のときに、Escape、閉じるボタン、`DialogClose` が押された。破棄を確かめる Alert Dialog を開く |
 
-`unsavedChanges` が `true` のときは、外側のクリックでは閉じない。`onDiscardRequest` を渡さない場合は、閉じる手段がなくならないよう、外側のクリックだけを止める。保存中の扱い、閉じる要求が続く場合、保護する範囲（ブラウザの戻る操作、ページの移動などは製品の責務）は [overlays.md](overlays.md#2-閉じる操作と未保存の変更) にまとめている。
+`unsavedChanges` が `true` のときは、外側のクリックでは閉じない。`unsavedChanges` を渡す場合は `onDiscardRequest` が必須で、指定漏れは型エラーと開発時の警告で検出する。確認を出さない場合は `onDiscardRequest={null}` と明示し、外側のクリックだけを止める。保存中の扱い、閉じる要求が続く場合、保護する範囲（ブラウザの戻る操作、ページの移動などは製品の責務）は [overlays.md](overlays.md#2-閉じる操作と未保存の変更) にまとめている。
 
 - 初期フォーカスを変える場合は、`DialogContent` に `initialFocus` を、戻す先を変える場合は `finalFocus` を渡す（Base UI）。
 - 閉じるボタンの名前は `closeLabel`（既定は「閉じる」）で変える。英語の画面では `closeLabel="Close"` にする。

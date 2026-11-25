@@ -1,6 +1,16 @@
 import { useState } from "react"
 import { Copy } from "lucide-react"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -32,6 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Compare, Row, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { DiscardAlert } from "./discard-alert"
+import { HintButton } from "./hint-button"
 
 const sizes = [
   { size: "sm", name: "Small", width: "360px", title: "メモを追加", body: "short" },
@@ -108,6 +119,7 @@ function SizeBody({ kind }: { kind: (typeof sizes)[number]["body"] }) {
 
 // 未保存の変更を持つ Dialog。未保存かどうかの判断は、この画面が行う。
 function EditCompanyDialog() {
+  const { toast } = useToast()
   const saved = { name: "山田商事", phone: "03-1234-5678" }
   const [open, setOpen] = useState(false)
   const [values, setValues] = useState(saved)
@@ -160,7 +172,10 @@ function EditCompanyDialog() {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel>電話番号</FieldLabel>
+                  <div className="flex items-center gap-1">
+                    <FieldLabel>電話番号</FieldLabel>
+                    <HintButton label="電話番号の書き方" hint="ハイフンを含めて入力します" testId="dialog-dirty-hint" />
+                  </div>
                   <Input
                     type="tel"
                     value={values.phone}
@@ -170,6 +185,14 @@ function EditCompanyDialog() {
               </FieldGroup>
             </DialogBody>
             <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                data-testid="dialog-dirty-draft"
+                onClick={() => toast({ variant: "info", title: "下書きを保存しました", id: "dialog-draft" })}
+              >
+                下書きを保存
+              </Button>
               <DialogClose render={<Button variant="secondary" disabled={saving} />}>キャンセル</DialogClose>
               <Button type="submit" loading={saving} data-testid="dialog-dirty-save">
                 変更を保存
@@ -199,7 +222,7 @@ function EditCompanyDialog() {
 function GuardWithoutConfirm() {
   const [note, setNote] = useState("")
   return (
-    <Dialog unsavedChanges={note !== ""} onOpenChange={(open) => !open && setNote("")}>
+    <Dialog unsavedChanges={note !== ""} onDiscardRequest={null} onOpenChange={(open) => !open && setNote("")}>
       <DialogTrigger render={<Button variant="secondary" data-testid="dialog-noconfirm-trigger" />}>メモを書く</DialogTrigger>
       <DialogContent size="sm" data-testid="dialog-noconfirm">
         <DialogHeader>
@@ -213,6 +236,28 @@ function GuardWithoutConfirm() {
         <DialogFooter>
           <DialogClose render={<Button variant="secondary" />}>閉じる</DialogClose>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// 避ける例：unsavedChanges を渡し、onDiscardRequest を指定し忘れる。型エラーになり（下の @ts-expect-error）、
+// 型を通らない場合も開発時に警告を出す。動作は onDiscardRequest={null} と同じで、閉じる手段は残る。
+function MissingDiscardRequest() {
+  const [note, setNote] = useState("")
+  return (
+    // @ts-expect-error unsavedChanges を渡す場合は onDiscardRequest が必須（指定漏れを型で検出する例）
+    <Dialog unsavedChanges={note !== ""}>
+      <DialogTrigger render={<Button variant="secondary" data-testid="dialog-missing-trigger" />}>指定漏れの例</DialogTrigger>
+      <DialogContent size="sm" data-testid="dialog-missing">
+        <DialogHeader>
+          <DialogTitle>メモを書く</DialogTitle>
+          <DialogDescription>onDiscardRequest を指定し忘れた例。</DialogDescription>
+        </DialogHeader>
+        <Field>
+          <FieldLabel>メモ</FieldLabel>
+          <Textarea data-testid="dialog-missing-field" rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
       </DialogContent>
     </Dialog>
   )
@@ -236,6 +281,7 @@ function SingleActionDialog() {
 // Dialog の中の Popover、Tooltip、Toast。
 function CombinedDialog() {
   const { toast } = useToast()
+  const [removeOpen, setRemoveOpen] = useState(false)
   return (
     <Dialog>
       <DialogTrigger render={<Button variant="secondary" data-testid="dialog-combo-trigger" />}>担当者を確認</DialogTrigger>
@@ -252,7 +298,12 @@ function CombinedDialog() {
                 <PopoverTitle>山田 太郎</PopoverTitle>
                 <PopoverDescription>yamada@example.com</PopoverDescription>
               </PopoverHeader>
-              <PopoverClose render={<Button variant="secondary" size="sm" className="self-start" />}>閉じる</PopoverClose>
+              <div className="flex gap-2">
+                <PopoverClose render={<Button variant="secondary" size="sm" />}>閉じる</PopoverClose>
+                <Button variant="destructive" size="sm" data-testid="dialog-combo-remove" onClick={() => setRemoveOpen(true)}>
+                  担当者から外す
+                </Button>
+              </div>
             </PopoverContent>
           </Popover>
           <Tooltip>
@@ -272,6 +323,20 @@ function CombinedDialog() {
             <TooltipContent data-testid="dialog-combo-tooltip">メールアドレスをコピー</TooltipContent>
           </Tooltip>
         </div>
+        <AlertDialog open={removeOpen} onOpenChange={setRemoveOpen}>
+          <AlertDialogContent size="sm" data-testid="dialog-combo-alert">
+            <AlertDialogHeader>
+              <AlertDialogTitle>山田 太郎を担当者から外しますか？</AlertDialogTitle>
+              <AlertDialogDescription>山田商事の担当者がいなくなります。</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>キャンセル</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={() => setRemoveOpen(false)}>
+                担当者から外す
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <DialogFooter>
           <DialogClose render={<Button variant="secondary" />}>閉じる</DialogClose>
         </DialogFooter>
@@ -369,9 +434,12 @@ export function DialogPage() {
         </Row>
       </Section>
 
-      <Section title="閉じる操作" lead="onDiscardRequest を渡さない場合は、外側のクリックだけを止め、Escape と閉じるボタンでは閉じる。閉じる手段がなくならないようにするため。">
-        <Row label="確認を出さない" note="unsavedChanges だけを渡す">
+      <Section title="閉じる操作" lead="確認を出さない場合は onDiscardRequest={null} と明示する。外側のクリックだけを止め、Escape と閉じるボタンでは閉じる。閉じる手段がなくならないようにするため。">
+        <Row label="確認を出さない" note="onDiscardRequest={null} と明示する">
           <GuardWithoutConfirm />
+        </Row>
+        <Row label="指定漏れ（避ける）" note="型エラーと開発時の警告で気付ける">
+          <MissingDiscardRequest />
         </Row>
         <Row label="操作が 1 つ" note="Tab を押しても閉じるボタンから移らない">
           <SingleActionDialog />

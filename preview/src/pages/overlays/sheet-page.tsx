@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -25,6 +35,7 @@ import { industries } from "../../data/industries"
 import { Compare, Row, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { DiscardAlert } from "./discard-alert"
+import { HintButton } from "./hint-button"
 import { CustomerActions } from "./dropdown-menu-page"
 
 type Draft = Pick<Customer, "name" | "industry" | "email" | "phone" | "note">
@@ -54,6 +65,7 @@ function CustomerList() {
   const [confirm, setConfirm] = useState<null | "close" | "view">(null)
   const [status, setStatus] = useState("")
   const { toast } = useToast()
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const firstFieldRef = useRef<HTMLInputElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
 
@@ -146,9 +158,11 @@ function CustomerList() {
                   <Button variant="secondary" size="sm" onClick={startEdit} data-testid="sheet-edit">
                     編集
                   </Button>
+                  <HintButton label="顧客 ID について" hint="請求書と問い合わせで使う番号です" testId="sheet-hint" />
                   <CustomerActions name={selected.name} testId="sheet-actions" align="start" onSelect={(a) => {
                       setStatus(`「${a}」を選びました`)
                       if (a === "複製") toast({ variant: "success", title: `${selected.name}を複製しました`, id: "sheet-duplicate" })
+                      if (a === "削除") setDeleteOpen(true)
                     }} />
                 </div>
               </SheetHeader>
@@ -238,6 +252,20 @@ function CustomerList() {
               </SheetFooter>
             </form>
           )}
+          <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+            <AlertDialogContent data-testid="sheet-delete-alert">
+              <AlertDialogHeader>
+                <AlertDialogTitle>{`${selected?.name ?? ""}を削除しますか？`}</AlertDialogTitle>
+                <AlertDialogDescription>この操作は取り消せません。</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>キャンセル</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => setDeleteOpen(false)}>
+                  削除する
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           <DiscardAlert
             testId="sheet-discard"
             open={confirm !== null}

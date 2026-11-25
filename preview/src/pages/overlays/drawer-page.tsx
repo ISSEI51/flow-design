@@ -31,6 +31,7 @@ import { customers } from "../../data/customers"
 import { Compare, Row, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { DiscardAlert } from "./discard-alert"
+import { HintButton } from "./hint-button"
 
 const shareActions = [
   { icon: Link, label: "リンクをコピー", done: "リンクをコピーしました" },
@@ -135,7 +136,10 @@ function NoteDrawer() {
             </DrawerHeader>
             <DrawerBody>
               <Field>
-                <FieldLabel>メモ</FieldLabel>
+                <div className="flex items-center gap-1">
+                  <FieldLabel>メモ</FieldLabel>
+                  <HintButton label="メモの公開範囲" hint="担当者だけが見られます" testId="drawer-note-hint" />
+                </div>
                 <Textarea data-testid="drawer-note-field" rows={4} value={note} onChange={(e) => setNote(e.target.value)} />
                 <FieldDescription>担当者だけが見られます。</FieldDescription>
               </Field>

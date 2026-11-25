@@ -22,6 +22,40 @@ type DrawerContextValue = {
 
 const DrawerContext = React.createContext<DrawerContextValue>({ modal: true })
 
+// 未保存の変更の保護。unsavedChanges を渡す場合は、onDiscardRequest も必ず指定する（型で検出する）。
+// 確認を出さず、外側のクリックだけを止める場合は onDiscardRequest={null} と明示する。
+type DrawerCloseGuardProps =
+  | { unsavedChanges?: undefined; onDiscardRequest?: undefined }
+  | {
+      /**
+       * 未保存の変更がある。判断は製品が行う。
+       * true のとき、外側のクリックでは閉じない。Escape、閉じるボタン、Close の部品（Drawer はスワイプも）では
+       * 閉じずに onDiscardRequest を呼ぶ。保存の後などに製品が open を false にした場合は閉じる。
+       */
+      unsavedChanges: boolean
+      /**
+       * unsavedChanges のときに閉じる操作が行われた。変更を破棄するかを確かめる Alert Dialog を開く。
+       * null を指定すると確認を出さず、外側のクリックだけを止める（明示的な閉じる操作では閉じる）。
+       */
+      onDiscardRequest: (() => void) | null
+    }
+
+// 型を通らずに（JavaScript など）onDiscardRequest を指定し忘れた場合に、開発時に 1 回だけ知らせる。
+// 実行時の動作は変えない（外側のクリックだけを止め、明示的な閉じる操作では閉じる）。
+function useMissingDiscardRequestWarning(name: string, unsavedChanges: boolean, onDiscardRequest: unknown) {
+  const warned = React.useRef(false)
+  React.useEffect(() => {
+    if (process.env.NODE_ENV === "production" || warned.current) return
+    if (unsavedChanges && onDiscardRequest === undefined) {
+      warned.current = true
+      console.warn(
+        `[Flow Design] ${name}: unsavedChanges が true ですが、onDiscardRequest が指定されていません。` +
+          "Escape や閉じるボタンでは、確認せずに閉じます。確認を出さない場合は onDiscardRequest={null} を指定してください。"
+      )
+    }
+  }, [name, unsavedChanges, onDiscardRequest])
+}
+
 function Drawer({
   modal = true,
   swipeDirection = "down",
@@ -30,11 +64,8 @@ function Drawer({
   onOpenChange,
   disablePointerDismissal,
   ...props
-}: DrawerPrimitive.Root.Props & {
-  /** 未保存の変更がある。外側のクリックでは閉じず、Escape、閉じるボタン、スワイプでは onDiscardRequest を呼ぶ */
-  unsavedChanges?: boolean
-  onDiscardRequest?: () => void
-}) {
+}: DrawerPrimitive.Root.Props & DrawerCloseGuardProps) {
+  useMissingDiscardRequestWarning("Drawer", unsavedChanges, onDiscardRequest)
   const value = React.useMemo(() => ({ modal }), [modal])
   return (
     <DrawerContext.Provider value={value}>

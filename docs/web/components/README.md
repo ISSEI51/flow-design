@@ -20,12 +20,12 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Toast | [toast.md](toast.md) | v0.1 確定 |
 | Skeleton | [skeleton.md](skeleton.md) | v0.1 確定 |
 | Progress | [progress.md](progress.md) | v0.1 確定 |
-| Dialog | [dialog.md](dialog.md) | 初期実装 |
-| Alert Dialog | [alert-dialog.md](alert-dialog.md) | 初期実装 |
-| Popover | [popover.md](popover.md) | 初期実装 |
-| Dropdown Menu | [dropdown-menu.md](dropdown-menu.md) | 初期実装 |
-| Sheet | [sheet.md](sheet.md) | 初期実装 |
-| Drawer | [drawer.md](drawer.md) | 初期実装 |
+| Dialog | [dialog.md](dialog.md) | v0.1 確定 |
+| Alert Dialog | [alert-dialog.md](alert-dialog.md) | v0.1 確定 |
+| Popover | [popover.md](popover.md) | v0.1 確定 |
+| Dropdown Menu | [dropdown-menu.md](dropdown-menu.md) | v0.1 確定 |
+| Sheet | [sheet.md](sheet.md) | v0.1 確定 |
+| Drawer | [drawer.md](drawer.md) | v0.1 確定 |
 | Sidebar | [sidebar.md](sidebar.md) | v0.1 確定 |
 | Tabs | [tabs.md](tabs.md) | v0.1 確定 |
 | Breadcrumb | [breadcrumb.md](breadcrumb.md) | v0.1 確定 |
