@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react"
+import { createContext, useContext, useEffect, useRef, useState } from "react"
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 
 import { cn } from "@/lib/utils"
@@ -23,8 +23,40 @@ function TooltipProvider({ delay = TOOLTIP_DELAY, ...props }: TooltipPrimitive.P
   )
 }
 
-function Tooltip(props: TooltipPrimitive.Root.Props) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
+// Escape は最前面から順に閉じる。Base UI の Tooltip は Dialog などの Overlay の木（FloatingTree）に属さないため、
+// ポインターで開いた Tooltip（フォーカスは別の要素）があるとき、Escape が背後の Dialog に届き、両方が閉じる。
+// 開いている間だけ、この Tooltip の Escape を document のキャプチャの段階で受け、Tooltip だけを閉じて伝播を止める。
+// 閉じる操作は Base UI の actionsRef.close() を使う。IME の変換中の Escape は扱わない。
+function Tooltip({ actionsRef, onOpenChange, ...props }: TooltipPrimitive.Root.Props) {
+  const ownActions = useRef<TooltipPrimitive.Root.Actions>(null)
+  // 製品が actionsRef を渡した場合はそれを使い、渡さない場合は内部の ref を使う。
+  const actions = actionsRef ?? ownActions
+  const [openState, setOpenState] = useState(props.defaultOpen ?? false)
+  const open = props.open ?? openState
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return
+      event.preventDefault()
+      event.stopPropagation()
+      actions.current?.close()
+    }
+    document.addEventListener("keydown", onKeyDown, true)
+    return () => document.removeEventListener("keydown", onKeyDown, true)
+  }, [open, actions])
+
+  return (
+    <TooltipPrimitive.Root
+      data-slot="tooltip"
+      actionsRef={actions}
+      onOpenChange={(next, details) => {
+        onOpenChange?.(next, details)
+        if (!details.isCanceled) setOpenState(next)
+      }}
+      {...props}
+    />
+  )
 }
 
 function TooltipTrigger({ delay, ...props }: TooltipPrimitive.Trigger.Props) {
@@ -32,6 +64,9 @@ function TooltipTrigger({ delay, ...props }: TooltipPrimitive.Trigger.Props) {
   return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" delay={delay ?? providerDelay ?? TOOLTIP_DELAY} {...props} />
 }
 
+// 重なり順：z-50（浮かぶ要素の層）。後から開いたモーダル（Dialog、Alert Dialog など）の外側に残った場合は、
+// Base UI がモーダルの外側の要素に付ける data-base-ui-inert の下に入るため、モーダルの層（z-40）に下げる。
+// DOM の順で新しいモーダルの背面に入り、押せなくなる（Base UI は同時に aria-hidden も付ける）。
 function TooltipContent({
   className,
   side = "top",
@@ -51,7 +86,7 @@ function TooltipContent({
         side={side}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className="isolate z-50"
+        className="isolate z-50 in-[[data-base-ui-inert]]:z-40"
       >
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"

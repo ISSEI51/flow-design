@@ -23,6 +23,40 @@ type SheetModal = NonNullable<SheetPrimitive.Root.Props["modal"]>
 // mode と、実際のモーダル性。背景の表示は、実際のモーダル性に合わせる。
 const SheetModeContext = React.createContext<{ mode: SheetMode; modal: SheetModal }>({ mode: "edit", modal: true })
 
+// 未保存の変更の保護。unsavedChanges を渡す場合は、onDiscardRequest も必ず指定する（型で検出する）。
+// 確認を出さず、外側のクリックだけを止める場合は onDiscardRequest={null} と明示する。
+type SheetCloseGuardProps =
+  | { unsavedChanges?: undefined; onDiscardRequest?: undefined }
+  | {
+      /**
+       * 未保存の変更がある。判断は製品が行う。
+       * true のとき、外側のクリックでは閉じない。Escape、閉じるボタン、Close の部品（Drawer はスワイプも）では
+       * 閉じずに onDiscardRequest を呼ぶ。保存の後などに製品が open を false にした場合は閉じる。
+       */
+      unsavedChanges: boolean
+      /**
+       * unsavedChanges のときに閉じる操作が行われた。変更を破棄するかを確かめる Alert Dialog を開く。
+       * null を指定すると確認を出さず、外側のクリックだけを止める（明示的な閉じる操作では閉じる）。
+       */
+      onDiscardRequest: (() => void) | null
+    }
+
+// 型を通らずに（JavaScript など）onDiscardRequest を指定し忘れた場合に、開発時に 1 回だけ知らせる。
+// 実行時の動作は変えない（外側のクリックだけを止め、明示的な閉じる操作では閉じる）。
+function useMissingDiscardRequestWarning(name: string, unsavedChanges: boolean, onDiscardRequest: unknown) {
+  const warned = React.useRef(false)
+  React.useEffect(() => {
+    if (process.env.NODE_ENV === "production" || warned.current) return
+    if (unsavedChanges && onDiscardRequest === undefined) {
+      warned.current = true
+      console.warn(
+        `[Flow Design] ${name}: unsavedChanges が true ですが、onDiscardRequest が指定されていません。` +
+          "Escape や閉じるボタンでは、確認せずに閉じます。確認を出さない場合は onDiscardRequest={null} を指定してください。"
+      )
+    }
+  }, [name, unsavedChanges, onDiscardRequest])
+}
+
 function Sheet({
   mode = "edit",
   modal,
@@ -31,18 +65,17 @@ function Sheet({
   onOpenChange,
   disablePointerDismissal,
   ...props
-}: SheetPrimitive.Root.Props & {
-  /**
-   * 閲覧（view）か編集（edit）か。既定は edit。モーダル性の既定値を決める（edit は true、view は false）。
-   * modal を指定した場合は、modal を優先する（shadcn/ui、Base UI との互換）。
-   */
-  mode?: SheetMode
-  /** 未保存の変更がある。外側のクリックでは閉じず、Escape と閉じるボタンでは onDiscardRequest を呼ぶ */
-  unsavedChanges?: boolean
-  onDiscardRequest?: () => void
-}) {
+}: SheetPrimitive.Root.Props &
+  SheetCloseGuardProps & {
+    /**
+     * 閲覧（view）か編集（edit）か。既定は edit。モーダル性の既定値を決める（edit は true、view は false）。
+     * modal を指定した場合は、modal を優先する（shadcn/ui、Base UI との互換）。
+     */
+    mode?: SheetMode
+  }) {
   // 優先順位：modal（指定した場合）→ mode。背景の表示、背景の操作、スクロール、フォーカスの閉じ込めは、
   // すべてこの値に従う（背景を暗くするのは true のときだけ。"trap-focus" はフォーカスだけを閉じ込める）。
+  useMissingDiscardRequestWarning("Sheet", unsavedChanges, onDiscardRequest)
   const resolvedModal: SheetModal = modal ?? mode === "edit"
   const value = React.useMemo(() => ({ mode, modal: resolvedModal }), [mode, resolvedModal])
   return (

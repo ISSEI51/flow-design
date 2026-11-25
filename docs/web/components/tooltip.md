@@ -49,6 +49,8 @@
 | Esc | 閉じる |
 | ポインターを外す、フォーカスを外す | 閉じる |
 
+- Dialog、Sheet、Drawer などの Overlay の中では、Esc は Tooltip だけを閉じ、背後の Overlay には届かない。ポインターで開いた場合も同じである（[overlays.md](overlays.md#3-入れ子とフォーカスの復帰)）。
+- 後から開いたモーダルの外側に残った Tooltip は、モーダルの背面に入る（[overlays.md](overlays.md#重なり順)）。
 - 時間の経過では閉じない。読み終える前に消えない。
 - 画面の端では、はみ出さないように位置と向きを変える（`collisionPadding` 8px）。
 - 動きを減らす設定では、大きさの変化をやめ、透明度だけで表示する。
