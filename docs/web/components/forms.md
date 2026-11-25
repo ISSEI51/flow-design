@@ -28,7 +28,7 @@ Input、Textarea、Label、Select、Checkbox、Radio Group、Switch、Field に�
 - フォームの中で単一選択の表現がそろい、選び方を学び直さなくてよい（原則 06）。
 - 選択肢の数が変わっても、画面の構造が変わらない。
 
-選択肢の数だけを理由に Radio Group へ変えない。検索が必要なほど選択肢が多い場合は、将来の Combobox を使う。
+選択肢の数だけを理由に Radio Group へ変えない。検索が必要なほど選択肢が多い場合は、[Combobox](combobox.md) を使う。
 
 ### Checkbox と Switch の違い
 

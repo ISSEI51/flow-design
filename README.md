@@ -191,6 +191,6 @@ Natural Motion
 
 Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md) にまとめている。
 
-図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py` で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
+図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py`（Advanced Components の図は `gen_advanced.py`）で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
 
 ライセンスは未定。
