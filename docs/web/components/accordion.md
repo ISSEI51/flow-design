@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/accordion.tsx`](../../../registry/components/ui/accordion.tsx) |
 | 元にした実装 | shadcn/ui の Accordion（Base UI 版、base-nova スタイル） |
 | 依存 | `@base-ui/react`、`lucide-react`、[`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -67,7 +67,11 @@ Base UI と shadcn/ui の既定は単一展開である。Flow Design は複数�
 - Tab で見出しへ移り、Enter と Space で開閉する。
 - `AccordionTrigger` は `<h3>` の中のボタンを描画する。ページの見出しの構造に合わせて `level`（2〜6）を指定する。
 - 内容は `aria-controls` で見出しと関連付き、`role="region"` を持つ。
-- `keepMounted` の既定は `true`。閉じた内容も DOM に残し、`hidden` 属性で隠す。入力した値は閉じても失われない。
+- `keepMounted` の既定は `true`。閉じた内容も DOM に残し、`hidden` 属性で隠す。閉じた内容は表示されず、Tab でフォーカスが移らず、アクセシビリティツリーから外れる。入力した値は閉じても失われず、フォームでは閉じた内容の値も送信される。`keepMounted={false}` で、閉じた内容を DOM から外す。
+- 内容の中にフォーカスがある状態で閉じた場合（内容の中のボタンで閉じる、製品が `value` を変えるなど）は、フォーカスをその項目の見出しへ移す。閉じて非表示になった要素にフォーカスが残らないようにするためである。
+- `keepMounted` が担うのは、DOM と入力欄の値を残すことまでである。閉じた内容の中のデータの取得や重い描画は止まらない。必要な場合は、開いたときに処理を始める。
+- フォームが複数の Accordion に分かれている場合、閉じた項目の入力欄のエラーはユーザーに見えない。製品の処理で検証し、エラーの概要に、該当する項目を開いて入力欄へフォーカスを移すリンクを置く。必須の入力項目は、そもそも折りたたまない。
+- `accordion.tsx` は、フォーカスを移す処理にフックを使うため `"use client"` を付けている。
 - 高さは Base UI の `--accordion-panel-height` で決まる。開いた後に内容が増えても、高さが追従する。
 - 内容の領域は `overflow: hidden` で高さの変化に合わせて隠す。左右と上に 4px の余白を取り、中の入力欄などのフォーカスの線が切れないようにしている。
 - 動きを減らす設定では、高さの変化とアイコンの回転の時間が 0ms になる。

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Button } from "@/components/ui/button"
+import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -34,6 +35,74 @@ function SlowPanel({ name }: { name: string }) {
     <p className="text-ui text-muted-foreground" role="status">
       {ready ? `${name}の集計を表示しました` : `${name}を集計しています`}
     </p>
+  )
+}
+
+// 2 つのタブに分かれたフォーム。検証の規則と、エラーのある非表示のタブへの移動は、この画面（製品）が持つ。
+function KeepForm() {
+  const [tab, setTab] = useState("basic")
+  const [result, setResult] = useState("")
+  const [emailError, setEmailError] = useState(false)
+  const emailRef = useRef<HTMLInputElement>(null)
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const data = new FormData(e.currentTarget)
+    const email = String(data.get("billingEmail") ?? "")
+    setEmailError(email === "")
+    setResult(email === "" ? "" : `送信した値：${data.get("companyName") || "（会社名なし）"}、${email}`)
+  }
+  const goToEmail = () => {
+    setTab("billing")
+    // 選んだタブの内容が表示された後に、入力欄へ移る。
+    window.requestAnimationFrame(() => emailRef.current?.focus())
+  }
+  return (
+    <form data-testid="tabs-keep-form" noValidate onSubmit={submit} className="w-full max-w-md">
+      {emailError && (
+        <div role="alert" data-testid="tabs-keep-summary" className="mb-6 text-ui text-destructive">
+          <button type="button" onClick={goToEmail} className="rounded-xs underline underline-offset-4 outline-none focus-visible:focus-ring">
+            「請求先」の請求書の送付先を入力してください
+          </button>
+        </div>
+      )}
+      <Tabs data-testid="tabs-keep" value={tab} onValueChange={(v) => setTab(String(v))}>
+        <TabsList aria-label="顧客の編集">
+          <TabsTrigger value="basic">基本情報</TabsTrigger>
+          <TabsTrigger value="billing">請求先</TabsTrigger>
+        </TabsList>
+        <TabsContent value="basic">
+          <Field>
+            <FieldLabel>会社名</FieldLabel>
+            <Input name="companyName" data-testid="tabs-keep-input" placeholder="株式会社山田商事" />
+          </Field>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="mt-2"
+            data-testid="tabs-keep-to-billing"
+            onClick={() => setTab("billing")}
+          >
+            請求先も入力する
+          </Button>
+        </TabsContent>
+        <TabsContent value="billing">
+          <Field invalid={emailError}>
+            <FieldLabel>請求書の送付先</FieldLabel>
+            <Input ref={emailRef} name="billingEmail" data-testid="tabs-keep-email" type="email" placeholder="keiri@example.com" />
+            {emailError && <FieldError>請求書の送付先を入力してください</FieldError>}
+          </Field>
+        </TabsContent>
+      </Tabs>
+      <div className="mt-6 flex flex-wrap items-center gap-4">
+        <Button type="submit" data-testid="tabs-keep-submit">
+          変更を保存
+        </Button>
+        <p role="status" data-testid="tabs-keep-result" className="text-ui text-muted-foreground">
+          {result}
+        </p>
+      </div>
+    </form>
   )
 }
 
@@ -151,25 +220,11 @@ export function TabsPage() {
       </Section>
 
       <Section title="動作">
-        <Row label="入力内容を保つ" note="非表示のタブも DOM に残し、入力した値を失わない">
-          <Tabs data-testid="tabs-keep" defaultValue="basic" className="w-full max-w-md">
-            <TabsList aria-label="顧客の編集">
-              <TabsTrigger value="basic">基本情報</TabsTrigger>
-              <TabsTrigger value="billing">請求先</TabsTrigger>
-            </TabsList>
-            <TabsContent value="basic">
-              <Field>
-                <FieldLabel>会社名</FieldLabel>
-                <Input data-testid="tabs-keep-input" placeholder="株式会社山田商事" />
-              </Field>
-            </TabsContent>
-            <TabsContent value="billing">
-              <Field>
-                <FieldLabel>請求書の送付先</FieldLabel>
-                <Input type="email" placeholder="keiri@example.com" />
-              </Field>
-            </TabsContent>
-          </Tabs>
+        <Row
+          label="入力内容を保つ"
+          note="非表示のタブも DOM に残し、入力した値を失わない。非表示のタブの値も送信される。エラーは、非表示のタブを開いて入力欄へ移るリンクで示す"
+        >
+          <KeepForm />
         </Row>
         <Row label="手動で選ぶ" note="activateOnFocus={false}。表示に時間がかかる内容は、Enter か Space で選ぶ">
           <Tabs data-testid="tabs-manual" value={slow} onValueChange={(v) => setSlow(String(v))} className="w-full">

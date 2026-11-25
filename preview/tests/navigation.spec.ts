@@ -1,3 +1,4 @@
+import { appendFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 
 import { expect, test, type Locator, type Page } from "@playwright/test"
@@ -32,6 +33,24 @@ async function expectFocusRing(page: Page, target: Locator) {
 }
 
 const noOverflow = (l: Locator) => l.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+
+// ページで発生した例外を記録する（テストは失敗にしない）。WebKit で報告されている
+// 「TypeError: The provided value is non-finite」を、Overlay 側の調査と照合できるようにするため。
+// 記録先：preview/test-results/page-errors.jsonl（テスト名、ブラウザ、URL、スタックトレース）
+test.beforeEach(async ({ page }, info) => {
+  page.on("pageerror", (error) => {
+    const entry = {
+      test: info.titlePath.join(" › "),
+      project: info.project.name,
+      url: page.url(),
+      message: error.message,
+      stack: error.stack,
+      time: new Date().toISOString(),
+    }
+    mkdirSync(join(info.project.testDir, "..", "test-results"), { recursive: true })
+    appendFileSync(join(info.project.testDir, "..", "test-results", "page-errors.jsonl"), JSON.stringify(entry) + "\n")
+  })
+})
 
 // ------------------------------------------------------------------ 共通
 
@@ -155,30 +174,109 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     const inset = f.locator("[data-slot=sidebar-inset]")
     const headerBefore = (await box(f.getByTestId("frame-title"))).y
     expect(await css(c, "transition-duration")).toBe("0.32s")
-    await f.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await f.getByRole("button", { name: "メニュー", exact: true }).click()
     await expect(f.getByTestId("frame-state")).toHaveText("折りたたみ（64px）")
     await expect.poll(async () => (await box(c)).width).toBe(64)
     // メインは Sidebar の右端から始まり、縦の位置は変わらない
     expect(Math.round((await box(inset)).x - (await box(f)).x)).toBe(64 + 1)
     expect((await box(f.getByTestId("frame-title"))).y).toBe(headerBefore)
     const nav = f.getByRole("navigation", { name: "メインメニュー" })
-    for (const name of ["ホーム", "顧客", "商談", "請求書", "入金", "レポート"]) {
-      const link = nav.getByRole("link", { name })
+    for (const name of ["ホーム", "顧客", "商談", "請求書", "入金"]) {
+      const link = nav.getByRole("link", { name, exact: true })
       await expect(link).toBeVisible()
       const b = await box(link)
       expect(b.x + b.width).toBeLessThanOrEqual((await box(c)).x + 64)
       // 名前は視覚的に隠す
       expect((await box(link.locator("span"))).width).toBeLessThanOrEqual(1)
     }
-    await expect(nav.getByRole("button", { name: "契約" })).toBeVisible()
+    // 子を持つ項目は、メニューを開くボタンになる
+    for (const name of ["契約", "レポート"]) {
+      const parent = nav.getByRole("button", { name, exact: true })
+      await expect(parent).toBeVisible()
+      await expect(parent).toHaveAttribute("aria-haspopup", "menu")
+    }
     await expect(f.getByRole("link", { name: "設定" })).toBeVisible()
     // 折りたたんだまま移動できる
-    await nav.getByRole("link", { name: "レポート" }).click()
-    await expect(nav.getByRole("link", { name: "レポート" })).toHaveAttribute("aria-current", "page")
-    // 子を持つ項目を押すと、展開して子を表示する
-    await nav.getByRole("button", { name: "契約" }).click()
-    await expect.poll(async () => (await box(c)).width).toBe(240)
-    await expect(nav.getByRole("link", { name: "更新が近い契約" })).toBeVisible()
+    await nav.getByRole("link", { name: "入金" }).click()
+    await expect(nav.getByRole("link", { name: "入金" })).toHaveAttribute("aria-current", "page")
+    await expect.poll(async () => (await box(c)).width).toBe(64)
+  })
+
+  test("collapsed: parents open their children in a dropdown menu (mouse)", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = frame(page)
+    await f.getByRole("button", { name: "メニュー", exact: true }).click()
+    await expect.poll(async () => (await box(container(f))).width).toBe(64)
+    const nav = f.getByRole("navigation", { name: "メインメニュー" })
+    const parent = nav.getByRole("button", { name: "契約", exact: true })
+    // 子を持つ項目には Tooltip を付けない（メニューの見出しで名前がわかる）
+    await parent.hover()
+    await page.waitForTimeout(900)
+    await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
+    await parent.click()
+    const menu = page.getByRole("menu")
+    await expect(menu).toBeVisible()
+    await expect(parent).toHaveAttribute("aria-expanded", "true")
+    // 親のページと子のページの両方へ移動できる
+    await expect(menu.getByRole("menuitem")).toHaveText(["契約の一覧", "更新が近い契約", "解約の申し込み"])
+    await expect(menu.getByText("契約", { exact: true })).toBeVisible()
+    // メニューは項目の右に表示する
+    // 開く動き（拡大）が終わってから位置を測る
+    await page.waitForTimeout(300)
+    expect((await box(menu)).x).toBeGreaterThanOrEqual((await box(container(f))).x + 64)
+    await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
+    await menu.getByRole("menuitem", { name: "更新が近い契約" }).click()
+    await expect(menu).toBeHidden()
+    await expect(f.getByTestId("frame-title")).toHaveText("更新が近い契約")
+    // 子が現在位置のとき、折りたたみ時は親を現在位置の面で示す
+    expect(sameColor(await css(parent, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
+    await parent.click()
+    await expect(page.getByRole("menu").getByRole("menuitem", { name: "更新が近い契約" })).toHaveAttribute("aria-current", "page")
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("menu")).toBeHidden()
+    await expect(parent).toBeFocused()
+    // 親が自身のページを持たない項目
+    await nav.getByRole("button", { name: "レポート", exact: true }).click()
+    await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["売上のレポート", "契約の推移"])
+    await page.keyboard.press("Escape")
+    // 子を持たない項目の Tooltip は、これまでどおり表示する
+    await page.mouse.move(0, 0)
+    await nav.getByRole("link", { name: "請求書" }).hover()
+    await expect(page.locator("[data-slot=tooltip-content]")).toHaveText("請求書", { timeout: 2000 })
+  })
+
+  test("collapsed: dropdown menu works with the keyboard and returns focus", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = frame(page)
+    await f.getByRole("button", { name: "メニュー", exact: true }).click()
+    await expect.poll(async () => (await box(container(f))).width).toBe(64)
+    const nav = f.getByRole("navigation", { name: "メインメニュー" })
+    const parent = nav.getByRole("button", { name: "契約", exact: true })
+    await tabTo(page, parent)
+    await expectFocusRing(page, parent)
+    await page.keyboard.press("Enter")
+    const menu = page.getByRole("menu")
+    await expect(menu).toBeVisible()
+    await expect(menu.getByRole("menuitem").first()).toBeFocused()
+    await page.keyboard.press("ArrowDown")
+    await expect(menu.getByRole("menuitem", { name: "更新が近い契約" })).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(menu).toBeHidden()
+    await expect(parent).toBeFocused()
+    await page.keyboard.press("Enter")
+    await expect(page.getByRole("menu").getByRole("menuitem").first()).toBeFocused()
+    await page.keyboard.press("ArrowDown")
+    await page.keyboard.press("ArrowDown")
+    await expect(page.getByRole("menu").getByRole("menuitem", { name: "解約の申し込み" })).toBeFocused()
+    await page.keyboard.press("Enter")
+    await expect(page.getByRole("menu")).toBeHidden()
+    await expect(f.getByTestId("frame-title")).toHaveText("解約の申し込み")
+    await expect(parent).toBeFocused()
+    // 親のページ（契約の一覧）へも移動できる
+    await page.keyboard.press("Enter")
+    await expect(page.getByRole("menu").getByRole("menuitem").first()).toBeFocused()
+    await page.keyboard.press("Enter")
+    await expect(f.getByTestId("frame-title")).toHaveText("契約")
   })
 
   test("collapsed items show their name in a tooltip after 700ms", async ({ page }) => {
@@ -190,7 +288,7 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     await item.hover()
     await page.waitForTimeout(900)
     await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
-    await f.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await f.getByRole("button", { name: "メニュー", exact: true }).click()
     await expect.poll(async () => (await box(container(f))).width).toBe(64)
     await page.mouse.move(0, 0)
     await item.hover()
@@ -221,24 +319,39 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     for (const sk of await items.locator("[data-slot=skeleton]").all()) await expect(sk).toHaveAttribute("aria-hidden", "true")
   })
 
-  test("two levels: parent toggles children, child carries the current position", async ({ page }) => {
+  test("two levels: parent link with a toggle, parent button, current position", async ({ page }) => {
     await open(page, "sidebar")
     const nav = frame(page).getByRole("navigation", { name: "メインメニュー" })
-    const parent = nav.getByRole("button", { name: "契約" })
-    await expect(parent).toHaveAttribute("aria-expanded", "false")
-    await parent.click()
-    await expect(parent).toHaveAttribute("aria-expanded", "true")
+    // 親が自身のページを持つ場合：親はリンク、子の開閉は別のボタン
+    const parentLink = nav.getByRole("link", { name: "契約", exact: true })
+    const toggle = nav.getByRole("button", { name: "契約の下の項目" })
+    await expect(toggle).toHaveAttribute("aria-expanded", "false")
+    await toggle.click()
+    await expect(toggle).toHaveAttribute("aria-expanded", "true")
+    const subId = await toggle.getAttribute("aria-controls")
+    await expect(nav.locator(`[id="${subId}"]`)).toBeVisible()
     const child = nav.getByRole("link", { name: "更新が近い契約" })
     await child.click()
     await expect(child).toHaveAttribute("aria-current", "page")
     expect(await css(child, "font-weight")).toBe("600")
+    await expect(parentLink).not.toHaveAttribute("aria-current")
+    await parentLink.click()
+    await expect(parentLink).toHaveAttribute("aria-current", "page")
     // 子の文字は親の文字の位置にそろえる
-    const parentText = await box(parent.locator("span"))
-    const childBox = await box(child)
-    expect(Math.round(childBox.x + 12)).toBe(Math.round(parentText.x))
-    await parent.click()
-    await expect(parent).toHaveAttribute("aria-expanded", "false")
+    const parentText = await box(parentLink.locator("span"))
+    expect(Math.round((await box(child)).x + 12)).toBe(Math.round(parentText.x))
+    await toggle.click()
+    await expect(toggle).toHaveAttribute("aria-expanded", "false")
     await expect(child).toBeHidden()
+    // 親が自身のページを持たない場合：親はボタンで、子を開閉する
+    const parentButton = nav.getByRole("button", { name: "レポート", exact: true })
+    await expect(parentButton).toHaveAttribute("aria-expanded", "false")
+    await parentButton.click()
+    await expect(nav.getByRole("link", { name: "売上のレポート" })).toBeVisible()
+    // 開閉のボタンは、タッチ操作でも押しやすい大きさ（24px 以上、項目と重ならない）
+    const tb = await box(toggle)
+    expect(tb.width).toBeGreaterThanOrEqual(32)
+    expect(tb.x).toBeGreaterThanOrEqual((await box(parentLink)).x + 100)
   })
 
   test("keyboard shortcut toggles, except inside text fields", async ({ page }) => {
@@ -264,11 +377,11 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     await page.getByTestId("controlled-collapse").click()
     await expect.poll(async () => (await box(container(f))).width).toBe(64)
     await expect(page.getByTestId("controlled-value")).toContainText("open = false")
-    await f.getByRole("button", { name: "メニューを展開する" }).click()
+    await f.getByRole("button", { name: "メニュー", exact: true }).click()
     await expect(page.getByTestId("controlled-value")).toContainText("open = true")
     // 業務アプリの例は、製品として localStorage に保存する
     await page.goto("/#/app?page=home")
-    await page.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await page.getByRole("button", { name: "メニュー", exact: true }).click()
     await page.reload()
     await page.getByRole("heading", { level: 1 }).waitFor()
     await expect.poll(async () => (await box(page.locator("[data-slot=sidebar-container]"))).width).toBe(64)
@@ -317,7 +430,7 @@ test.describe("Sidebar (mobile)", { tag: "@webkit" }, () => {
     await page.getByRole("heading", { level: 1 }).waitFor()
     // 常時表示しない
     await expect(page.getByRole("navigation", { name: "メインメニュー" })).toBeHidden()
-    const trigger = page.getByRole("button", { name: "メニューを開く" })
+    const trigger = page.getByRole("button", { name: "メニュー", exact: true })
     await expect(trigger).toHaveAttribute("aria-expanded", "false")
     expect((await box(trigger)).height).toBeGreaterThanOrEqual(48)
     await trigger.click()
@@ -350,7 +463,7 @@ test.describe("Sidebar (mobile)", { tag: "@webkit" }, () => {
 
   test("sheet respects the safe area and the closing button has a name", async ({ page }) => {
     await page.goto("/#/app?page=home")
-    await page.getByRole("button", { name: "メニューを開く" }).click()
+    await page.getByRole("button", { name: "メニュー", exact: true }).click()
     const dialog = page.getByRole("dialog", { name: "メニュー" })
     await expect(dialog.getByRole("button", { name: "メニューを閉じる" })).toBeVisible()
     const inner = dialog.locator("[data-slot=sidebar-header]").locator("..")
@@ -788,6 +901,352 @@ test.describe("Business app", { tag: "@webkit" }, () => {
   })
 })
 
+
+// ------------------------------------------------------------------ v0.1 の追加検品
+
+const mod = () => (process.platform === "darwin" ? "Meta" : "Control")
+const widthOf = async (l: Locator) => (await box(l)).width
+const container = (l: Locator) => l.locator("[data-slot=sidebar-container]")
+const frame = (page: Page) => page.getByTestId("sidebar-basic")
+type KeyInit = { repeat?: boolean; isComposing?: boolean }
+
+test.describe("Sidebar shortcut control", { tag: "@webkit" }, () => {
+  test.skip(({ isMobile }) => isMobile, "デスクトップの表示")
+
+  test("only the focused sidebar reacts; changed and disabled shortcuts", async ({ page }) => {
+    await open(page, "sidebar")
+    const basic = container(page.getByTestId("sidebar-basic"))
+    const controlled = container(page.getByTestId("sidebar-controlled"))
+    const long = container(page.getByTestId("sidebar-long"))
+    const custom = container(page.getByTestId("sidebar-shortcut"))
+    // フォーカスがどの Sidebar にもない：ショートカットが有効な最初の Sidebar だけ
+    await page.getByRole("heading", { level: 1 }).click()
+    await page.keyboard.press(`${mod()}+b`)
+    await expect.poll(() => widthOf(basic)).toBe(64)
+    for (const c of [controlled, long, custom]) expect(await widthOf(c)).toBe(240)
+    await page.keyboard.press(`${mod()}+b`)
+    await expect.poll(() => widthOf(basic)).toBe(240)
+    // キーを変えた Sidebar：その中にフォーカスがあるときに Ctrl / ⌘ + M
+    await page.getByTestId("sidebar-shortcut").getByRole("link", { name: "請求書" }).focus()
+    await page.keyboard.press(`${mod()}+b`)
+    await page.waitForTimeout(400)
+    expect(await widthOf(custom)).toBe(240)
+    expect(await widthOf(basic)).toBe(240)
+    await page.keyboard.press(`${mod()}+m`)
+    await expect.poll(() => widthOf(custom)).toBe(64)
+    expect(await widthOf(basic)).toBe(240)
+    // 無効にした Sidebar の中では、どの Sidebar も開閉しない
+    await page.getByTestId("sidebar-controlled").getByRole("link", { name: "請求書" }).focus()
+    await page.keyboard.press(`${mod()}+b`)
+    await page.waitForTimeout(400)
+    for (const c of [controlled, basic]) expect(await widthOf(c)).toBe(240)
+  })
+
+  test("ignores key repeat, IME composition and events prevented by other handlers", async ({ page }) => {
+    await open(page, "sidebar")
+    const basic = container(page.getByTestId("sidebar-basic"))
+    const fire = (init: KeyInit, prevent = false) =>
+      page.evaluate(
+        ([init, prevent]) => {
+          const stop = (e: Event) => e.preventDefault()
+          if (prevent) document.addEventListener("keydown", stop, { capture: true, once: true })
+          document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true, ...init }))
+        },
+        [init, prevent] as const
+      )
+    await fire({ repeat: true })
+    await fire({ isComposing: true })
+    await fire({}, true)
+    await page.waitForTimeout(400)
+    expect(await widthOf(basic)).toBe(240)
+    // 比較：通常のキー操作では開閉する
+    await fire({})
+    await expect.poll(() => widthOf(basic)).toBe(64)
+  })
+
+  test("does nothing while another overlay has focus", async ({ page }) => {
+    await page.goto("/#/app?page=customers")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.evaluate(() => localStorage.removeItem("flow-design-preview:sidebar-open"))
+    const c = page.locator("[data-slot=sidebar-container]")
+    await page.getByRole("combobox", { name: "担当者" }).click()
+    await expect(page.getByRole("listbox")).toBeVisible()
+    await page.keyboard.press(`${mod()}+b`)
+    await page.waitForTimeout(400)
+    expect(await widthOf(c)).toBe(240)
+    await page.keyboard.press("Escape")
+  })
+})
+
+test.describe("Sidebar accessibility", { tag: "@webkit" }, () => {
+  test("trigger announces state and controls the sidebar", async ({ page, isMobile }) => {
+    await page.goto("/#/app?page=customers")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.evaluate(() => localStorage.removeItem("flow-design-preview:sidebar-open"))
+    const trigger = page.locator("[data-slot=sidebar-trigger]")
+    await expect(trigger).toHaveAccessibleName("メニュー")
+    if (isMobile) {
+      await expect(trigger).toHaveAttribute("aria-expanded", "false")
+      await expect(trigger).not.toHaveAttribute("aria-controls")
+      await trigger.click()
+      const id = await trigger.getAttribute("aria-controls")
+      await expect(page.locator(`[id="${id}"]`)).toHaveAttribute("role", "dialog")
+      return
+    }
+    await expect(trigger).toHaveAttribute("aria-expanded", "true")
+    const id = await trigger.getAttribute("aria-controls")
+    await expect(page.locator(`[id="${id}"]`)).toHaveAttribute("data-slot", "sidebar-container")
+    await trigger.click()
+    await expect(trigger).toHaveAttribute("aria-expanded", "false")
+    await trigger.click()
+  })
+
+  test("collapsed: Tab reaches only visible, named controls inside 64px", async ({ page, isMobile }) => {
+    test.skip(isMobile, "デスクトップの表示")
+    await page.goto("/#/app?page=customers")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.locator("[data-slot=sidebar-trigger]").click()
+    const c = page.locator("[data-slot=sidebar-container]")
+    await expect.poll(() => widthOf(c)).toBe(64)
+    // Sidebar の最初の要素（製品名のリンク）から Tab で進む
+    await page.locator("[data-slot=sidebar-header] a").first().focus()
+    const seen: string[] = []
+    for (let i = 0; i < 14; i++) {
+      await page.keyboard.press(tabKey(page))
+      const info = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement
+        const r = el.getBoundingClientRect()
+        const inSidebar = !!el.closest("[data-slot=sidebar-container]")
+        return { inSidebar, w: r.width, h: r.height, right: r.right, visible: el.checkVisibility() }
+      })
+      if (!info.inSidebar) continue
+      expect(info.visible).toBe(true)
+      expect(info.w).toBeGreaterThan(1)
+      expect(info.right).toBeLessThanOrEqual(64)
+      seen.push(await page.evaluate(() => (document.activeElement as HTMLElement).getAttribute("aria-label") ?? (document.activeElement as HTMLElement).textContent ?? ""))
+    }
+    expect(seen.length).toBeGreaterThan(5)
+    for (const name of seen) expect(name.trim()).not.toBe("")
+    await page.locator("[data-slot=sidebar-trigger]").click()
+  })
+
+  test("buttons do not submit forms; aria-disabled items do not run", async ({ page }) => {
+    await open(page, "sidebar")
+    const log = page.getByTestId("sidebar-form-log")
+    await page.getByTestId("sidebar-form-button").click()
+    await expect(log).toHaveText("下書きを保存した")
+    await expect(page.getByTestId("sidebar-form-button")).toHaveAttribute("type", "button")
+    const disabled = page.getByTestId("sidebar-form-disabled")
+    const url = page.url()
+    // Playwright は aria-disabled の要素を押せないものとして待つため、force で押す
+    await disabled.click({ force: true })
+    await disabled.focus()
+    await expect(disabled).toBeFocused()
+    await page.keyboard.press("Enter")
+    await page.waitForTimeout(200)
+    await expect(log).toHaveText("下書きを保存した")
+    expect(page.url()).toBe(url)
+    await expect(disabled).toHaveAttribute("aria-disabled", "true")
+    expect(await css(disabled, "opacity")).toBe("0.5")
+  })
+
+  test("current position and focus are both visible; brand colors keep them distinguishable", async ({ page, isMobile }) => {
+    test.skip(isMobile, "デスクトップの表示")
+    await open(page, "sidebar")
+    for (const brand of ["標準", "青", "紫"]) {
+      await page.getByRole("radio", { name: brand }).check()
+      const nav = frame(page).getByRole("navigation", { name: "メインメニュー" })
+      const current = nav.getByRole("link", { name: "顧客", exact: true })
+      await tabTo(page, current)
+      await expectFocusRing(page, current)
+      expect(sameColor(await css(current, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
+      const sidebarBg = await token(page, "--sidebar")
+      const accent = await token(page, "--sidebar-accent")
+      const other = nav.getByRole("link", { name: "請求書" })
+      expect(await colorContrast(page, await css(other, "color"), sidebarBg)).toBeGreaterThanOrEqual(4.5)
+      expect(await colorContrast(page, await css(current, "outline-color"), accent)).toBeGreaterThanOrEqual(3)
+      expect(await colorContrast(page, await css(current, "outline-color"), sidebarBg)).toBeGreaterThanOrEqual(3)
+      // 製品がフォーカスの色をブランドカラーにした場合も、Sidebar の面の上で 3:1 以上
+      const primary = await token(page, "--primary")
+      expect(await colorContrast(page, primary, accent)).toBeGreaterThanOrEqual(3)
+      expect(await colorContrast(page, primary, sidebarBg)).toBeGreaterThanOrEqual(3)
+      await page.locator("body").click({ position: { x: 5, y: 5 } })
+    }
+  })
+
+  test("after navigating on mobile, focus returns to the menu button", async ({ page, isMobile }) => {
+    test.skip(!isMobile, "モバイルの表示")
+    await page.goto("/#/app?page=customers")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    const trigger = page.locator("[data-slot=sidebar-trigger]")
+    await trigger.click()
+    const dialog = page.getByRole("dialog", { name: "メニュー" })
+    // 2 階層目もモバイルで使える
+    await dialog.getByRole("button", { name: "レポート", exact: true }).click()
+    await dialog.getByRole("link", { name: "売上のレポート" }).click()
+    await expect(page.getByRole("dialog")).toBeHidden()
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("売上のレポート")
+    await expect(trigger).toBeFocused()
+    expect((await box(trigger)).height).toBeGreaterThanOrEqual(48)
+  })
+
+  test("resizing keeps the navigation available", async ({ page, isMobile }) => {
+    test.skip(isMobile, "幅を変えて確かめる")
+    await page.goto("/#/app?page=customers")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.evaluate(() => localStorage.removeItem("flow-design-preview:sidebar-open"))
+    const trigger = page.locator("[data-slot=sidebar-trigger]")
+    // CSS の md（48rem = 768px）と同じ境界で切り替わる
+    await page.setViewportSize({ width: 767, height: 900 })
+    await expect(trigger).toHaveAttribute("aria-haspopup", "dialog")
+    await trigger.click()
+    await expect(page.getByRole("dialog", { name: "メニュー" })).toBeVisible()
+    await page.setViewportSize({ width: 768, height: 900 })
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await expect(page.locator("[data-slot=sidebar-container]")).toBeVisible()
+    await expect(page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "顧客", exact: true })).toBeVisible()
+    // もう一度狭くしても、操作していない Sheet は開かない
+    await page.setViewportSize({ width: 600, height: 900 })
+    await expect(trigger).toHaveAttribute("aria-expanded", "false")
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await trigger.click()
+    await expect(page.getByRole("dialog", { name: "メニュー" })).toBeVisible()
+  })
+
+  test("collapsed dropdown menu: long labels wrap inside the viewport", async ({ page, isMobile }) => {
+    test.skip(isMobile, "デスクトップの表示")
+    await page.goto("/#/app?page=customers")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.locator("[data-slot=sidebar-trigger]").click()
+    await expect.poll(() => widthOf(page.locator("[data-slot=sidebar-container]"))).toBe(64)
+    await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("button", { name: "契約", exact: true }).click()
+    const menu = page.getByRole("menu")
+    await expect(menu).toBeVisible()
+    for (const item of await menu.getByRole("menuitem").all()) expect(await noOverflow(item)).toBe(true)
+    expect((await box(menu)).width).toBeLessThanOrEqual(288)
+    await page.keyboard.press("Escape")
+    await page.locator("[data-slot=sidebar-trigger]").click()
+  })
+})
+
+test.describe("keepMounted", { tag: "@webkit" }, () => {
+  test("Tabs: hidden panels are skipped by Tab, values are submitted, errors lead to the hidden field", async ({ page }) => {
+    await open(page, "tabs")
+    const form = page.getByTestId("tabs-keep-form")
+    await expect(form.getByRole("textbox")).toHaveCount(1)
+    await form.getByRole("textbox", { name: "会社名" }).fill("株式会社山田商事")
+    // 会社名から Tab で進むと、非表示の請求先の入力欄を飛ばして保存のボタンへ移る
+    await form.getByRole("textbox", { name: "会社名" }).focus()
+    await page.keyboard.press("Tab")
+    await expect(page.getByTestId("tabs-keep-to-billing")).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(page.getByTestId("tabs-keep-submit")).toBeFocused()
+    // 非表示のタブに必須の値がない：エラーの概要から、そのタブの入力欄へ移る
+    await page.getByTestId("tabs-keep-submit").click()
+    const summary = page.getByTestId("tabs-keep-summary")
+    await expect(summary).toBeVisible()
+    await summary.getByRole("button").click()
+    await expect(form.getByRole("tab", { name: "請求先" })).toHaveAttribute("aria-selected", "true")
+    await expect(page.getByTestId("tabs-keep-email")).toBeFocused()
+    await expect(page.getByTestId("tabs-keep-email")).toHaveAttribute("aria-invalid", "true")
+    await page.getByTestId("tabs-keep-email").fill("keiri@example.com")
+    await form.getByRole("tab", { name: "基本情報" }).click()
+    await page.getByTestId("tabs-keep-submit").click()
+    // 非表示のタブの値も送信される
+    await expect(page.getByTestId("tabs-keep-result")).toHaveText("送信した値：株式会社山田商事、keiri@example.com")
+  })
+
+  test("Tabs: focus inside a panel moves to the selected tab when the product switches tabs", async ({ page }) => {
+    await open(page, "tabs")
+    const form = page.getByTestId("tabs-keep-form")
+    await page.getByTestId("tabs-keep-to-billing").click()
+    await expect(form.getByRole("tab", { name: "請求先" })).toHaveAttribute("aria-selected", "true")
+    await expect(form.getByRole("tab", { name: "請求先" })).toBeFocused()
+  })
+
+  test("Tabs: keepMounted={false} removes inactive panels", async ({ page }) => {
+    await open(page, "tabs")
+    await expect(page.getByTestId("tabs-manual").locator("[data-slot=tabs-content]")).toHaveCount(1)
+    await expect(page.getByTestId("tabs-keep").locator("[data-slot=tabs-content]")).toHaveCount(2)
+  })
+
+  test("Accordion: closing from inside moves focus to the header; closed content is not focusable", async ({ page }) => {
+    await open(page, "accordion")
+    const keep = page.getByTestId("accordion-keep")
+    const trigger = keep.getByRole("button", { name: "社内メモ" })
+    await expect(keep.getByRole("textbox")).toHaveCount(0)
+    await trigger.click()
+    await expect(trigger).toHaveAttribute("aria-expanded", "true")
+    await expect(page.getByTestId("accordion-keep-close")).toBeVisible()
+    await page.getByTestId("accordion-keep-input").fill("決裁は4月")
+    await page.getByTestId("accordion-keep-close").click()
+    await expect(trigger).toHaveAttribute("aria-expanded", "false")
+    await expect(trigger).toBeFocused()
+    await expect(page.getByTestId("accordion-keep-input")).toBeHidden()
+    // 閉じた内容には Tab で移らない
+    await page.keyboard.press("Tab")
+    expect(await page.evaluate(() => !!document.activeElement?.closest("[data-testid=accordion-keep] [data-slot=accordion-content]"))).toBe(false)
+    await trigger.click()
+    await expect(page.getByTestId("accordion-keep-input")).toHaveValue("決裁は4月")
+  })
+})
+
+test.describe("Tabs selection v0.1", { tag: "@webkit" }, () => {
+  test("focus and selection look different; focus ring is not clipped; no layout shift", async ({ page }) => {
+    await open(page, "tabs")
+    const root = page.getByTestId("tabs-manual")
+    const list = root.getByRole("tablist")
+    const tabs = root.getByRole("tab")
+    await tabTo(page, tabs.nth(0))
+    const before = await box(list)
+    await page.keyboard.press("ArrowRight")
+    const after = (l: Locator, p: string) => l.evaluate((el, q) => getComputedStyle(el, "::after").getPropertyValue(q), p)
+    // フォーカス：線だけ。選択：下線だけ
+    await expectFocusRing(page, tabs.nth(1))
+    expect(await after(tabs.nth(1), "opacity")).toBe("0")
+    expect(await css(tabs.nth(0), "outline-style")).toBe("none")
+    expect(await after(tabs.nth(0), "opacity")).toBe("1")
+    // フォーカスの線（外側 4px）が、スクロールの領域の内側に収まる
+    for (const t of [tabs.nth(1)]) {
+      const tb = await box(t)
+      const lb = await box(list)
+      expect(tb.x - 4).toBeGreaterThanOrEqual(lb.x - 0.5)
+      expect(tb.y - 4).toBeGreaterThanOrEqual(lb.y - 0.5)
+      expect(tb.y + tb.height + 4).toBeLessThanOrEqual(lb.y + lb.height + 0.5)
+    }
+    await page.keyboard.press("Enter")
+    await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true")
+    expect(await box(list)).toEqual(before)
+  })
+})
+
+test.describe("Breadcrumb and Card v0.1", { tag: "@webkit" }, () => {
+  test("breadcrumb: the ellipsis works with the keyboard; targets are at least 24px", async ({ page }) => {
+    await open(page, "breadcrumb")
+    const nav = page.getByTestId("breadcrumb-deep")
+    const expand = page.getByTestId("breadcrumb-expand")
+    await tabTo(page, expand)
+    await expectFocusRing(page, expand)
+    await page.keyboard.press("Enter")
+    await expect(nav.getByRole("link")).toHaveCount(6)
+    await expect(nav.getByRole("link", { name: "顧客", exact: true })).toBeFocused()
+    for (const l of await nav.getByRole("link").all()) expect((await box(l)).height).toBeGreaterThanOrEqual(24)
+  })
+
+  test("card: a long title wraps beside CardAction without overlapping", async ({ page }) => {
+    await open(page, "card")
+    const card = page.getByTestId("card-long")
+    const title = card.locator("[data-slot=card-title]")
+    const action = page.getByTestId("card-long-action")
+    const t = await box(title)
+    const a = await box(action)
+    expect(t.x + t.width).toBeLessThanOrEqual(a.x)
+    await expect(card.getByRole("heading", { level: 3 })).toHaveText("北日本精密機械工業株式会社 札幌第二工場 生産管理部")
+    expect(await css(card.getByRole("heading", { level: 3 }), "font-size")).toBe("20px")
+    expect(await noOverflow(card)).toBe(true)
+  })
+})
+
 // ------------------------------------------------------------------ スクリーンショット
 
 test.describe("screenshots", () => {
@@ -804,7 +1263,7 @@ test.describe("screenshots", () => {
     }
     if (isMobile) {
       await page.goto("/#/app?page=customers")
-      await page.getByRole("button", { name: "メニューを開く" }).click()
+      await page.getByRole("button", { name: "メニュー", exact: true }).click()
       await page.getByRole("dialog").waitFor()
       await page.waitForTimeout(400)
       await page.screenshot({ path: `${dir}/app-sidebar-mobile-open.png` })
@@ -812,10 +1271,16 @@ test.describe("screenshots", () => {
     }
     await page.goto("/#/app?page=customer&id=yamada")
     await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.mouse.move(700, 450)
     await page.screenshot({ path: `${dir}/app-sidebar-expanded.png` })
-    await page.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await page.getByRole("button", { name: "メニュー", exact: true }).click()
     await page.waitForTimeout(500)
     await page.screenshot({ path: `${dir}/app-sidebar-collapsed.png` })
+    await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("button", { name: "契約", exact: true }).click()
+    await page.getByRole("menu").waitFor()
+    await page.waitForTimeout(400)
+    await page.screenshot({ path: `${dir}/app-sidebar-collapsed-submenu.png` })
+    await page.keyboard.press("Escape")
     await page.evaluate(() => localStorage.removeItem("flow-design-preview:sidebar-open"))
     await open(page, "sidebar")
     const nav = page.getByTestId("sidebar-basic")
