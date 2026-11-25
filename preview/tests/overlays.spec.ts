@@ -617,15 +617,32 @@ test.describe("Dropdown Menu", { tag: "@webkit" }, () => {
     await open(page, "dropdown-menu")
     await page.getByTestId("menu-inset-trigger").click()
     const menu = page.getByTestId("menu-inset")
-    const textX = (l: Locator) =>
-      l.evaluate((el) => {
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    // 開く動き（大きさ 95% → 100%）の途中では、項目の位置が毎フレーム変わる。
+    // 動きが終わるまで待ち、2 つの項目の文字の位置を同じフレームで測る。
+    // 連続する 2 フレームで値が変わらなくなったこと（位置が安定したこと）を条件にする。
+    await settle(menu)
+    const [insetX, iconX] = await menu.evaluate(async (el) => {
+      const textX = (item: Element) => {
+        const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT)
         const r = document.createRange()
         r.selectNodeContents(walker.nextNode()!)
         return r.getBoundingClientRect().x
-      })
-    const iconItem = menu.getByRole("menuitem", { name: "PDF で書き出す" })
-    expect(Math.round(await textX(page.getByTestId("menu-inset-item")))).toBe(Math.round(await textX(iconItem)))
+      }
+      const measure = () => {
+        const inset = el.querySelector("[data-testid=menu-inset-item]")!
+        const icon = Array.from(el.querySelectorAll("[role=menuitem]")).find((i) => i.textContent?.includes("PDF で書き出す"))!
+        return [textX(inset), textX(icon)]
+      }
+      let prev = measure()
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => requestAnimationFrame(r))
+        const next = measure()
+        if (next[0] === prev[0] && next[1] === prev[1]) return next
+        prev = next
+      }
+      throw new Error(`menu items did not settle: ${prev}`)
+    })
+    expect(Math.round(insetX)).toBe(Math.round(iconX))
     if (!isMobile) {
       await page.getByTestId("menu-sub-trigger").focus()
       await page.keyboard.press("ArrowRight")
