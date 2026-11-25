@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import {
   Bell,
   CreditCard,
@@ -37,9 +37,11 @@ import {
   CommandList,
   CommandShortcut,
   CommandStatus,
-  commandShortcutLabel,
   useCommandShortcut,
+  useCommandShortcutLabel,
 } from "@/components/ui/command"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/toast"
 
@@ -108,16 +110,40 @@ function CommandItems({ onRun }: { onRun: (item: Item) => void }) {
   )
 }
 
+const shortcutKeys = [
+  { value: "k", label: "K" },
+  { value: "j", label: "J" },
+]
+
+// 2 つ目の Command。表示している間は、後から登録されたこちらだけがショートカットに反応する。
+function SecondCommand({ shortcutKey }: { shortcutKey: string }) {
+  const [open, setOpen] = useState(false)
+  useCommandShortcut(() => setOpen((o) => !o), { key: shortcutKey })
+  return (
+    <CommandDialog open={open} onOpenChange={setOpen} title="ヘルプの検索">
+      <Command items={[{ value: "help", label: "ヘルプ", items: [{ value: "guide", label: "使い方の案内", icon: FileText, kind: "page" }] }]}>
+        <CommandInput placeholder="ヘルプを検索" aria-label="ヘルプを検索" />
+        <CommandItems onRun={() => setOpen(false)} />
+      </Command>
+    </CommandDialog>
+  )
+}
+
 export function CommandPage() {
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
   const [shortcutEnabled, setShortcutEnabled] = useState(true)
+  const [shortcutKey, setShortcutKey] = useState("k")
+  const [second, setSecond] = useState(false)
+  const label = useCommandShortcutLabel(shortcutKey)
+  // Command を開く前にフォーカスがあった要素。確認の Alert Dialog を閉じた後に、フォーカスを戻す。
+  const returnFocus = useRef<HTMLElement | null>(null)
   const [page, setPage] = useState("ダッシュボード")
   const [log, setLog] = useState<string[]>([])
   const [confirm, setConfirm] = useState(false)
   const search = useComboboxSearch<Person>({ search: searchPeople, minLength: 2 })
 
-  useCommandShortcut(() => changeOpen(!open), { enabled: shortcutEnabled })
+  useCommandShortcut(() => changeOpen(!open), { enabled: shortcutEnabled, key: shortcutKey })
 
   // 担当者はサーバー側の検索の結果を、検索文字列が 2 文字以上のときだけ「担当者」のグループに加える。
   const groups = useMemo<Group[]>(() => {
@@ -134,6 +160,7 @@ export function CommandPage() {
 
   // 実行の処理は製品が行う。ここではページの移動と操作を、画面の状態の変化で模擬する。
   const changeOpen = (o: boolean) => {
+    if (o && !open) returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setOpen(o)
     if (!o) search.onQueryChange("")
   }
@@ -159,22 +186,58 @@ export function CommandPage() {
 
       <Section
         title="起動"
-        lead={`ショートカット（${commandShortcutLabel()}）と、明示的な検索ボタンの両方で開く。ショートカットを知らない人も、ボタンから使える。`}
+        lead="ショートカット（macOS は Cmd + K、それ以外は Ctrl + K）と、明示的な検索ボタンの両方で開く。ショートカットを知らない人も、ボタンから使える。"
       >
         <Row label="検索ボタン" note="ボタンにショートカットを併記する">
-          <Button variant="outline" onClick={() => setOpen(true)} data-testid="command-open" className="min-w-64 justify-start text-muted-foreground">
+          <Button variant="outline" onClick={() => changeOpen(true)} data-testid="command-open" className="min-w-64 justify-start text-muted-foreground">
             <Search />
             <span className="flex-1 text-left">ページや操作を検索</span>
-            <kbd aria-hidden="true" className="font-sans text-caption">
-              {commandShortcutLabel()}
-            </kbd>
+            {/* ショートカットの表示は Hydration の後に決まる（サーバーでは表示しない） */}
+            {label && shortcutEnabled && (
+              <kbd aria-hidden="true" className="font-sans text-caption" data-testid="command-shortcut-label">
+                {label}
+              </kbd>
+            )}
           </Button>
         </Row>
         <Row label="ショートカット" note="製品が設定・解除できる">
           <label className="flex min-h-control items-center gap-3 text-ui">
             <Switch checked={shortcutEnabled} onCheckedChange={setShortcutEnabled} data-testid="command-shortcut-toggle" />
-            {commandShortcutLabel()} で開く
+            {label ?? "ショートカット"} で開く
           </label>
+          <div className="flex items-center gap-3 text-ui">
+            <span id="command-key-label">キー</span>
+            <Select items={shortcutKeys} value={shortcutKey} onValueChange={(v) => v && setShortcutKey(v as string)}>
+              <SelectTrigger size="sm" aria-labelledby="command-key-label" className="w-24" data-testid="command-key">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {shortcutKeys.map((k) => (
+                  <SelectItem key={k.value} value={k.value}>
+                    {k.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </Row>
+        <Row label="複数の Command" note="後から表示した Command だけが反応する。通常はアプリケーションに 1 つだけ置く">
+          <label className="flex min-h-control items-center gap-3 text-ui">
+            <Switch checked={second} onCheckedChange={setSecond} data-testid="command-second-toggle" />
+            ヘルプの検索を表示する
+          </label>
+          {second && <SecondCommand shortcutKey={shortcutKey} />}
+        </Row>
+        <Row label="別の Overlay" note="Dialog が開いている間は、ショートカットで Command を開かない">
+          <Dialog>
+            <DialogTrigger render={<Button variant="secondary" data-testid="command-other-dialog-open" />}>Dialog を開く</DialogTrigger>
+            <DialogContent size="sm" data-testid="command-other-dialog">
+              <DialogHeader>
+                <DialogTitle>顧客の詳細</DialogTitle>
+                <DialogDescription>この Dialog を開いている間は、ショートカットで Command が開かない。</DialogDescription>
+              </DialogHeader>
+            </DialogContent>
+          </Dialog>
         </Row>
         <Row label="実行の結果" note="ページの移動と操作の実行を模擬する">
           <div className="flex flex-col gap-1 text-ui">
@@ -191,6 +254,19 @@ export function CommandPage() {
             data-testid="command-other-input"
             className="h-control w-full max-w-sm rounded-md border border-input px-4 text-body outline-none focus-visible:focus-ring"
           />
+        </Row>
+        <Row label="リッチテキストの編集" note="contenteditable の中では、リンクの挿入などに使われるため反応しない">
+          <div
+            contentEditable
+            suppressContentEditableWarning
+            role="textbox"
+            aria-label="議事録"
+            aria-multiline="true"
+            data-testid="command-editable"
+            className="min-h-24 w-full max-w-sm rounded-md border border-input p-4 text-body outline-none focus-visible:focus-ring"
+          >
+            議事録を入力する
+          </div>
         </Row>
       </Section>
 
@@ -221,7 +297,7 @@ export function CommandPage() {
       </CommandDialog>
 
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
-        <AlertDialogContent size="sm" data-testid="command-confirm">
+        <AlertDialogContent size="sm" data-testid="command-confirm" finalFocus={returnFocus}>
           <AlertDialogHeader>
             <AlertDialogTitle>選択中の顧客を削除しますか？</AlertDialogTitle>
             <AlertDialogDescription>削除した顧客は元に戻せません。</AlertDialogDescription>

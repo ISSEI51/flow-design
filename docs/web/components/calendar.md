@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/calendar.tsx`](../../../registry/components/ui/calendar.tsx) |
 | 元にした実装 | shadcn/ui の Calendar（react-day-picker） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -66,7 +66,8 @@
 | 年、月のドロップダウン | 直接移動する。数年前の日付も、前月のボタンを繰り返し押さずに選べる |
 
 - 開始曜日は月曜日を標準にする（`weekStartsOn={1}`）。ロケールや用途に合わせて `weekStartsOn` で変える。
-- 年のドロップダウンの範囲は、既定で今日の 100 年前から 10 年後まで。生年月日などは `startMonth` と `endMonth` で指定する。
+- 年のドロップダウンの範囲は、既定で今日の 100 年前から 10 年後まで。生年月日などは `startMonth` と `endMonth` で指定する。日付の処理が扱う年は 1〜9999 年である（[advanced.md](advanced.md#対応する範囲)）。
+- 「今日」は `today` で渡せる。省略すると `todayIn(timeZone)` で計算する。不正な `timeZone` は `RangeError` になる。サーバーで描画する場合は、サーバーとブラウザで同じ `today` を渡す（[advanced.md](advanced.md#ssr-と-hydration)）。
 - 値は日付だけを表す、ローカル時刻の 0 時の `Date` である。`timeZone` は「今日」を決めるためだけに使い、react-day-picker には渡さない（[advanced.md](advanced.md#日付だけの値の扱い)）。
 - 月末、年末、うるう年は react-day-picker と date-fns が扱う。
 - 動きは使わない。月を移動しても、位置の動きはない。

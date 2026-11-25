@@ -264,6 +264,86 @@ test.describe("Combobox", { tag: "@webkit" }, () => {
     await expect(t).toHaveText(/田中 健太/)
   })
 
+  test("Enter selects nothing without a highlight, and nothing during IME composition", async ({ page, browserName }) => {
+    await open(page, "combobox")
+    const t = page.getByTestId("combobox-keep")
+    await openMenu(page, t)
+    // 文字を入力しただけでは、どの選択肢もハイライトされない。Enter では何も選ばずに閉じ、値は変わらない
+    await page.keyboard.type("株式会社")
+    await expect(listbox(page).locator("[data-highlighted]")).toHaveCount(0)
+    await page.keyboard.press("Enter")
+    await expect(listbox(page)).toHaveCount(0)
+    await expect(t).toBeFocused()
+    await expect(t).toHaveText(/北星物流株式会社/)
+    await expect(page.getByTestId("combobox-keep-state")).toHaveText("確定済みの値：北星物流株式会社 ／ 検索文字列：なし")
+    // ↓ でハイライトしてから IME で入力を続け、変換の確定の Enter（isComposing）を押しても、選ばない
+    await openMenu(page, t)
+    await page.keyboard.type("株式会社")
+    await page.keyboard.press("ArrowDown")
+    await expect(listbox(page).locator("[data-highlighted]")).toHaveCount(1)
+    if (browserName === "chromium") {
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send("Input.imeSetComposition", { text: "みな", selectionStart: 2, selectionEnd: 2 })
+    }
+    await page
+      .getByRole("combobox", { name: "取引先を検索" })
+      .evaluate((el) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, isComposing: true, bubbles: true, cancelable: true })))
+    await expect(listbox(page)).toBeVisible()
+    await expect(page.getByTestId("combobox-keep-state")).toContainText("確定済みの値：北星物流株式会社")
+  })
+
+  test("server search: debounce merges keystrokes; late responses after close or unmount are ignored", async ({ page }) => {
+    await open(page, "combobox", { clock: false })
+    const errors: string[] = []
+    page.on("console", (m) => m.type() === "error" && errors.push(m.text()))
+    const t = page.getByTestId("combobox-async")
+    await openMenu(page, t)
+    await page.evaluate(() => (window.__searchCalls = []))
+    // 300ms 以内の入力はまとめて 1 回だけ検索する
+    await page.keyboard.type("田")
+    await page.waitForTimeout(100)
+    await page.keyboard.type("中")
+    await expect(page.getByTestId("combobox-async-status")).toContainText("8 件", { timeout: 3000 })
+    expect(await page.evaluate(() => window.__searchCalls)).toEqual(["田中"])
+    // 検索中にメニューを閉じる。遅れて返った結果は表示しない（検索文字列は破棄される）
+    await page.getByRole("combobox", { name: "担当者を検索" }).fill("佐")
+    await page.waitForTimeout(450) // 1.2 秒かかる検索が始まる
+    await page.keyboard.press("Escape")
+    await page.waitForTimeout(1200)
+    await expect(page.getByTestId("combobox-async-status")).toContainText("未検索")
+    await openMenu(page, t)
+    await expect(page.getByTestId("combobox-async-content")).toContainText("名前を入力すると候補を表示します")
+    await expect(listbox(page).getByRole("option")).toHaveCount(0)
+    // 検索中に画面を離れる（アンマウント）。遅れて返った結果で、例外やエラーを出さない
+    await page.getByRole("combobox", { name: "担当者を検索" }).fill("佐")
+    await page.waitForTimeout(450)
+    await page.goto("/#/button")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.waitForTimeout(1200)
+    expect(errors).toEqual([])
+  })
+
+  test("server search: retry after a failure succeeds; the selected value survives new results", async ({ page }) => {
+    await open(page, "combobox", { clock: false })
+    const t = page.getByTestId("combobox-async")
+    await openMenu(page, t)
+    const content = page.getByTestId("combobox-async-content")
+    await page.keyboard.type("一時エラー田中")
+    await expect(content).toContainText("検索結果を取得できませんでした。", { timeout: 3000 })
+    await content.getByRole("button", { name: "再試行" }).click()
+    await expect(content.locator("[data-slot=combobox-status]")).toContainText("検索しています")
+    await expect(listbox(page).getByRole("option").first()).toContainText("田中", { timeout: 3000 })
+    await listbox(page).getByRole("option", { name: /田中 美咲/ }).click()
+    await expect(t).toHaveText(/田中 美咲/)
+    // 別の検索結果に選んだ担当者が含まれなくても、値は残り、選択肢にも表示される
+    await openMenu(page, t)
+    await page.keyboard.type("佐藤")
+    await expect(listbox(page).getByRole("option", { name: /佐藤 健太/ })).toBeVisible({ timeout: 3000 })
+    await expect(listbox(page).getByRole("option", { name: /田中 美咲/ })).toHaveAttribute("aria-selected", "true")
+    await page.keyboard.press("Escape")
+    await expect(t).toHaveText(/田中 美咲/)
+  })
+
   test("loading state is announced as status", async ({ page }) => {
     await open(page, "combobox", { clock: false })
     await openMenu(page, page.getByTestId("combobox-loading"))
@@ -328,6 +408,34 @@ test.describe("Combobox", { tag: "@webkit" }, () => {
     await expect(page.getByTestId("combobox-basic-content")).toBeVisible()
     expect(await css(page.getByTestId("combobox-basic").locator("[data-slot=combobox-icon]"), "transform")).toBe("none")
     expect(await css(page.getByTestId("combobox-basic-content"), "scale")).toBe("none")
+  })
+})
+
+// ---------------------------------------------------------------- Select（既存の不具合の回帰の検品）
+
+test.describe("Select selected weight (regression)", { tag: "@webkit" }, () => {
+  test("only the selected option is weight 500; keyboard highlight does not change the weight", async ({ page }) => {
+    await open(page, "select")
+    await page.getByTestId("select-plan").click()
+    const selected = page.getByRole("option", { selected: true })
+    await expect(selected).toHaveCount(1)
+    const before = await selected.textContent()
+    expect(await css(selected, "font-weight")).toBe("500")
+    const others = page.getByRole("option", { selected: false })
+    for (const o of await others.all()) expect(await css(o, "font-weight")).toBe("400")
+    // キーで別の項目に移っても、太さは選択中の項目だけ（ハイライトは面と枠で示す）。年額プラン（最後）から月額プランへ移る
+    await page.keyboard.press("ArrowUp")
+    const highlighted = page.locator("[data-slot=select-item][data-highlighted]")
+    await expect(highlighted).toHaveAttribute("aria-selected", "false")
+    expect(await css(highlighted, "font-weight")).toBe("400")
+    expect(await css(selected, "font-weight")).toBe("500")
+    // 選び直すと、太さも移る
+    await page.keyboard.press("Enter")
+    await page.getByTestId("select-plan").click()
+    const next = page.getByRole("option", { selected: true })
+    expect(await css(next, "font-weight")).toBe("500")
+    expect(await next.textContent()).not.toBe(before)
+    for (const o of await page.getByRole("option", { selected: false }).all()) expect(await css(o, "font-weight")).toBe("400")
   })
 })
 
@@ -434,6 +542,55 @@ test.describe("Multi Select", { tag: "@webkit" }, () => {
     await expect(search).toHaveValue("")
     await page.getByRole("button", { name: "すべて解除" }).click()
     await expect(value).toHaveText("選択中：なし")
+  })
+
+  test("every selected item has a name and a way to remove it, including those behind 他N件", async ({ page }) => {
+    await open(page, "multi-select")
+    const value = page.getByTestId("multi-many-value")
+    // 欄に表示していない 5 件も、トリガーの名前の後の内容として読み上げられる
+    await expect(msTrigger(page, "multi-many")).toContainText("埼玉県、茨城県、栃木県、群馬県、山梨県")
+    // メニューでは、すべての選択済みの項目が先頭に並び、選択中（aria-selected）で、キーボードで解除できる
+    await openMenu(page, msTrigger(page, "multi-many"))
+    const selected = listbox(page).getByRole("option", { selected: true })
+    await expect(selected).toHaveText(["東京都", "神奈川県", "千葉県", "埼玉県", "茨城県", "栃木県", "群馬県", "山梨県"])
+    // 開いたときのハイライトの位置はブラウザによって異なるため、群馬県に届くまで ↓ を押す
+    const current = () => listbox(page).locator("[data-highlighted]").evaluateAll((els) => els[0]?.textContent ?? "")
+    for (let i = 0; i < 60 && (await current()) !== "群馬県"; i++) await page.keyboard.press("ArrowDown")
+    await expect(listbox(page).locator("[data-highlighted]")).toHaveText("群馬県")
+    await page.keyboard.press("Enter")
+    await expect(value).toHaveText("7 件：東京都、神奈川県、千葉県、埼玉県、茨城県、栃木県、山梨県")
+  })
+
+  test("touch: remove buttons do not overlap; a tap removes only that item", async ({ page, isMobile }) => {
+    await open(page, "multi-select")
+    const scope = page.getByTestId("multi-many")
+    const buttons = await scope.getByRole("button", { name: /を解除/ }).all()
+    const boxes = await Promise.all(buttons.map((b) => box(b)))
+    for (const b of boxes) {
+      expect(b.width).toBe(32)
+      expect(b.height).toBe(32)
+    }
+    // 隣の解除ボタンとは 8px 以上離れ、重ならない
+    for (let i = 1; i < boxes.length; i++) {
+      const gap = boxes[i].y === boxes[i - 1].y ? boxes[i].x - (boxes[i - 1].x + boxes[i - 1].width) : Infinity
+      expect(gap).toBeGreaterThanOrEqual(8)
+    }
+    // 開閉のアイコン（右端 48px）の領域とも重ならない
+    const c = await box(control(page, "multi-many"))
+    for (const b of boxes) expect(b.x + b.width).toBeLessThanOrEqual(c.x + c.width - 48)
+    // 解除ボタンを押すと、その項目だけを解除し、メニューは開かない
+    const target = scope.getByRole("button", { name: "神奈川県を解除" })
+    if (isMobile) await target.tap()
+    else await target.click()
+    await expect(page.getByTestId("multi-many-value")).toHaveText("7 件：東京都、千葉県、埼玉県、茨城県、栃木県、群馬県、山梨県")
+    await expect(listbox(page)).toHaveCount(0)
+    // 項目の名前の部分を押すと、メニューが開く（解除はしない）
+    const chip = scope.locator("[data-slot=multi-select-chip]").first()
+    const cb = await box(chip)
+    if (isMobile) await page.touchscreen.tap(cb.x + 16, cb.y + cb.height / 2)
+    else await page.mouse.click(cb.x + 16, cb.y + cb.height / 2)
+    await expect(listbox(page)).toBeVisible()
+    await expect(page.getByTestId("multi-many-value")).toHaveText(/^7 件/)
   })
 
   test("maximum count disables other options and explains why", async ({ page }) => {
@@ -552,6 +709,7 @@ test.describe("Command", { tag: "@webkit" }, () => {
     await open(page, "command")
     const mod = (await isMac(page)) ? "Meta" : "Control"
     const other = mod === "Meta" ? "Control" : "Meta"
+    await expect(page.getByTestId("command-shortcut-label")).toHaveText(mod === "Meta" ? "⌘K" : "Ctrl+K")
     await page.keyboard.press(`${mod}+k`)
     await expect(page.getByRole("dialog")).toBeVisible()
     await expect(page.getByRole("dialog").getByRole("combobox")).toBeFocused()
@@ -559,18 +717,87 @@ test.describe("Command", { tag: "@webkit" }, () => {
     await expect(page.getByRole("dialog")).toHaveCount(0)
     await page.keyboard.press(`${other}+k`)
     await page.keyboard.press(`${mod}+Shift+k`)
+    await page.keyboard.press(`${mod}+Alt+k`)
     await expect(page.getByRole("dialog")).toHaveCount(0)
-    // IME の変換中のキー入力には反応しない
+    const fire = (init: { isComposing?: boolean; repeat?: boolean }) =>
+      page.evaluate(
+        ([m, i]) => {
+          const e = new KeyboardEvent("keydown", {
+            key: "k",
+            metaKey: m === "Meta",
+            ctrlKey: m === "Control",
+            bubbles: true,
+            cancelable: true,
+            isComposing: i.isComposing,
+            repeat: i.repeat,
+          })
+          ;(document.activeElement ?? document.body).dispatchEvent(e)
+        },
+        [mod, init] as const
+      )
+    // IME の変換中、キーの長押しによる繰り返しには反応しない
     await page.getByTestId("command-other-input").focus()
-    await page.evaluate((m) => {
-      const e = new KeyboardEvent("keydown", { key: "k", metaKey: m === "Meta", ctrlKey: m === "Control", isComposing: true, bubbles: true })
-      document.activeElement!.dispatchEvent(e)
-    }, mod)
+    await fire({ isComposing: true })
+    await fire({ repeat: true })
     await expect(page.getByRole("dialog")).toHaveCount(0)
-    // 製品がショートカットを解除できる
+    // ほかの処理がすでに preventDefault したキーには反応しない
+    await page.evaluate(() => {
+      const w = window as unknown as { __consume: (e: KeyboardEvent) => void }
+      w.__consume = (e) => {
+        if (e.key === "k") e.preventDefault()
+      }
+      window.addEventListener("keydown", w.__consume, { capture: true })
+    })
+    await page.keyboard.press(`${mod}+k`)
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await page.evaluate(() => window.removeEventListener("keydown", (window as unknown as { __consume: EventListener }).__consume, { capture: true }))
+    // input の中では反応する。閉じるとフォーカスは input に戻る
+    await page.keyboard.press(`${mod}+k`)
+    await expect(page.getByRole("dialog")).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await expect(page.getByTestId("command-other-input")).toBeFocused()
+    // contenteditable の中では反応しない（リンクの挿入などに使われるため）
+    await page.getByTestId("command-editable").focus()
+    await page.keyboard.press(`${mod}+k`)
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    // 製品がショートカットを解除できる。表示も消える
     await page.getByTestId("command-shortcut-toggle").click()
     await page.keyboard.press(`${mod}+k`)
     await expect(page.getByRole("dialog")).toHaveCount(0)
+    await expect(page.getByTestId("command-shortcut-label")).toHaveCount(0)
+  })
+
+  test("shortcut key can be changed; the last registered Command wins; other overlays block it", async ({ page, isMobile }) => {
+    test.skip(isMobile, "物理キーボードのショートカットはデスクトップで確認する")
+    await open(page, "command")
+    const mod = (await isMac(page)) ? "Meta" : "Control"
+    // キーを J に変える
+    await page.getByTestId("command-key").click()
+    await page.getByRole("option", { name: "J" }).click()
+    await expect(page.getByTestId("command-shortcut-label")).toHaveText(mod === "Meta" ? "⌘J" : "Ctrl+J")
+    await page.keyboard.press(`${mod}+k`)
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await page.keyboard.press(`${mod}+j`)
+    await expect(page.getByRole("dialog", { name: "コマンド" })).toBeVisible()
+    await page.keyboard.press("Escape")
+    // 2 つ目の Command を表示すると、後から登録されたそちらだけが開く
+    await page.getByTestId("command-second-toggle").click()
+    await page.keyboard.press(`${mod}+j`)
+    await expect(page.getByRole("dialog")).toHaveCount(1)
+    await expect(page.getByRole("dialog", { name: "ヘルプの検索" })).toBeVisible()
+    await page.keyboard.press("Escape")
+    await page.getByTestId("command-second-toggle").click()
+    await page.keyboard.press(`${mod}+j`)
+    await expect(page.getByRole("dialog", { name: "コマンド" })).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    // 別の Dialog が開いている間は開かない
+    await page.getByTestId("command-other-dialog-open").click()
+    await expect(page.getByTestId("command-other-dialog")).toBeVisible()
+    await page.keyboard.press(`${mod}+j`)
+    await expect(page.getByRole("dialog")).toHaveCount(1)
+    await expect(page.getByRole("dialog", { name: "顧客の詳細" })).toBeVisible()
   })
 
   test("aliases, empty result, long list scrolls, dialog height stays", async ({ page }) => {
@@ -597,6 +824,15 @@ test.describe("Command", { tag: "@webkit" }, () => {
     await expect(page.getByTestId("command-log")).toHaveText("最近の実行：なし")
     await confirm.getByRole("button", { name: "キャンセル" }).click()
     await expect(page.getByTestId("command-log")).toHaveText("最近の実行：なし")
+    // 確認を取り消すと、Command を開く前の要素にフォーカスが戻る
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
+    await expect(page.getByTestId("command-open")).toBeFocused()
+    // 確認して実行する
+    await openCommand(page)
+    await page.keyboard.type("削除")
+    await page.keyboard.press("Enter")
+    await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click()
+    await expect(page.getByTestId("command-log")).toHaveText("最近の実行：選択中の顧客を削除")
   })
 
   test("server results: loading and error", async ({ page }) => {
@@ -882,22 +1118,35 @@ test.describe("Date Picker", { tag: "@webkit" }, () => {
     await expect(to).toHaveValue("2026/05/20")
   })
 
+  // 時計を固定すると、page-errors.ts が WebKit の環境の事象（座標が NaN のイベント）を判定するための時刻
+  // （Node.js の時刻とページの時刻）がずれるため、この検品は実際の時刻で行う。固定の日付での計算は date.spec.ts で確かめる。
   test("presets are calculated from today", async ({ page }) => {
-    await open(page, "date-picker")
+    await open(page, "date-picker", { clock: false })
+    const today = await page.evaluate(() => {
+      const d = new Date()
+      return [d.getFullYear(), d.getMonth(), d.getDate()] as const
+    })
+    const t = new Date(today[0], today[1], today[2])
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+    const monday = new Date(t)
+    monday.setDate(t.getDate() - ((t.getDay() + 6) % 7))
+    const minus = (n: number) => new Date(t.getFullYear(), t.getMonth(), t.getDate() - n)
     const scope = page.getByTestId("date-presets")
     const value = page.getByTestId("date-presets-value")
-    for (const [label, expected] of [
-      ["今日", "2026-11-25 〜 2026-11-25"],
-      ["今週", "2026-11-23 〜 2026-11-25"],
-      ["今月", "2026-11-01 〜 2026-11-25"],
-      ["先月", "2026-10-01 〜 2026-10-31"],
-      ["過去7日間", "2026-11-19 〜 2026-11-25"],
-      ["過去30日間", "2026-10-27 〜 2026-11-25"],
-      ["今年", "2026-01-01 〜 2026-11-25"],
-    ]) {
+    for (const [label, from, to] of [
+      ["今日", t, t],
+      ["今週", monday, t],
+      ["今月", new Date(t.getFullYear(), t.getMonth(), 1), t],
+      ["先月", new Date(t.getFullYear(), t.getMonth() - 1, 1), new Date(t.getFullYear(), t.getMonth(), 0)],
+      ["過去7日間", minus(6), t],
+      ["過去30日間", minus(29), t],
+      ["今年", new Date(t.getFullYear(), 0, 1), t],
+    ] as const) {
       const overlay = await openCalendar(page, scope, "カレンダーから期間を選ぶ")
       await overlay.getByRole("button", { name: label, exact: true }).click()
-      await expect(value, label).toHaveText(`送信される値：${expected}`)
+      await expect(value, label).toHaveText(`送信される値：${iso(from)} 〜 ${iso(to)}`)
+      // 閉じる動きが終わってから、次に開く
+      await expect(page.locator("[data-slot=date-picker-content], [data-slot=date-picker-drawer]")).toHaveCount(0)
     }
     const overlay = await openCalendar(page, scope, "カレンダーから期間を選ぶ")
     await expect(overlay.getByRole("button", { name: "今年", exact: true })).toHaveAttribute("aria-pressed", "true")
@@ -923,15 +1172,118 @@ test.describe("Date Picker", { tag: "@webkit" }, () => {
     }
   })
 
-  test("form sends YYYY-MM-DD; disabled and read-only", async ({ page }) => {
+  test("form: sends YYYY-MM-DD; invalid input never sends the previous value", async ({ page }) => {
     await open(page, "date-picker")
     const form = page.getByTestId("date-form")
-    await form.getByRole("button", { name: "送信" }).click()
-    await expect(page.getByTestId("date-form-result")).toHaveText("contract_date=2026-04-01, from=2026-04-01, to=2026-04-30")
+    const result = page.getByTestId("date-form-result")
+    const contract = form.getByRole("textbox", { name: "契約日" })
+    const hidden = form.locator("input[name=contract_date]")
+    const submit = form.getByRole("button", { name: "送信" })
+    await submit.click()
+    await expect(result).toHaveText("contract_date=2026-04-01, from=2026-04-01, to=2026-04-30")
+    // 不正な日付を入力したまま、フォーカスを外さずに Enter で送信する。以前の 2026-04-01 は送信されない
+    await contract.fill("2026/02/30")
+    await expect(hidden).toHaveValue("")
+    // 日付の妥当性は、値を持つ見えない入力欄に設定される（見える入力欄の id を data-for に持つ）
+    expect(await hidden.evaluate((el: HTMLInputElement) => el.validity.customError)).toBe(true)
+    expect(await hidden.getAttribute("data-for")).toBe(await contract.getAttribute("id"))
+    await expect(hidden).toHaveAttribute("aria-hidden", "true")
+    await expect(hidden).toHaveAttribute("tabindex", "-1")
+    await contract.press("Enter")
+    await expect(result).toHaveText("")
+    await expect(form.locator("[data-slot=range-error]")).toContainText("契約日：存在しない日付です")
+    await expect(form.locator("[data-slot=field-error]")).toHaveCount(0) // この例は FieldError を使わず、概要で示す
+    await expect(contract).toHaveAttribute("aria-invalid", "true")
+    await expect(contract).toBeFocused()
+    // 形式の誤り
+    await contract.fill("2026//04/01")
+    await contract.press("Enter")
+    await expect(form.locator("[data-slot=range-error]")).toContainText("形式で入力してください")
+    // 確定の前（フォーカスがある状態）の正しい日付は、そのまま送信される
+    await contract.fill("2026/06/02")
+    await contract.press("Enter")
+    await expect(result).toHaveText("contract_date=2026-06-02, from=2026-04-01, to=2026-04-30")
+    await expect(contract).toHaveValue("2026/06/02")
+    // ボタンで送信する（フォーカスが外れて確定する）
+    await contract.fill("20260603")
+    await submit.click()
+    await expect(result).toHaveText("contract_date=2026-06-03, from=2026-04-01, to=2026-04-30")
+    await expect(contract).toHaveValue("2026/06/03")
+    // required：空のままでは送信しない
+    await contract.fill("")
+    await submit.click()
+    await expect(result).toHaveText("")
+    await expect(form.locator("[data-slot=range-error]")).toContainText("契約日")
+  })
+
+  test("form: range order, one-sided range, external value, reset", async ({ page }) => {
+    await open(page, "date-picker")
+    const form = page.getByTestId("date-form")
+    const result = page.getByTestId("date-form-result")
+    const from = form.getByRole("textbox", { name: "開始日" })
+    const to = form.getByRole("textbox", { name: "終了日" })
+    const submit = form.getByRole("button", { name: "送信" })
+    // 終了日が開始日より前：送信しない。入れ替えない
+    await to.fill("2026/03/31")
+    await submit.click()
+    await expect(result).toHaveText("")
+    await expect(form.locator("[data-slot=range-error]")).toContainText("終了日：終了日は開始日と同じか、それより後の日付にしてください")
+    await expect(from).toHaveValue("2026/04/01")
+    await expect(to).toHaveValue("2026/03/31")
+    // 片側だけの期間は送信できる
+    await to.fill("")
+    await submit.click()
+    await expect(result).toHaveText("contract_date=2026-04-01, from=2026-04-01, to=")
+    // 外から値を変える
+    await form.getByTestId("date-form-external").click()
+    await expect(form.getByRole("textbox", { name: "契約日" })).toHaveValue("2026/05/15")
+    await expect(form.locator("input[name=contract_date]")).toHaveValue("2026-05-15")
+    // reset：初期値に戻り、エラーも消える
+    await form.getByRole("textbox", { name: "契約日" }).fill("2026/02/30")
+    await form.getByRole("textbox", { name: "契約日" }).press("Tab")
+    await form.getByRole("button", { name: "初期値に戻す" }).click()
+    await expect(form.getByRole("textbox", { name: "契約日" })).toHaveValue("2026/04/01")
+    await expect(from).toHaveValue("2026/04/01")
+    await expect(to).toHaveValue("2026/04/30")
+    await expect(form.getByRole("textbox", { name: "契約日" })).not.toHaveAttribute("aria-invalid", "true")
+    await submit.click()
+    await expect(result).toHaveText("contract_date=2026-04-01, from=2026-04-01, to=2026-04-30")
+  })
+
+  test("constraints: validity, presets that do not fit, disabled and read-only", async ({ page }) => {
+    await open(page, "date-picker")
+    const lim = page.getByTestId("date-range-limit").getByRole("textbox", { name: "訪問の希望日" })
+    const limValue = page.getByTestId("date-range-limit").locator("[data-slot=date-picker-value]")
+    for (const [text, valid] of [["2026/11/24", false], ["2026/11/28", false], ["2027/03/01", false], ["2026/11/27", true]] as const) {
+      await lim.fill(text)
+      await expect.poll(() => limValue.evaluate((el: HTMLInputElement) => el.validity.valid), { message: text }).toBe(valid)
+    }
+    // min（今月の 1 日）と max（今日）に合わないプリセットは押せない
+    const scope = page.getByTestId("date-presets-min")
+    const overlay = await openCalendar(page, scope, "カレンダーから期間を選ぶ")
+    for (const label of ["先月", "過去30日間", "今年"]) await expect(overlay.getByRole("button", { name: label, exact: true })).toBeDisabled()
+    for (const label of ["今日", "今週", "今月", "過去7日間"]) await expect(overlay.getByRole("button", { name: label, exact: true })).toBeEnabled()
+    await page.keyboard.press("Escape")
+    // 無効：送信しない（隠れた入力欄も無効）。読み取り専用：Calendar のボタンを出さず、値は送信する
     await expect(page.getByTestId("date-disabled").getByRole("textbox")).toBeDisabled()
+    await expect(page.getByTestId("date-disabled").locator("[data-slot=date-picker-value]")).toBeDisabled()
     await expect(page.getByTestId("date-disabled").getByRole("button", { name: "カレンダーから選ぶ" })).toBeDisabled()
     await expect(page.getByTestId("date-readonly").getByRole("textbox")).toHaveAttribute("readonly", "")
+    await expect(page.getByTestId("date-readonly").locator("[data-slot=date-picker-value]")).toHaveValue("2026-04-01")
+    await expect(page.getByTestId("date-readonly").locator("[data-slot=date-picker-value]")).toBeEnabled()
     await expect(page.getByTestId("date-readonly").getByRole("button", { name: "カレンダーから選ぶ" })).toHaveCount(0)
+  })
+
+  test("Enter during IME composition does not commit", async ({ page }) => {
+    await open(page, "date-picker")
+    const scope = page.getByTestId("date-invalid")
+    const input = scope.getByRole("textbox", { name: "納品日" })
+    await input.fill("2026/02/30")
+    // 変換の確定の Enter（isComposing）では確定しない
+    await input.evaluate((el) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true })))
+    await expect(scope.locator("[data-slot=field-error]")).toHaveCount(0)
+    await input.press("Enter")
+    await expect(scope.locator("[data-slot=field-error]")).toContainText("存在しない日付です")
   })
 
   test.describe("time zone", () => {
@@ -1065,6 +1417,63 @@ test.describe("File Upload", { tag: "@webkit" }, () => {
     expect(log).toContain("アップロード完了。処理を待っています|なし")
     expect(log.some((l) => l.startsWith("データを処理しています|顧客.csvの処理の進捗:"))).toBe(true)
     await expect(item.getByRole("button")).toHaveCount(0)
+  })
+
+  test("selection: duplicates, remove and reselect, repeated drops, count limit", async ({ page }) => {
+    await open(page, "file-upload", { clock: false })
+    const scope = page.getByTestId("upload-multiple")
+    const items = scope.locator("[data-slot=file-upload-item]")
+    const rejected = page.getByTestId("upload-multiple-rejected")
+    const z = scope.locator("[data-slot=file-upload-dropzone]")
+    // OS で同じファイルを選び直したときと同じく、名前、大きさ、更新日時が同じファイルを作ってドロップする
+    const drop = async (names: string[]) => {
+      const dt = await page.evaluateHandle((ns) => {
+        const d = new DataTransfer()
+        for (const n of ns) d.items.add(new File(["x"], n, { type: "application/pdf", lastModified: 1_700_000_000_000 }))
+        return d
+      }, names)
+      await z.dispatchEvent("drop", { dataTransfer: dt })
+    }
+    await drop(["a.pdf"])
+    await expect(items).toHaveCount(1)
+    // 同じファイルを重ねて選ぶと、重複として選べない。同じ選択の中の重複も選べない
+    await drop(["a.pdf", "b.pdf", "b.pdf"])
+    await expect(rejected).toContainText("a.pdf：同じファイルがすでに選ばれています")
+    await expect(rejected).toContainText("2 件のファイルを追加できませんでした")
+    await expect(items).toHaveCount(2)
+    // 外した後は、同じファイルを選び直せる
+    await scope.getByRole("button", { name: "a.pdfを一覧から外す" }).click()
+    await expect(items).toHaveCount(1)
+    await drop(["a.pdf"])
+    await expect(items).toHaveCount(2)
+    // input からも、同じ名前のファイルを続けて選べる（input の値を毎回空にしている）
+    await scope.locator("input[type=file]").setInputFiles([file("c.pdf", 10, "application/pdf")])
+    await scope.locator("input[type=file]").setInputFiles([file("d.pdf", 10, "application/pdf")])
+    await expect(items).toHaveCount(4)
+    // 複数回のドロップ。件数の上限（5 件）は、すでに選んだ件数を含めて数える
+    await drop(["e.pdf", "f.pdf"])
+    await expect(items).toHaveCount(5)
+    await expect(rejected).toContainText("f.pdf：選べるのは 5 件までです")
+  })
+
+  test("start once on repeated clicks; a late completion after cancel is ignored", async ({ page }) => {
+    await open(page, "file-upload", { clock: false })
+    const scope = page.getByTestId("upload-multiple")
+    await scope.locator("input[type=file]").setInputFiles([file("一.pdf", 10, "application/pdf"), file("遅延.pdf", 10, "application/pdf")])
+    // 連続して押しても、送信は 1 回だけ始まる
+    await scope.getByRole("button", { name: "2 件をアップロード" }).dblclick()
+    await expect(scope.getByRole("button", { name: "アップロード", exact: true })).toBeDisabled()
+    expect(await page.evaluate(() => window.__uploadStarts)).toEqual({ "一.pdf": 1, "遅延.pdf": 1 })
+    // 中止の後に、サーバーの完了の通知が遅れて届いても、完了にしない
+    const late = scope.locator("[data-slot=file-upload-item]", { hasText: "遅延.pdf" })
+    await late.getByRole("button", { name: "遅延.pdfの中止" }).click()
+    await expect(late.locator("[data-slot=file-upload-status]")).toHaveText("中止しました")
+    await page.waitForTimeout(900)
+    await expect(late.locator("[data-slot=file-upload-status]")).toHaveText("中止しました")
+    // 中止の後は再試行できる。もう一度始める
+    await late.getByRole("button", { name: "遅延.pdfを再試行" }).click()
+    await expect(late.locator("[data-slot=file-upload-status]")).toHaveText("アップロードしています")
+    await expect(scope.locator("[data-slot=file-upload-item]", { hasText: "一.pdf" }).locator("[data-slot=file-upload-status]")).toHaveText("完了", { timeout: 4000 })
   })
 
   test("failure, retry and cancel", async ({ page }) => {

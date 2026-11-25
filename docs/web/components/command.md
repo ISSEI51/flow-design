@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/command.tsx`](../../../registry/components/ui/command.tsx) |
 | 元にした実装 | shadcn/ui の Command と同じ部品名。cmdk ではなく、Base UI の Autocomplete と Flow Design の Dialog で作った（[advanced.md](advanced.md#依存パッケージ)） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -80,7 +80,12 @@ useCommandShortcut(() => setOpen((o) => !o))
 | Enter、押す | 選んでいる候補の `onSelect` を呼ぶ |
 | Esc | 閉じる。フォーカスを開く前の要素に戻す |
 
-- `useCommandShortcut` は、IME の変換中（`isComposing`）、Shift や Alt を併用したとき、別の修飾キー（macOS の Ctrl + K など）には反応しない。一致したときだけ `preventDefault` する。`enabled` で解除でき、`key` で別のキーに変えられる。
+- `useCommandShortcut` は、アプリケーションに 1 つだけ登録する。`enabled` で解除し、`key` で別のキーに変える。
+- 反応しない場合：IME の変換中（`isComposing`、`keyCode` 229）、キーの長押しによる繰り返し（`repeat`）、ほかの処理が `preventDefault` したキー、Shift や Alt の併用、別の修飾キー（macOS の Ctrl + K など）、contenteditable の中（`allowInEditable` で変える。リッチテキストの編集では Cmd/Ctrl + K がリンクの挿入に使われるため）、Command 以外の Overlay（Dialog、Alert Dialog、Sheet、Drawer、Popover）が開いている間。
+- input と textarea の中では反応する。一致したときだけ `preventDefault` する。
+- 同じキーが複数登録された場合は、最後に登録された（後から表示された）ものだけが反応する。
+- ショートカットの表示は `useCommandShortcutLabel` で描画する。サーバーでの描画と Hydration の間は `null` を返し、Hydration の後に「⌘K」か「Ctrl+K」にする。イベントの処理の中では `commandShortcutLabel` を使ってよい。
+- 実行の後と Escape で閉じた後は、Command を開く前にフォーカスがあった要素（検索ボタン、入力欄など）にフォーカスを戻す（Dialog）。危険な操作の確認（Alert Dialog）を閉じた後も、同じ要素に戻す（`finalFocus`）。
 - 実行の処理は製品が `onSelect` で行う。ページの移動に、特定のルーティングのライブラリを前提にしない。
 - 長い候補の一覧は、Dialog の中でスクロールする。
 - 開閉の動きは Dialog に従い、動きを減らす設定では大きさを変えない。

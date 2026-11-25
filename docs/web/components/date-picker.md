@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/date-picker.tsx`](../../../registry/components/ui/date-picker.tsx)、日付の処理は [`registry/lib/date.ts`](../../../registry/lib/date.ts) |
 | 元にした実装 | shadcn/ui の Date Picker の例（Popover と Calendar の組み合わせ）。shadcn/ui には部品がないため、`DatePicker` と `DateRangePicker` を定めた |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -68,12 +68,15 @@ const [error, setError] = useState<DateError | null>(null)
 | プリセット | その期間を入れて閉じる |
 | Esc、外側を押す | Calendar を閉じる |
 
-- 受け付ける入力は、ロケールの並びの年月日（ja-JP は `2026/11/25`、`2026/1/5`）、区切りの「/」「-」「.」「年月日」、区切りのない 8 桁（`20261125`）、ISO の `2026-11-25`。全角の数字も受け付ける。年は 4 桁に限る。
+- 受け付ける入力は、ロケールの表示形式（ja-JP は `2026/11/25`、`2026/1/5`）、ISO の `2026-11-25`、年が先のロケールでの区切りのない 8 桁（`20261125`）、ja-JP の `2026年11月25日`。全角の数字も受け付ける。年は 4 桁に限る。区切りの混在、空の区切り、先頭や末尾の余分な区切りは形式の誤りにする。ロケールごとの形式は [advanced.md](advanced.md#入力の形式) を参照する。
 - 入力欄は `inputmode="numeric"` にする。モバイルでは数字のキーボードが開き、区切りのない 8 桁でも入力できる。
 - 直接入力と Calendar は同じ値を表示する。入力中の文字が正しい日付であれば、Calendar を開いたときにその日を選んでいる。
 - 存在しない日付や形式の誤りを、別の日付に変換しない。入力した文字は消さずに残す。
 - 終了日が開始日より前でも、自動で入れ替えない。片側だけの指定もできる。必須にするかどうかは製品が決める。
 - 値は日付だけを表す `Date`。`name`（期間は `startName`、`endName`）を指定すると `"YYYY-MM-DD"` を送信する。開始日と終了日はどちらも期間に含む（[advanced.md](advanced.md#日付だけの値の扱い)）。
+- 送信する値は、入力中の文字から作る。不正な入力のまま送信しても、以前に確定した日付は送信しない（`""`）。不正な入力、範囲外、選べない日、開始日と終了日の逆転があると、`form.checkValidity()` は `false` になる。製品は送信の前に確かめる（[advanced.md](advanced.md#フォームの送信)）。
+- Enter では確定してから、通常の入力欄と同じくフォームの送信を続ける。フォームの reset では `defaultValue` に戻る。`value` を外から変えると、入力欄の表示もそろえる。Invalid Date の `value` は未入力として扱う。
+- プリセットのうち、`min`、`max`、`isDateDisabled` に合わない日で始まる・終わるものは押せない。
 - プリセットは `dateRangePresets` から選び、表示するたびに今日（`timeZone`）から計算する。
 - 画面の幅が 768px 未満のときは Drawer を使い、Calendar を 1 か月だけ表示する。Drawer はトリガーの外で開くため、閉じた後のフォーカスの戻り先をボタンに指定している。
 

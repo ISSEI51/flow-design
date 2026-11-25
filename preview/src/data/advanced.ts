@@ -84,19 +84,33 @@ export const people: Person[] = familyNames.flatMap((f, i) =>
   }))
 )
 
+declare global {
+  interface Window {
+    /** 検品用。searchPeople を呼んだ検索文字列の記録。 */
+    __searchCalls?: string[]
+  }
+}
+
+const attempts = new Map<string, number>()
+
 /**
  * サーバー側の検索の模擬。外部への通信はしない。
  * 1 文字の検索は 1200ms、2 文字以上は 400ms かかる。古い検索が後から返る状況を再現する。
- * 「エラー」を含む検索は失敗する。
+ * 「エラー」を含む検索は失敗する。「一時エラー」を含む検索は、1 回目だけ失敗し、再試行で成功する
+ * （「一時エラー」を除いた文字で検索する）。
  * 中断できない API を想定し、signal を受け取っても処理を止めない。古い結果を捨てるのは useComboboxSearch の役割。
  */
 export function searchPeople(query: string, _signal?: AbortSignal): Promise<Person[]> {
+  if (typeof window !== "undefined") window.__searchCalls = [...(window.__searchCalls ?? []), query]
   const delay = [...query].length === 1 ? 1200 : 400
+  const temporary = query.includes("一時エラー")
+  const attempt = (attempts.get(query) ?? 0) + 1
+  attempts.set(query, attempt)
   return new Promise((resolve, reject) => {
     setTimeout(() => {
-      if (query.includes("エラー")) reject(new Error("search failed"))
+      if (temporary ? attempt === 1 : query.includes("エラー")) reject(new Error("search failed"))
       else {
-        const q = query.normalize("NFKC").toLowerCase()
+        const q = query.replace("一時エラー", "").normalize("NFKC").toLowerCase()
         resolve(people.filter((p) => p.label.replace(" ", "").includes(q.replace(/\s/g, "")) || p.email.includes(q)).slice(0, 20))
       }
     }, delay)

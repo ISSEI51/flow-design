@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent } from "react"
-import { addDays } from "date-fns"
+import { addDays, startOfMonth } from "date-fns"
 import { CircleAlert } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -36,8 +36,10 @@ function SingleDate({
   required,
   disabled,
   readOnly,
+  name,
 }: {
   testId: string
+  name?: string
   label: string
   description?: string
   defaultValue?: Date | null
@@ -65,6 +67,7 @@ function SingleDate({
         required={required}
         disabled={disabled}
         readOnly={readOnly}
+        name={name}
       />
       {description && !error && <FieldDescription>{description}</FieldDescription>}
       <FieldError>{error ? dateErrorMessage(error, { min, max }) : null}</FieldError>
@@ -134,29 +137,63 @@ function RangeField({
   )
 }
 
+// フォームの送信の例。製品は送信の前に form.checkValidity() を確かめる。
+// Date Picker は、不正な入力、範囲外、開始日と終了日の逆転があると、入力欄の妥当性を不正にする（setCustomValidity）。
+// noValidate のフォームでは、ブラウザは送信を止めないため、製品がここで止める。
 function FormExample() {
   const [submitted, setSubmitted] = useState<string | null>(null)
+  const [blocked, setBlocked] = useState<string[]>([])
+  const [contract, setContract] = useState<Date | null>(new Date(2026, 3, 1))
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    const fd = new FormData(e.currentTarget)
+    const form = e.currentTarget
+    if (!form.checkValidity()) {
+      // Date Picker の値と妥当性は、見えない入力欄が持つ。data-for から、見える入力欄とラベルをたどる。
+      const invalid = Array.from(form.elements).filter(
+        (el): el is HTMLInputElement => el instanceof HTMLInputElement && !el.validity.valid
+      )
+      const visible = (el: HTMLInputElement) => (el.dataset.for ? (document.getElementById(el.dataset.for) as HTMLInputElement) : el)
+      setBlocked(invalid.map((el) => `${visible(el).labels?.[0]?.textContent ?? el.name}：${el.validationMessage}`))
+      setSubmitted(null)
+      if (invalid[0]) visible(invalid[0]).focus()
+      return
+    }
+    setBlocked([])
+    const fd = new FormData(form)
     setSubmitted(`contract_date=${fd.get("contract_date")}, from=${fd.get("from")}, to=${fd.get("to")}`)
   }
   return (
-    <form onSubmit={onSubmit} noValidate className="flex w-full max-w-xl flex-col gap-6" data-testid="date-form">
+    <form
+      onSubmit={onSubmit}
+      onReset={() => {
+        setSubmitted(null)
+        setBlocked([])
+      }}
+      noValidate
+      className="flex w-full max-w-xl flex-col gap-6"
+      data-testid="date-form"
+    >
       <Field className="max-w-xs">
         <FieldLabel>契約日</FieldLabel>
-        <DatePicker name="contract_date" defaultValue={new Date(2026, 3, 1)} />
+        <DatePicker name="contract_date" value={contract} onValueChange={setContract} defaultValue={new Date(2026, 3, 1)} required />
       </Field>
       <FieldSet>
         <FieldLegend variant="label">請求の対象期間</FieldLegend>
         <DateRangePicker startName="from" endName="to" defaultValue={{ from: new Date(2026, 3, 1), to: new Date(2026, 3, 30) }} />
       </FieldSet>
-      <div className="flex flex-wrap items-center gap-4">
+      {blocked.length > 0 && <RangeError id="date-form-errors" errors={blocked} />}
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="submit">送信</Button>
-        <output data-testid="date-form-result" className="text-ui text-muted-foreground">
-          {submitted}
-        </output>
+        <Button type="reset" variant="secondary">
+          初期値に戻す
+        </Button>
+        <Button type="button" variant="ghost" onClick={() => setContract(new Date(2026, 4, 15))} data-testid="date-form-external">
+          契約日を 2026/05/15 にする
+        </Button>
       </div>
+      <output data-testid="date-form-result" className="text-ui text-muted-foreground">
+        {submitted}
+      </output>
     </form>
   )
 }
@@ -205,6 +242,9 @@ export function DatePickerPage() {
         <Row label="プリセット" note="よく使う期間がある場合だけ表示する。今日を基準に計算する">
           <RangeField testId="date-presets" legend="集計期間" presets />
         </Row>
+        <Row label="プリセットと制約" note="今月の 1 日より前は選べない。合わないプリセットは押せない">
+          <RangeField testId="date-presets-min" legend="集計期間" presets min={startOfMonth(today)} max={today} />
+        </Row>
       </Section>
 
       <Section title="状態">
@@ -212,10 +252,10 @@ export function DatePickerPage() {
           <FormExample />
         </Row>
         <Row label="無効">
-          <SingleDate testId="date-disabled" label="契約日" defaultValue={new Date(2026, 3, 1)} disabled />
+          <SingleDate testId="date-disabled" label="契約日" name="disabled_date" defaultValue={new Date(2026, 3, 1)} disabled />
         </Row>
         <Row label="読み取り専用" note="カレンダーのボタンを出さない">
-          <SingleDate testId="date-readonly" label="契約日" defaultValue={new Date(2026, 3, 1)} readOnly />
+          <SingleDate testId="date-readonly" label="契約日" name="readonly_date" defaultValue={new Date(2026, 3, 1)} readOnly />
         </Row>
       </Section>
     </article>
