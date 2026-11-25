@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/sheet.tsx`](../../../registry/components/ui/sheet.tsx) |
 | 元にした実装 | shadcn/ui の Sheet（Base UI 版。Base UI の Dialog を使う） |
 | 依存 | `@base-ui/react`、`lucide-react`、[Button](button.md)、[`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 

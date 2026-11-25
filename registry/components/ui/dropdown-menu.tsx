@@ -31,6 +31,9 @@ const popupClassName = cn(
 // data-highlighted を付ける（aria-activedescendant は使わない）。:focus-visible はキー操作の後に一致するが、
 // キー操作の後にポインターを動かした場合も一致したままになる。そのため、ポインターを動かしている間は
 // Popup に data-pointer を付けてフォーカスの枠を消し、キーを押したら外す。
+// 重なり順：z-50（浮かぶ要素の層）。後から開いたモーダル（Dialog、Alert Dialog など）の外側に残った場合は、
+// Base UI がモーダルの外側の要素に付ける data-base-ui-inert の下に入るため、モーダルの層（z-40）に下げる。
+// DOM の順で新しいモーダルの背面に入り、押せなくなる（Base UI は同時に aria-hidden も付ける）。
 function DropdownMenuContent({
   align = "start",
   alignOffset = 0,
@@ -46,7 +49,7 @@ function DropdownMenuContent({
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
-        className="isolate z-50 outline-none"
+        className="isolate z-50 outline-none in-[[data-base-ui-inert]]:z-40"
         align={align}
         alignOffset={alignOffset}
         side={side}

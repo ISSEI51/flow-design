@@ -89,7 +89,8 @@ const [confirm, setConfirm] = useState(false)
 
 | 状況 | 動き |
 | --- | --- |
-| `onDiscardRequest` を渡さない | 外側のクリックだけを止め、Escape、閉じるボタン、スワイプでは閉じる。閉じる手段がなくならないようにするため |
+| `onDiscardRequest={null}` | 確認を出さない。外側のクリックだけを止め、Escape、閉じるボタン、スワイプでは閉じる |
+| `onDiscardRequest` の指定漏れ | 型エラーになる（`unsavedChanges` を渡す場合は必須）。型を通らない場合（JavaScript など）は、開発時に `console.warn` を 1 回出し、`null` と同じく閉じる手段を残す |
 | 閉じる要求が続く | 確認は 1 つだけ開く。確認が開いている間、Escape は確認だけを閉じ、背後の閉じるボタンは確認の背景に当たる |
 | 取り消せない閉じる要求 | `unsavedChanges` に関係なく閉じ、`onOpenChange` に渡して製品の状態と画面を一致させる（下記） |
 
@@ -126,7 +127,9 @@ const [confirm, setConfirm] = useState(false)
 - Escape には最前面の Overlay だけが反応する。
 - 閉じた後、フォーカスは開く前にフォーカスがあった要素に戻る。
 - 入れ子の Alert Dialog は背景を重ねて描かない。背後の Dialog と Sheet は、面を 10% 暗くして最前面を区別する（`data-nested-dialog-open`）。
-- Dialog の中の Tooltip は、キーボードのフォーカスで開いた場合、Escape で Tooltip だけが閉じる。ポインターを重ねて開いた場合（フォーカスは別の要素）は、1 回の Escape で Tooltip と Dialog の両方が閉じる（検品で確認した現在の動き。未解決）。
+- Dialog、Sheet、Drawer の中の Tooltip は、開き方（ポインター、キーボード）に関係なく、1 回目の Escape で Tooltip だけが閉じる。2 回目の Escape で背後の Overlay が閉じる（未保存の変更があれば破棄を確かめる）。フォーカスは動かず、閉じた Tooltip はポインターを動かしても再表示しない。
+  - Base UI の Tooltip は、Dialog などの Overlay の木（FloatingTree）に属さない。そのため、ポインターで開いた Tooltip があっても、Escape は背後の Dialog に届いていた。
+  - Flow Design の Tooltip は、開いている間だけ、その Tooltip の Escape を `document` のキャプチャの段階で受け、Base UI の `actionsRef.close()` で自分を閉じ、伝播を止める。全体の Escape を管理する仕組みは持たない。IME の変換中の Escape は扱わない。
 
 破棄を確かめる Alert Dialog は、入れ子として扱われるよう、元の Overlay の中（`DialogContent` などの子）に置く。
 
@@ -172,6 +175,9 @@ const [confirm, setConfirm] = useState(false)
 - Dialog の中で開いた Select、Popover、Tooltip は、Dialog の上に重なる（50 > 40）。
 - Toast の領域はアプリの起動時に追加されるため、同じ層にすると、後から開いた Dialog や Sheet の下に隠れる。モーダルの面を 1 段下にすることで、Toast は開いている Dialog と Sheet の上に表示され、閉じるボタンを押せる。Toast を押しても Dialog は閉じない（検品で確認）。
 - モーダルの Overlay は外側の要素に `aria-hidden` を付けるが、`aria-live` の領域（Toast）は除く（Base UI）。Dialog の表示中も通知は読み上げの対象に残る。
+- 浮かぶ要素は、後から開いたモーダルの外側に残った場合、モーダルの層（40）に下がる。Base UI はモーダルを開くとき、外側の要素に `data-base-ui-inert` と `aria-hidden` を付ける。浮かぶ要素は、この印の下では `z-40` になり、DOM の順で新しいモーダルの背面に入って押せなくなる。たとえば、Dialog の中の Popover から Alert Dialog を開くと、Popover は Alert Dialog の背面に入る。Alert Dialog を閉じると元の層に戻る。
+- 前面のモーダルの中で新しく開いた浮かぶ要素は印を持たないため、`z-50` のまま前面に出る（Dialog の中の Select など）。
+- Toast は印の下でも層を変えない。通知はモーダルの上に残し、押せる。
 - 層を増やす場合は、この表に理由とともに追加する。
 
 ブランドカラーなどの変数を、画面の一部の要素だけに設定すると、Portal に表示する Overlay には届かない。変数は `:root` か `<html>` に設定する。画面の一部だけテーマを変える場合は、Portal の `container` に、その要素を指定する。
@@ -227,8 +233,18 @@ Dropdown Menu と Select の選択肢に共通する規則。Combobox、Multi Se
 
 | 事象 | 条件 | 原因 | 扱い |
 | --- | --- | --- | --- |
-| `TypeError: The provided value is non-finite` | WebKit。まれ（Overlay の検品 720 回中 2 回など）。別々のワーカーで同時に起きる | WebKit が、座標が NaN の信頼された `pointerdown`、`pointerup`、`click` を `<html>` に発生させ、Playwright がクリックの対象を確かめる処理（`expectHitTarget`）の `elementsFromPoint` が例外を出す。製品のコードと Base UI は関与しない | 記録と注記を残し、検品は失敗にしない。座標が NaN のイベントの記録がない例外は失敗にする |
+| `TypeError: The provided value is non-finite` | WebKit。まれ（Overlay の検品 720 回中 2 回など）。別々のワーカーで同時に起きる | WebKit が、座標が NaN の信頼された `pointerdown`、`pointerup`、`click` を `<html>` に発生させ、Playwright がクリックの対象を確かめる処理（`expectHitTarget`）の `elementsFromPoint` が例外を出す。製品のコードと Base UI は関与しない。イベントの発生元は特定できていない | 下の条件をすべて満たすものだけ、記録と注記を残して検品を失敗にしない |
 | `ResizeObserver loop completed with undelivered notifications` | Chromium。Dialog の中の Select で選んだ直後、一覧が閉じる動きの途中で Dialog を閉じた場合 | ResizeObserver の通知が次のフレームに持ち越されたことのブラウザの報告。例外ではない | 検品は実際の操作の順序（一覧が閉じてから閉じる）で行う。重なった場合の影響は確認されていない |
+
+環境の事象として扱う条件（`classifyPageErrors`）は次のすべてである。条件は `preview/tests/page-errors.spec.ts` で検品している。
+
+1. ブラウザが WebKit で、版が 27.x（調査で確認した版）である。Playwright を更新したときは、事象を確かめ直してから条件を変える。
+2. 例外の文が `The provided value is non-finite` である。
+3. スタックの先頭が `elementsFromPoint`、続いて `expectHitTarget` で、`http(s)://` の URL を持つフレーム（製品やライブラリのコード）を含まない。`window` の `error` のファイル名を持たない。
+4. 例外の 0〜5ms 前に、座標が有限でない信頼された `PointerEvent` か `MouseEvent`（`pointerdown`、`pointerup`、`click`、`mousedown`、`mouseup`）が記録されている。イベントは種類、コンストラクター、`isTrusted`、座標を構造化して記録する。
+5. `pageerror` は、条件を満たした `window` の `error` の重複に限る（50ms 以内、件数を超えない）。
+
+条件を満たさない例外、製品のコードの例外、Chromium の例外は、すべて検品を失敗にする。
 
 ### WebKit と実機の Safari
 
@@ -236,3 +252,19 @@ Dropdown Menu と Select の選択肢に共通する規則。Combobox、Multi Se
 
 - WebKit は Safari の既定の設定と同じく、Tab でリンクに移動しない。リンクへの移動は Option+Tab（`Alt+Tab`）で確かめる。
 - Base UI の Tooltip はタッチ操作では開かないため、`webkit-mobile` と `mobile` では Tooltip の検品をしない。
+
+## 8. 残存するリスク
+
+次は、自動の検品で確かめていない。確認済みとは扱わない。
+
+| 項目 | 状況 |
+| --- | --- |
+| iOS Safari の実機 | 未確認。Playwright の WebKit（macOS）だけで検品している |
+| Safe Area | 未確認。`env(safe-area-inset-*)` を指定していることだけを検品している |
+| Android の戻る操作 | 未確認。`CloseWatcher` の経路は、プレビューのキー操作では起きなかった |
+| VoiceOver、NVDA | 未確認。役割、名前、`aria-hidden` の付け外しを Playwright で確かめている |
+| WebKit の座標が NaN のイベント | 発生元は未特定（上記）。Base UI がこのイベントを外側のクリックとして扱い、Overlay が閉じる可能性がある（検品では観測していない） |
+| ResizeObserver の通知 | Chromium で、Select の一覧が閉じる動きと Dialog が閉じる動きが重なった場合に記録される。影響は確認されていない |
+| Toast を押した後のフォーカス | モーダル（Alert Dialog など）の表示中に Toast の閉じるボタンを押すと、フォーカスが `<body>` に移り、次の Tab で背後の Overlay（`aria-hidden`）の中へ移る（Chromium、WebKit で確認）。Base UI の Dialog は、内側として扱う要素を公開 API で指定できない。改善案は、Toast のボタンが押されてもフォーカスを奪わないようにすること（Feedback）、または Base UI にその API を求めること |
+| Base UI の内部の印 | 浮かぶ要素の層の切り替えは、Base UI の `data-base-ui-inert` に依存する。Base UI の更新時は、重なり順の検品で確かめる |
+

@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/popover.tsx`](../../../registry/components/ui/popover.tsx) |
 | 元にした実装 | shadcn/ui の Popover（Base UI 版） |
 | 依存 | `@base-ui/react`、[`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 

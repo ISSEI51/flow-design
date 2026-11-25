@@ -19,6 +19,9 @@ function PopoverClose(props: PopoverPrimitive.Close.Props) {
   return <PopoverPrimitive.Close data-slot="popover-close" {...props} />
 }
 
+// 重なり順：z-50（浮かぶ要素の層）。後から開いたモーダル（Dialog、Alert Dialog など）の外側に残った場合は、
+// Base UI がモーダルの外側の要素に付ける data-base-ui-inert の下に入るため、モーダルの層（z-40）に下げる。
+// DOM の順で新しいモーダルの背面に入り、押せなくなる（Base UI は同時に aria-hidden も付ける）。
 function PopoverContent({
   className,
   align = "center",
@@ -37,7 +40,7 @@ function PopoverContent({
         side={side}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className="isolate z-50 outline-none"
+        className="isolate z-50 outline-none in-[[data-base-ui-inert]]:z-40"
       >
         <PopoverPrimitive.Popup
           data-slot="popover-content"

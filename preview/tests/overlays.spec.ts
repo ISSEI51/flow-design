@@ -1569,6 +1569,269 @@ test.describe("AlertDialogMedia (compatibility)", { tag: "@webkit" }, () => {
   })
 })
 
+// ---------------------------------------------------------------- v0.1 の残存課題の回帰テスト
+
+// ポインターを重ねて Tooltip を開く。フォーカスは動かさない。
+async function hoverTooltip(trigger: Locator, tooltip: Locator) {
+  await trigger.hover()
+  await expect(tooltip).toBeVisible()
+}
+const activeSlot = (page: Page) =>
+  page.evaluate(() => {
+    const a = document.activeElement
+    return `${a?.getAttribute("data-testid") ?? a?.getAttribute("data-slot") ?? a?.tagName}`
+  })
+
+test.describe("tooltip and Escape", { tag: "@webkit" }, () => {
+  test.beforeEach(({ isMobile }) => test.skip(isMobile, "Base UI の Tooltip はタッチ操作では開かない"))
+
+  test("dialog: Escape closes the hovered tooltip first, then the dialog; focus stays; no reopening", async ({ page }) => {
+    await open(page, "dialog")
+    const trigger = page.getByTestId("dialog-combo-trigger")
+    await openWithKeyboard(page, trigger)
+    const popup = page.getByTestId("dialog-combo")
+    await settle(popup)
+    const tip = page.getByTestId("dialog-combo-tooltip")
+    const focusBefore = await activeSlot(page)
+    await hoverTooltip(page.getByTestId("dialog-combo-copy"), tip)
+    expect(await activeSlot(page)).toBe(focusBefore)
+    await page.keyboard.press("Escape")
+    await expect(tip).toBeHidden()
+    await expect(popup).toBeVisible()
+    expect(await activeSlot(page)).toBe(focusBefore)
+    // ポインターを少し動かしても、閉じた Tooltip は再表示しない
+    const cb = await box(page.getByTestId("dialog-combo-copy"))
+    await page.mouse.move(cb.x + cb.width / 2 + 3, cb.y + cb.height / 2 + 2)
+    await page.mouse.move(cb.x + cb.width / 2 - 3, cb.y + cb.height / 2 - 2)
+    await page.waitForTimeout(1000)
+    await expect(tip).toBeHidden()
+    await page.keyboard.press("Escape")
+    await expect(popup).toBeHidden()
+    await expect(trigger).toBeFocused()
+  })
+
+  test("dialog: a tooltip opened by keyboard focus still closes alone", async ({ page }) => {
+    await open(page, "dialog")
+    await openWithKeyboard(page, page.getByTestId("dialog-combo-trigger"))
+    const popup = page.getByTestId("dialog-combo")
+    await settle(popup)
+    const copy = page.getByTestId("dialog-combo-copy")
+    while (!(await isFocused(copy))) await tabInside(page, popup, 1)
+    const tip = page.getByTestId("dialog-combo-tooltip")
+    await expect(tip).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(tip).toBeHidden()
+    await expect(popup).toBeVisible()
+    await expect(copy).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(popup).toBeHidden()
+  })
+
+  test("dialog with unsaved changes: 1st Escape closes the tooltip, 2nd opens the discard confirmation", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-dirty-trigger").click()
+    const popup = page.getByTestId("dialog-dirty")
+    await settle(popup)
+    const name = page.getByTestId("dialog-dirty-name")
+    await name.fill("山田商事株式会社")
+    const tip = page.getByTestId("dialog-dirty-hint-tooltip")
+    await hoverTooltip(page.getByTestId("dialog-dirty-hint"), tip)
+    await page.keyboard.press("Escape")
+    await expect(tip).toBeHidden()
+    await expect(page.locator("[role=alertdialog]")).toHaveCount(0)
+    await expect(name).toBeFocused()
+    await page.keyboard.press("Escape")
+    const alert = page.getByTestId("dialog-discard")
+    await settle(alert)
+    await expect(page.locator("[role=alertdialog]")).toHaveCount(1)
+    // 続けて Escape：確認だけが閉じ、入力は残る
+    await page.keyboard.press("Escape")
+    await expect(alert).toBeHidden()
+    await expect(popup).toBeVisible()
+    await expect(name).toHaveValue("山田商事株式会社")
+  })
+
+  test("sheet: Escape closes the hovered tooltip first, then the sheet", async ({ page }) => {
+    await open(page, "sheet")
+    await page.getByTestId("sheet-row-C-0012").click()
+    const sheet = page.getByTestId("sheet-customer")
+    await settle(sheet)
+    await sheet.locator("[data-slot=sheet-close-button]").focus()
+    const tip = page.getByTestId("sheet-hint-tooltip")
+    await hoverTooltip(page.getByTestId("sheet-hint"), tip)
+    await page.keyboard.press("Escape")
+    await expect(tip).toBeHidden()
+    await expect(sheet).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(sheet).toBeHidden()
+  })
+
+  test("drawer: Escape closes the hovered tooltip first, then asks before discarding", async ({ page }) => {
+    await open(page, "drawer")
+    await page.getByTestId("drawer-note-trigger").click()
+    const drawer = page.getByTestId("drawer-note")
+    await settle(drawer)
+    const field = page.getByTestId("drawer-note-field")
+    await field.fill("来週電話する")
+    const tip = page.getByTestId("drawer-note-hint-tooltip")
+    await hoverTooltip(page.getByTestId("drawer-note-hint"), tip)
+    await page.keyboard.press("Escape")
+    await expect(tip).toBeHidden()
+    await expect(drawer).toBeVisible()
+    await expect(page.getByTestId("drawer-discard")).toHaveCount(0)
+    await expect(field).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(page.getByTestId("drawer-discard")).toBeVisible()
+  })
+})
+
+test.describe("stacking with nested overlays", { tag: "@webkit" }, () => {
+  test("popover in a dialog stays behind an alert dialog opened from it and cannot be pressed", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-combo-trigger").click()
+    await settle(page.getByTestId("dialog-combo"))
+    await page.getByTestId("dialog-combo-popover-trigger").click()
+    const pop = page.getByTestId("dialog-combo-popover")
+    await settle(pop)
+    await page.getByTestId("dialog-combo-remove").click()
+    const alert = page.getByTestId("dialog-combo-alert")
+    await settle(alert)
+    // Popover は背後の層（z-40）に下がり、新しいモーダルの背面になる。支援技術からも隠れる
+    const pb = await box(pop)
+    expect(await hitInside(page, pb.x + pb.width / 2, pb.y + pb.height / 2, pop)).toBe(false)
+    expect(await pop.evaluate((el) => el.closest("[aria-hidden=true]") !== null)).toBe(true)
+    const ab = await box(alert)
+    expect(await hitInside(page, ab.x + ab.width / 2, ab.y + 12, alert)).toBe(true)
+    await expect(alert.getByRole("button", { name: "キャンセル" })).toBeFocused()
+    // 確認を閉じると、Popover は元の層に戻る
+    await page.keyboard.press("Escape")
+    await expect(alert).toBeHidden()
+    await expect(pop).toBeVisible()
+    const pb2 = await box(pop)
+    expect(await hitInside(page, pb2.x + pb2.width / 2, pb2.y + 8, pop)).toBe(true)
+  })
+
+  test("dropdown menu in a sheet: an alert dialog opened from an item is frontmost", async ({ page }) => {
+    await open(page, "sheet")
+    await page.getByTestId("sheet-row-C-0012").click()
+    const sheet = page.getByTestId("sheet-customer")
+    await settle(sheet)
+    await page.getByTestId("sheet-actions-trigger").click()
+    await settle(page.getByTestId("sheet-actions"))
+    await page.getByTestId("sheet-actions").getByRole("menuitem", { name: "削除" }).click()
+    const alert = page.getByTestId("sheet-delete-alert")
+    await settle(alert)
+    await expect(page.getByTestId("sheet-actions")).toBeHidden()
+    const close = sheet.locator("[data-slot=sheet-close-button]")
+    const cb = await box(close)
+    expect(await hitInside(page, cb.x + cb.width / 2, cb.y + cb.height / 2, close)).toBe(false)
+    await page.keyboard.press("Escape")
+    await expect(alert).toBeHidden()
+    await expect(sheet).toBeVisible()
+  })
+
+  test("a tooltip of the overlay behind does not stay above a new modal", async ({ page, isMobile }) => {
+    test.skip(isMobile, "Base UI の Tooltip はタッチ操作では開かない")
+    await open(page, "dialog")
+    await page.getByTestId("dialog-dirty-trigger").click()
+    const popup = page.getByTestId("dialog-dirty")
+    await settle(popup)
+    await page.getByTestId("dialog-dirty-name").fill("x")
+    const tip = page.getByTestId("dialog-dirty-hint-tooltip")
+    await hoverTooltip(page.getByTestId("dialog-dirty-hint"), tip)
+    // ポインターは Tooltip のトリガーの上のまま、キーで破棄の確認を開く
+    await popup.getByRole("button", { name: "キャンセル" }).focus()
+    await page.keyboard.press("Enter")
+    const alert = page.getByTestId("dialog-discard")
+    await settle(alert)
+    // 表示の有無と前面にあるかを、同じ時点で判定する（Tooltip は閉じる途中で消えることがある）
+    const state = () =>
+      page.evaluate(() => {
+        const el = document.querySelector("[data-testid=dialog-dirty-hint-tooltip]")
+        if (!el) return "hidden"
+        const r = el.getBoundingClientRect()
+        if (r.width === 0 || r.height === 0) return "hidden"
+        return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)) ? "above" : "behind"
+      })
+    await expect.poll(state).not.toBe("above")
+    await page.waitForTimeout(300)
+    expect(await state()).not.toBe("above")
+  })
+
+  test("select in a dialog closes before the discard confirmation opens", async ({ page, isMobile }) => {
+    test.skip(isMobile, "the sheet covers the whole screen on mobile")
+    await open(page, "sheet")
+    await page.getByTestId("sheet-row-C-0012").click()
+    const sheet = page.getByTestId("sheet-customer")
+    await settle(sheet)
+    await page.getByTestId("sheet-edit").click()
+    await sheet.getByRole("combobox").click()
+    await page.getByRole("option", { name: "情報通信業" }).click()
+    await expect(page.getByRole("listbox")).toBeHidden()
+    await page.getByTestId("sheet-cancel").click()
+    const alert = page.getByTestId("sheet-discard")
+    await settle(alert)
+    await expect(page.getByRole("listbox")).toHaveCount(0)
+    const ab = await box(alert)
+    expect(await hitInside(page, ab.x + ab.width / 2, ab.y + 12, alert)).toBe(true)
+    await expect(alert.getByRole("button", { name: "編集を続ける" })).toBeFocused()
+  })
+
+  test("a toast and a nested alert dialog at the same time", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-dirty-trigger").click()
+    const popup = page.getByTestId("dialog-dirty")
+    await settle(popup)
+    await page.getByTestId("dialog-dirty-name").fill("x")
+    await page.getByTestId("dialog-dirty-draft").click()
+    const toast = page.locator("[data-slot=toast]").first()
+    await expect(toast).toBeVisible()
+    await page.getByTestId("dialog-dirty-name").focus()
+    await page.keyboard.press("Escape")
+    const alert = page.getByTestId("dialog-discard")
+    await settle(alert)
+    // Toast は通知の層（z-50）で前面に残り、押せる。確認は閉じない
+    const tb = await box(toast)
+    expect(await hitInside(page, tb.x + tb.width / 2, tb.y + 12, toast)).toBe(true)
+    await toast.locator("[data-slot=toast-close]").click()
+    await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+    await expect(alert).toBeVisible()
+    // Escape は確認を閉じる
+    await page.keyboard.press("Escape")
+    await expect(alert).toBeHidden()
+    await expect(popup).toBeVisible()
+  })
+})
+
+test.describe("missing onDiscardRequest", { tag: "@webkit" }, () => {
+  test("warns once in development and still closes with explicit close operations", async ({ page }) => {
+    const warnings: string[] = []
+    page.on("console", (m) => m.type() === "warning" && m.text().includes("[Flow Design]") && warnings.push(m.text()))
+    await open(page, "dialog")
+    // onDiscardRequest={null} と明示した場合は警告しない
+    await page.getByTestId("dialog-noconfirm-trigger").click()
+    await settle(page.getByTestId("dialog-noconfirm"))
+    await page.getByTestId("dialog-noconfirm-field").fill("x")
+    await page.keyboard.press("Escape")
+    await expect(page.getByTestId("dialog-noconfirm")).toBeHidden()
+    expect(warnings).toEqual([])
+    // 指定漏れの例
+    await page.getByTestId("dialog-missing-trigger").click()
+    const popup = page.getByTestId("dialog-missing")
+    await settle(popup)
+    await page.getByTestId("dialog-missing-field").fill("x")
+    await page.getByTestId("dialog-missing-field").fill("xy")
+    await expect.poll(() => warnings.length).toBe(1)
+    expect(warnings[0]).toContain("Dialog: unsavedChanges が true ですが、onDiscardRequest が指定されていません")
+    await clickOutside(page)
+    await page.waitForTimeout(300)
+    await expect(popup).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(popup).toBeHidden()
+    expect(warnings).toHaveLength(1)
+  })
+})
+
 test.describe("screenshots", () => {
   test("capture", async ({ page }, info) => {
     test.setTimeout(180_000)
