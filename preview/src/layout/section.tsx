@@ -27,12 +27,12 @@ export function Row({ label, note, children }: { label: string; note?: string; c
 export function Compare({ bad, good, badNote, goodNote }: { bad: ReactNode; good: ReactNode; badNote: string; goodNote: string }) {
   return (
     <div className="grid gap-8 border-t border-border py-6 first:border-t-0 first:pt-0 sm:grid-cols-2">
-      <div>
+      <div className="min-w-0">
         <p className="text-ui font-medium text-destructive">避ける</p>
         <div className="mt-4 flex flex-wrap items-center gap-4">{bad}</div>
         <p className="mt-4 text-ui text-muted-foreground">{badNote}</p>
       </div>
-      <div>
+      <div className="min-w-0">
         <p className="text-ui font-medium text-success">使う</p>
         <div className="mt-4 flex flex-wrap items-center gap-4">{good}</div>
         <p className="mt-4 text-ui text-muted-foreground">{goodNote}</p>

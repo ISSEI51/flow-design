@@ -13,8 +13,14 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Checkbox | [checkbox.md](checkbox.md) | v0.1 確定 |
 | Radio Group | [radio-group.md](radio-group.md) | v0.1 確定 |
 | Switch | [switch.md](switch.md) | v0.1 確定 |
+| Table | [table.md](table.md) | 初期実装 |
+| Data Table | [data-table.md](data-table.md) | 初期実装（Overlay・Feedback の統合待ち） |
+| Pagination | [pagination.md](pagination.md) | 初期実装 |
+| Chart | [chart.md](chart.md) | 初期実装 |
 
 入力系コンポーネントに共通する判断基準は [forms.md](forms.md) にまとめている。
+
+Data Display（Table、Data Table、Pagination、Chart）に共通する判断基準は [data-display.md](data-display.md) にまとめている。
 
 ## ファイルの配置
 

@@ -1,6 +1,11 @@
 import type { ComponentType } from "react"
 
 import { ButtonPage } from "./pages/button-page"
+import { ChartPage } from "./pages/data-display/chart-page"
+import { DashboardPage } from "./pages/data-display/dashboard-page"
+import { DataTablePage } from "./pages/data-display/data-table-page"
+import { PaginationPage } from "./pages/data-display/pagination-page"
+import { TablePage } from "./pages/data-display/table-page"
 import { CheckboxPage } from "./pages/forms/checkbox-page"
 import { CustomerFormPage } from "./pages/forms/customer-form-page"
 import { FieldPage } from "./pages/forms/field-page"
@@ -23,4 +28,9 @@ export const catalog: { id: string; name: string; page: ComponentType }[] = [
   { id: "switch", name: "Switch", page: SwitchPage },
   { id: "field", name: "Field", page: FieldPage },
   { id: "customer-form", name: "フォームの例", page: CustomerFormPage },
+  { id: "table", name: "Table", page: TablePage },
+  { id: "data-table", name: "Data Table", page: DataTablePage },
+  { id: "pagination", name: "Pagination", page: PaginationPage },
+  { id: "chart", name: "Chart", page: ChartPage },
+  { id: "dashboard", name: "ダッシュボードの例", page: DashboardPage },
 ]
