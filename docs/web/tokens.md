@@ -1,0 +1,294 @@
+# デザイントークン v0.1
+
+Flow Design を Web で実装するときの、余白、文字、角丸、色、境界線、影、動き、高さの値と、その使い分け。
+
+v0.1 は初期仕様である。実際のコンポーネントを使った検品を通じて改善する。技術の構成は [Web 技術スタック](stack.md) に従う。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/tokens-dark.svg">
+  <img alt="トークンの 3 層。1 Primitive は元の値で、--fd-neutral-0〜900、--fd-font-sans、--spacing（4px）がある。製品はここでニュートラルの色味とフォントを上書きする。2 Semantic は用途を表す名前で、--background、--primary、--muted-foreground、--text-body、--radius-lg、--shadow-menu などがある。製品はここでブランドカラーと、任意でダークモードを上書きする。3 Component は部品に固有の値で、--control-height、--table-row-height、--focus-ring-width、--icon-stroke-width がある。製品は高密度の画面でここの高さを上書きする。トークンは @theme inline で Tailwind CSS v4 のユーティリティ（bg-primary、text-body、rounded-lg、shadow-menu、h-control、focus-ring など）として公開される。shadcn/ui のコンポーネントは既存のクラスのまま動き、高さとフォーカス表示は各部品の指定に従う。Flow Design のコンポーネントは Registry で配布する予定で、48px の高さと 2px のフォーカス表示を使う。" src="../diagrams/tokens-light.svg">
+</picture>
+
+## 基本方針
+
+- 余白は適度に取り、文字の階層をはっきりさせ、角は柔らかく丸める。
+- 無彩色を標準とする。ブランドカラーとフォントは製品ごとに変更できる。
+- 操作できる部品の高さは 48px を標準とする。
+- 影は、浮かぶ要素だけに使う。
+- ダークモードを提供するかどうかは、製品ごとに判断する。
+- 一貫性を保ちながら、画面に必要な情報の量と機能は削らない。
+
+## 使い方
+
+テーマの CSS は [`registry/foundation/theme.css`](../../registry/foundation/theme.css) にある。将来、Registry の Foundation 層として配布する。配布の形式はまだ決めていない。
+
+製品のグローバル CSS で、次の順に読み込む。shadcn/ui の `init` が生成した `:root`、`.dark`、`@theme inline` のブロックは、このファイルで置き換える。
+
+```css
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+@import "./flow-design-theme.css";
+```
+
+## トークンの 3 層
+
+| 層 | 役割 | 例 |
+| --- | --- | --- |
+| Primitive | 元の値。コンポーネントからは直接参照しない | `--fd-neutral-500`、`--fd-font-sans` |
+| Semantic | 用途を表す名前。コンポーネントはこの層を参照する | `--muted-foreground`、`--text-body`、`--radius-md` |
+| Component | 部品に固有の値。共通トークンで表せないものだけを置く | `--control-height`、`--focus-ring-width` |
+
+トークンを追加する前に、次の順に確認する。
+
+1. Tailwind CSS の標準の値で表せるか（余白、高さ、アイコンの大きさなど）
+2. 既存の Semantic トークンで表せるか
+3. 製品や画面によって値を変える必要があるか
+
+3 に当てはまる場合だけ、Component トークンを追加する。
+
+Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn/ui や Tailwind CSS の変数と名前が重ならないようにしている。Semantic の色は、shadcn/ui の名前をそのまま使う。
+
+## 1. Spacing（余白）
+
+基本単位は 4px。Tailwind CSS の `--spacing`（0.25rem）をそのまま使うため、新しい変数は定義しない。
+
+| 値 | クラスの数値 | 用途 |
+| ---: | ---: | --- |
+| 0 | `0` | |
+| 4px | `1` | 関連する情報どうし |
+| 8px | `2` | アイコンと文字、関連する情報どうし |
+| 12px | `3` | |
+| 16px | `4` | フォームの項目の間 |
+| 20px | `5` | |
+| 24px | `6` | ページとコンテナの内側、グループの間 |
+| 32px | `8` | グループの間、セクションの間 |
+| 40px | `10` | セクションの間 |
+| 48px | `12` | セクションの間 |
+| 64px | `16` | 大きな区切り |
+| 80px | `20` | 大きな区切り |
+| 96px | `24` | 大きな区切り |
+
+クラスの数値は `p-6`、`gap-2`、`mt-12` のように使う。Tailwind CSS は `p-7`（28px）のような中間の値も生成するが、Flow Design では上の 13 段階だけを使う。
+
+判断の基準：関係の近い情報ほど狭く、関係の遠い情報ほど広くする。同じ関係には同じ値を使う。美的基準 03 のとおり、区切りはまず余白で表す。
+
+## 2. Typography（文字）
+
+| 用途 | クラス | サイズ | Weight | 行の高さ |
+| --- | --- | ---: | ---: | ---: |
+| Display | `text-display` | 48px（3rem） | 700 | 1.2 |
+| Metric | `text-metric` | 36px（2.25rem） | 600 | 1.2 |
+| Page Title | `text-page-title` | 28px（1.75rem） | 600 | 1.3 |
+| Section | `text-section` | 24px（1.5rem） | 600 | 1.3 |
+| Heading | `text-heading` | 20px（1.25rem） | 600 | 1.3 |
+| Body | `text-body` | 16px（1rem） | 400 | 1.7 |
+| UI Text | `text-ui` | 14px（0.875rem） | 400 | 1.5 |
+| Caption | `text-caption` | 12px（0.75rem） | 400 | 1.5 |
+
+- 各クラスは、サイズ、行の高さ、Weight をまとめて指定する。Weight だけを変える場合は `font-medium`（500）などを併用する。Weight は 400、500、600、700 を使う。
+- サイズは rem で指定する。ブラウザの文字サイズ設定に合わせて大きくなる。
+- 数値を比べる箇所（Metric、テーブルの数値の列）には `tabular-nums` を付け、桁の幅をそろえる。
+- フォントは `--fd-font-sans` で指定する。既定値は OS の標準のフォントで、製品ごとに上書きする。
+- Tailwind CSS の `text-sm`、`text-base` などは変更していない。shadcn/ui のコンポーネントは、これまでどおりそれらを使う。
+
+## 3. Radius（角丸）
+
+shadcn/ui と Tailwind CSS のキー名を使い、値を Flow Design の段階に合わせた。
+
+| 用途 | クラス | 値 |
+| --- | --- | ---: |
+| 小さな要素（チェックボックスなど） | `rounded-xs` | 4px |
+| 補助的な要素（メニューの項目、タグなど） | `rounded-sm` | 8px |
+| 入力欄 | `rounded-md` | 12px |
+| ボタン | `rounded-lg` | 14px（`--radius`） |
+| コンテナ | `rounded-xl` | 20px |
+| 大きなコンテナ | `rounded-2xl` | 24px |
+| アバターなど | `rounded-full` | 円 |
+
+入れ子になる要素では、内側の角丸を「外側の角丸 − 内側の余白」にする。たとえば、角丸 20px、内側の余白 8px のメニューでは、項目の角丸を 12px（`rounded-md`）にする。差が 0 以下になる場合は、内側を角丸なしか `rounded-xs` にする。
+
+`rounded-3xl` と `rounded-4xl` は定義していない。Tailwind CSS の標準の値（24px、32px）になるが、Flow Design では使わない。
+
+## 4. Color（色）
+
+### 値
+
+| トークン | 値 | 用途 |
+| --- | --- | --- |
+| `background` | #ffffff | 画面の背景 |
+| `foreground` | #202020 | 通常の文字 |
+| `primary` / `primary-foreground` | #262626 / #ffffff | 主要な操作、選択中の状態 |
+| `secondary` / `secondary-foreground` | #f5f5f5 / #262626 | 補助的な操作 |
+| `muted` / `muted-foreground` | #f5f5f5 / #6e6e6e | 控えめな面 / 補足の文字、プレースホルダー |
+| `accent` / `accent-foreground` | #f5f5f5 / #262626 | ホバー中、選択中の項目の面 |
+| `card`、`popover` | #ffffff | カード、浮かぶ要素の面 |
+| `border` | #e5e5e5 | 区切り線、装飾の境界線 |
+| `border-strong` | #8a8a8a | 識別に必要な境界線 |
+| `input` | `border-strong` と同じ | 入力欄、チェックボックスの枠 |
+| `ring` | #262626 | キーボードフォーカスの表示 |
+| `destructive` / `destructive-foreground` | #dc2626 / #ffffff | 削除などの取り消せない操作、エラー |
+| `success` / `success-foreground` | #15803d / #ffffff | 完了、正常 |
+| `warning` / `warning-foreground` | #b45309 / #ffffff | 注意 |
+| `info` / `info-foreground` | #2563eb / #ffffff | お知らせ |
+
+- `success`、`warning`、`info`、`border-strong`、`destructive-foreground` は、shadcn/ui の「Adding New Tokens」の手順で追加したトークンである。
+- `sidebar-*` は、対応する `background`、`primary`、`accent`、`border`、`ring` を参照する。
+- `chart-1`〜`chart-5` は v0.1 では決めず、shadcn/ui の neutral テーマの既定値を入れている。
+
+### 状態
+
+| 状態 | 表し方 |
+| --- | --- |
+| ホバー | 塗りの部品は `hover:bg-primary/90` のように面を少し明るくする。塗りのない部品は `hover:bg-accent` にする |
+| 押下 | 押下専用の色は定義しない。押した時点で処理を始め、画面の状態を変える |
+| フォーカス | `focus-visible:focus-ring`（2px の線、2px 離す）。詳しくは「5. Border」 |
+| 無効 | `disabled:opacity-50`。あわせて `disabled` 属性を付け、ポインターの形を変える |
+| エラー | 枠を `border-destructive` にし、エラーの内容を文字で示す |
+
+色だけで状態や意味を伝えない。状態の色には、必ず文字かアイコンを添える。
+
+### コントラスト
+
+`node scripts/tokens/check-contrast.mjs` で検証した。数値は WCAG 2 のコントラスト比である。
+
+| 組み合わせ | 比 | 基準 |
+| --- | ---: | --- |
+| `foreground` / `background` | 16.29 | 4.5 以上 |
+| `foreground` / `muted` | 14.94 | 4.5 以上 |
+| `muted-foreground` / `background` | 5.10 | 4.5 以上 |
+| `muted-foreground` / `muted` | 4.68 | 4.5 以上 |
+| `primary-foreground` / `primary` | 15.13 | 4.5 以上 |
+| `primary-foreground` / `primary/90`（ホバー） | 11.03 | 4.5 以上 |
+| `secondary-foreground` / `secondary` | 13.88 | 4.5 以上 |
+| `destructive` / `background` | 4.83 | 4.5 以上 |
+| `destructive-foreground` / `destructive` | 4.83 | 4.5 以上 |
+| `success` / `background`、`success-foreground` / `success` | 5.02 | 4.5 以上 |
+| `warning` / `background`、`warning-foreground` / `warning` | 5.02 | 4.5 以上 |
+| `info` / `background`、`info-foreground` / `info` | 5.17 | 4.5 以上 |
+| `input` / `background` | 3.45 | 3 以上（非テキスト） |
+| `input` / `muted` | 3.17 | 3 以上（非テキスト） |
+| `ring` / `background` | 15.13 | 3 以上（非テキスト） |
+| `ring/50` / `background` | 3.07 | 3 以上（非テキスト） |
+
+次の組み合わせは基準を満たさないため、使わない。
+
+| 組み合わせ | 比 | 代わりの方法 |
+| --- | ---: | --- |
+| `destructive` の文字 / `muted` の面 | 4.43 | エラーの文字は `background` の上に置く |
+| `destructive-foreground` / `destructive/90` | 4.30 | 削除ボタンのホバーは、面を明るくせず暗くする（`color-mix(in srgb, var(--destructive) 90%, black)` で 5.75） |
+| `border` / `background` | 1.26 | `border` は装飾の区切りだけに使う。部品の識別に必要な枠には `input` か `border-strong` を使う |
+
+無効な部品の文字は、WCAG 1.4.3 でコントラストの基準の対象外である。そのため、無効の状態は透明度だけでなく、`disabled` 属性で支援技術にも伝える。
+
+### 候補の値から変えた点
+
+| トークン | 候補 | 採用 | 理由 |
+| --- | --- | --- | --- |
+| `muted-foreground` | #737373 | #6e6e6e | #737373 は `muted`（#f5f5f5）の上で 4.35:1 となり、4.5:1 に届かない。shadcn/ui の Tabs は `bg-muted` の上に `text-muted-foreground` を置くため、標準の部品で基準を満たさない組み合わせが生じる。#6e6e6e は白の上で 5.10:1、`muted` の上で 4.68:1 |
+| `input`、`border-strong` | 指定なし（`border` と同じ #e5e5e5） | #8a8a8a | #e5e5e5 は白の上で 1.26:1。入力欄の枠は部品の識別に必要なため、WCAG 1.4.11 の 3:1 が必要になる。#8a8a8a は白の上で 3.45:1、`muted` の上で 3.17:1 |
+| `ring` | 指定なし | #262626 | shadcn/ui の標準の部品は、フォーカスの表示に `ring-ring/50`（透明度 50%）を使う。#262626 は透明度 50% でも白の上で 3.07:1 になる |
+
+`muted-foreground` を候補の #737373 に戻す場合は、`muted` の面の上に補足の文字を置かない運用が必要になる。
+
+## 5. Border（境界線）
+
+| 用途 | 指定 |
+| --- | --- |
+| 通常の境界線 | `border`（1px）、色は `border` |
+| 識別に必要な境界線 | `border`（1px）、色は `input` または `border-strong` |
+| キーボードフォーカス | `focus-visible:focus-ring`（2px、2px 離す、色は `ring`） |
+
+- 区切りは、余白と文字の階層で足りない場合にだけ線を使う（美的基準 03）。
+- 入力欄の枠とフォーカスの表示は省略しない。
+- `focus-ring` は `outline` で描くため、Windows の強制カラーモードでも表示される。太さと間隔は `--focus-ring-width` と `--focus-ring-offset` で変えられる。
+- shadcn/ui の標準の部品は、フォーカスの表示に `ring-3 ring-ring/50` を使っている。テーマはこれを変更しない。
+
+## 6. Elevation（影）
+
+| 用途 | クラス | 値 |
+| --- | --- | --- |
+| 通常の要素 | なし | none |
+| メニュー | `shadow-menu` | 0 2px 8px rgb(0 0 0 / 0.06) |
+| ポップオーバー | `shadow-popover` | 0 4px 16px rgb(0 0 0 / 0.08) |
+| ダイアログ | `shadow-dialog` | 0 12px 32px rgb(0 0 0 / 0.12) |
+
+影は、要素が他の要素の上に重なっていることを伝えるときだけ使う。カードやボタンには影を付けない。
+
+shadcn/ui の標準の部品は、メニューとポップオーバーに `shadow-md` と `shadow-lg` を使っている。テーマは Tailwind CSS の `shadow-md` などを変更しないため、それらの部品の影は変わらない。
+
+## 7. Motion（動き）
+
+| 種類 | トークン | 値 | 用途 |
+| --- | --- | --- | --- |
+| Duration | `--duration-fast` | 120ms | ホバー、押下による色の変化 |
+| | `--duration-normal` | 180ms | メニュー、ツールチップの開閉 |
+| | `--duration-slow` | 240ms | ダイアログ、パネルの開閉 |
+| | `--duration-layout` | 320ms | 要素の位置や大きさの変化 |
+| Easing | `ease-standard` | cubic-bezier(0.2, 0, 0, 1) | 状態の変化 |
+| | `ease-enter` | cubic-bezier(0.22, 1, 0.36, 1) | 表示されるとき |
+| | `ease-exit` | cubic-bezier(0.4, 0, 1, 1) | 消えるとき |
+
+- Duration は Tailwind CSS のテーマの名前空間にないため、`duration-(--duration-fast)` のように変数を指定して使う。
+- CSS Transition / Animation を基本とする。Motion は、CSS では実装が複雑になる動きにだけ使う（[stack.md](stack.md#動き)）。
+- 操作への反応は、入力と同時に行う。アニメーションが終わるまで次の操作を受け付けない、という実装はしない。
+- 動きを減らす設定（`prefers-reduced-motion: reduce`）では、テーマが `--duration-slow` と `--duration-layout` を 0ms にする。位置や大きさを変える動きには `motion-safe:` を付ける。色と透明度の変化は残してよい。
+
+## 8. Sizing（高さとアイコン）
+
+| 大きさ | 値 | クラス |
+| --- | ---: | --- |
+| Compact | 32px | `h-8` |
+| Small | 40px | `h-10` |
+| Default | 48px | `h-12`、`h-control` |
+| Large | 56px | `h-14` |
+
+- ボタン、入力欄、セレクトの高さは `h-control`（`--control-height`、48px）を標準とする。
+- テーブルの行の高さは `h-table-row`（`--table-row-height`、48px）を標準とする。高密度の業務画面では、画面の要素に `[--table-row-height:2.5rem]` のように指定して変える。
+- タッチ操作が主な画面では、Default 以上を使う。Compact は WCAG 2.5.8 の最小値（24px）を満たすが、指での操作には小さい。
+- アイコンは `size-4`（16px）、`size-5`（20px）、`size-6`（24px）を使い、20px を標準とする。
+- Lucide の線の太さは、24px の大きさを基準に 1.75 とする（`--icon-stroke-width`）。テーマは `svg.lucide` の `stroke-width` を CSS で指定するため、アイコンの `strokeWidth` 属性より優先される。個別に変える場合は、`[--icon-stroke-width:2]` のように変数を上書きする。
+
+shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力欄が 32px（`h-8`）である。テーマは部品の高さを変更しない。48px の部品は、Flow Design の Registry のコンポーネントとして提供する。
+
+## ブランドと書体の変更
+
+製品は、次の変数だけを上書きする。
+
+| 変えるもの | 上書きする変数 |
+| --- | --- |
+| ブランドカラー | `--primary`、`--primary-foreground`。必要に応じて `--ring` |
+| ニュートラルの色味 | `--fd-neutral-0`〜`--fd-neutral-900` |
+| フォント | `--fd-font-sans` |
+| 角丸の大きさ | `--radius` と `--radius-xs`〜`--radius-2xl` |
+
+上書きした後は、`node scripts/tokens/check-contrast.mjs 上書き後のCSS` を実行して、コントラストを確認する。スクリプトが読み取れる色は 6 桁の 16 進数と `var()` の参照だけである。
+
+角丸は shadcn/ui の既定のように `--radius` からの倍率で計算していない。Flow Design の段階（4、8、12、14、20、24px）が倍率では表せないためである。
+
+## ダークモード
+
+テーマは `@custom-variant dark` を定義しており、`.dark` に Semantic トークンの値を追加すれば、ダークモードを提供できる。v0.1 ではダークモードの値を定義していない。提供するかどうかと値は、製品ごとに決める。
+
+## 検証の結果
+
+| 項目 | 方法 | 結果 |
+| --- | --- | --- |
+| Tailwind CSS v4 | v4.3.5 の CLI で、`shadcn/tailwind.css` と一緒にコンパイル | `text-body`、`rounded-md`、`shadow-menu`、`ease-standard`、`h-control`、`focus-ring`、`bg-success` などが生成された |
+| shadcn/ui | 既定のテーマのトークン名と照合。base-nova スタイルの Button、Input、Card、Dialog、Popover、Dropdown Menu、Table、Tabs のクラスを確認 | `:root` のトークン名はすべて定義している。`@theme inline` のうち `--radius-3xl` と `--radius-4xl` は定義せず、Tailwind CSS の標準の値（24px、32px）になる。これらを使う Badge は、高さより角丸が大きいため形が変わらない。部品のクラスは変更なしで動く |
+| 参照関係 | スクリプトで `var()` をたどる | 未定義と循環はない |
+| コントラスト | スクリプト | 「4. Color」の表のとおり |
+| 表示 | ボタン、入力欄、メニュー、ダイアログ、テーブルを並べたページを Chromium で表示 | 余白、文字、角丸、高さの段階が意図どおりに表示された |
+
+テーマを読み込んだとき、shadcn/ui の標準の部品で変わる見た目は次のとおりである。
+
+- ボタンと入力欄の角丸が 14px、カードとダイアログの角丸が 20px になる。
+- 入力欄の枠が #8a8a8a になる。
+- Lucide のアイコンの線の太さが 1.75 になる。
+
+## 未定のこと
+
+- ダークモードの値
+- グラフの色（`chart-1`〜`chart-5`）
+- Registry での配布の形式（CSS ファイルか、`registry:theme` などの item の `cssVars` か）
+- 文字の字間（letter-spacing）
+- 実際のコンポーネントを使った検品の結果による値の調整
