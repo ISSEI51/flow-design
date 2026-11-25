@@ -13,6 +13,16 @@ async function open(page: Page, id: string) {
 
 const box = async (l: Locator) => (await l.boundingBox())!
 
+// 指定した位置を押す。モバイルはタップで操作する。
+async function press(page: Page, isMobile: boolean, x: number, y: number) {
+  if (isMobile) await page.touchscreen.tap(x, y)
+  else await page.mouse.click(x, y)
+}
+
+// 一覧の各項目の aria-checked を返す
+const checkedStates = (list: Locator, role: "checkbox" | "radio" | "switch") =>
+  list.getByRole(role).evaluateAll((els) => els.map((e) => e.getAttribute("aria-checked")))
+
 async function tabTo(page: Page, target: Locator) {
   for (let i = 0; i < 120; i++) {
     await page.keyboard.press("Tab")
@@ -27,7 +37,7 @@ async function expectFocusRing(page: Page, target: Locator) {
   expect(sameColor(await css(target, "outline-color"), await token(page, "--ring"))).toBe(true)
 }
 
-test.describe("all form pages", () => {
+test.describe("all form pages", { tag: "@webkit" }, () => {
   for (const id of pages) {
     test(`${id}: names, no horizontal scroll`, async ({ page }) => {
       await open(page, id)
@@ -50,7 +60,7 @@ test.describe("all form pages", () => {
   }
 })
 
-test.describe("Input", () => {
+test.describe("Input", { tag: "@webkit" }, () => {
   test("tokens, label spacing, focus", async ({ page }) => {
     await open(page, "input")
     const input = page.getByTestId("input-default")
@@ -110,7 +120,7 @@ test.describe("Input", () => {
   })
 })
 
-test.describe("Textarea", () => {
+test.describe("Textarea", { tag: "@webkit" }, () => {
   test("tokens, resize, counter", async ({ page }) => {
     await open(page, "textarea")
     const ta = page.getByTestId("textarea-default")
@@ -132,7 +142,7 @@ test.describe("Textarea", () => {
   })
 })
 
-test.describe("Label", () => {
+test.describe("Label", { tag: "@webkit" }, () => {
   test("association and required mark", async ({ page }) => {
     await open(page, "label")
     await page.getByTestId("label-field").click()
@@ -147,7 +157,7 @@ test.describe("Label", () => {
   })
 })
 
-test.describe("Select", () => {
+test.describe("Select", { tag: "@webkit" }, () => {
   test("tokens", async ({ page }) => {
     await open(page, "select")
     const t = page.getByTestId("select-industry")
@@ -197,6 +207,8 @@ test.describe("Select", () => {
     await page.keyboard.press("s")
     await expect(page.getByRole("option", { name: /^Send invoices/ })).toHaveAttribute("data-highlighted", "")
     await page.keyboard.press("Escape")
+    // 閉じる動き（180ms）が終わってから、次の Select を開く
+    await expect(page.getByRole("listbox")).toHaveCount(0)
     // 選択肢が多い場合はスクロールする
     await page.getByTestId("select-industry").click()
     const list = page.getByRole("listbox")
@@ -228,7 +240,7 @@ test.describe("Select", () => {
   })
 })
 
-test.describe("Checkbox", () => {
+test.describe("Checkbox", { tag: "@webkit" }, () => {
   test("tokens, states, hit area", async ({ page, isMobile }) => {
     await open(page, "checkbox")
     const c = page.getByTestId("checkbox-basic")
@@ -238,9 +250,8 @@ test.describe("Checkbox", () => {
     expect(sameColor(await css(c, "border-top-color"), await token(page, "--input"))).toBe(true)
     // ラベルを含む行の高さは 48px 以上
     expect((await box(page.getByTestId("checkbox-basic-label"))).height).toBeGreaterThanOrEqual(48)
-    // 本体の外側 12px を押しても切り替わる（押せる範囲 48×48px）
-    if (!isMobile) await page.mouse.click(b.x - 12, b.y + b.height / 2)
-    else await c.tap({ position: { x: -12, y: 10 }, force: true })
+    // 本体の上 10px（行の中）を押しても切り替わる。行全体が押せる範囲
+    await press(page, isMobile, b.x + b.width / 2, b.y - 10)
     await expect(c).toHaveAttribute("aria-checked", "true")
     const primary = await token(page, "--primary")
     // 色の変化には 120ms の transition があるため、終わるまで待つ。
@@ -274,7 +285,7 @@ test.describe("Checkbox", () => {
   })
 })
 
-test.describe("Radio Group", () => {
+test.describe("Radio Group", { tag: "@webkit" }, () => {
   test("tokens and arrow keys", async ({ page }) => {
     await open(page, "radio-group")
     const group = page.getByTestId("radio-basic")
@@ -300,7 +311,7 @@ test.describe("Radio Group", () => {
   })
 })
 
-test.describe("Switch", () => {
+test.describe("Switch", { tag: "@webkit" }, () => {
   test("tokens, position, colors, hit area", async ({ page, isMobile }) => {
     await open(page, "switch")
     const s = page.getByTestId("switch-basic")
@@ -316,8 +327,7 @@ test.describe("Switch", () => {
     expect(await colorContrast(page, off, await token(page, "--background"))).toBeGreaterThanOrEqual(3)
     expect(await colorContrast(page, await css(thumb, "background-color"), off)).toBeGreaterThanOrEqual(3)
     // 本体の上 8px を押しても切り替わる
-    if (!isMobile) await page.mouse.click(b.x + b.width / 2, b.y - 8)
-    else await s.tap({ position: { x: 22, y: -8 }, force: true })
+    await press(page, isMobile, b.x + b.width / 2, b.y - 8)
     await expect(s).toHaveAttribute("aria-checked", "true")
     await page.waitForTimeout(200)
     expect((await box(thumb)).x - offX).toBe(16)
@@ -356,7 +366,7 @@ test.describe("Switch", () => {
   })
 })
 
-test.describe("Field", () => {
+test.describe("Field", { tag: "@webkit" }, () => {
   test("structure and wiring", async ({ page }) => {
     await open(page, "field")
     const input = page.getByTestId("field-anatomy-input")
@@ -389,7 +399,7 @@ test.describe("brand", () => {
   })
 })
 
-test.describe("customer form", () => {
+test.describe("customer form", { tag: "@webkit" }, () => {
   test("no errors while passing through or typing; blur validates; fixes revalidate", async ({ page }) => {
     await open(page, "customer-form")
     const company = page.getByRole("textbox", { name: "会社名", exact: true })
@@ -482,6 +492,198 @@ test.describe("customer form", () => {
     await expect(page.getByTestId("kana-error")).toHaveCount(0)
   })
 
+})
+
+test.describe("hit areas", { tag: "@webkit" }, () => {
+  for (const [id, label] of [
+    ["checkbox-group", "縦に並べる（48px の行）"],
+    ["checkbox-dense", "高密度（32px の行）"],
+  ] as const) {
+    test(`${label}: body, label, row, boundaries`, async ({ page, isMobile }) => {
+      await open(page, "checkbox")
+      const list = page.getByTestId(id)
+      await list.scrollIntoViewIfNeeded()
+      const rows = list.locator("[data-slot=field-item]")
+      const n = await rows.count()
+      const expected = Array(n).fill("false")
+      const expectOnly = async (i: number) => {
+        expected[i] = expected[i] === "true" ? "false" : "true"
+        await expect.poll(() => checkedStates(list, "checkbox")).toEqual(expected)
+      }
+      const r0 = await box(rows.nth(0))
+      const r1 = await box(rows.nth(1))
+      // 行は重ならず、隙間もない
+      expect(Math.round(r1.y - (r0.y + r0.height))).toBe(0)
+      const cb0 = await box(rows.nth(0).getByRole("checkbox"))
+      await press(page, isMobile, cb0.x + 10, cb0.y + 10) // 本体
+      await expectOnly(0)
+      const lb1 = await box(rows.nth(1).locator("[data-slot=field-label]"))
+      await press(page, isMobile, lb1.x + lb1.width - 4, lb1.y + lb1.height / 2) // ラベルの右端
+      await expectOnly(1)
+      // 行の境界のすぐ上と下は、それぞれの行だけを切り替える。
+      // 位置の検証のため、マウスで押す（タッチはブラウザが近くの操作要素へ補正するため）。
+      await page.mouse.click(cb0.x + 10, r0.y + r0.height - 1)
+      await expectOnly(0)
+      await page.mouse.click(cb0.x + 10, r1.y + 1)
+      await expectOnly(1)
+    })
+  }
+
+  test("inline items do not overlap", async ({ page }) => {
+    await open(page, "checkbox")
+    const list = page.getByTestId("checkbox-inline")
+    await list.scrollIntoViewIfNeeded()
+    const rows = list.locator("[data-slot=field-item]")
+    const a = await box(rows.nth(0))
+    const b = await box(rows.nth(1))
+    expect(b.x - (a.x + a.width)).toBeGreaterThanOrEqual(16)
+    // 位置の検証のため、マウスで押す（タッチはブラウザが近くの操作要素へ補正するため）。
+    await page.mouse.click(a.x + a.width - 2, a.y + a.height / 2)
+    await expect.poll(() => checkedStates(list, "checkbox")).toEqual(["true", "false", "false", "false", "false"])
+    // 項目の間の隙間は、どちらも切り替えない
+    await page.mouse.click(a.x + a.width + 8, a.y + a.height / 2)
+    await page.waitForTimeout(150)
+    expect(await checkedStates(list, "checkbox")).toEqual(["true", "false", "false", "false", "false"])
+    await page.mouse.click(b.x + 2, b.y + 2)
+    await expect.poll(() => checkedStates(list, "checkbox")).toEqual(["true", "true", "false", "false", "false"])
+  })
+
+  test("radio rows and switch rows", async ({ page, isMobile }) => {
+    await open(page, "radio-group")
+    const group = page.getByTestId("radio-basic")
+    await group.scrollIntoViewIfNeeded()
+    const rows = group.locator("[data-slot=field-item]")
+    const r2 = await box(rows.nth(2))
+    await press(page, isMobile, r2.x + r2.width - 4, r2.y + r2.height / 2)
+    await expect(group.getByRole("radio", { name: "300 人以上" })).toBeChecked()
+    const r0 = await box(rows.nth(0))
+    await page.mouse.click(r0.x + 10, r0.y + r0.height - 1)
+    await expect(group.getByRole("radio", { name: "1〜49 人" })).toBeChecked()
+    await open(page, "switch")
+    const s = page.getByTestId("switch-basic")
+    await s.scrollIntoViewIfNeeded()
+    const row = await box(page.locator("[data-slot=field]").filter({ has: s }))
+    await press(page, isMobile, row.x + 4, row.y + 2) // 行の左上（ラベルの側）
+    await expect(s).toHaveAttribute("aria-checked", "true")
+  })
+
+  test("disabled items do not toggle from body, label or row", async ({ page, isMobile }) => {
+    await open(page, "checkbox")
+    const d = page.getByTestId("checkbox-disabled")
+    await d.scrollIntoViewIfNeeded()
+    const row = await box(page.locator("[data-slot=field]").filter({ has: d }))
+    const b = await box(d)
+    for (const [x, y] of [
+      [b.x + 10, b.y + 10],
+      [row.x + row.width - 4, row.y + row.height / 2],
+      [b.x + 10, row.y + 2],
+    ]) {
+      await press(page, isMobile, x, y)
+    }
+    await page.waitForTimeout(150)
+    await expect(d).toHaveAttribute("aria-checked", "false")
+  })
+
+  test("switch sm keeps the 48px target", async ({ page, isMobile }) => {
+    await open(page, "switch")
+    const s = page.getByTestId("switch-sm")
+    await s.scrollIntoViewIfNeeded()
+    const b = await box(s)
+    expect([b.width, b.height]).toEqual([36, 20])
+    const thumb = s.locator("[data-slot=switch-thumb]")
+    expect((await box(thumb)).width).toBe(16)
+    const x = (await box(thumb)).x
+    const row = await box(page.locator("[data-slot=field]").filter({ has: s }))
+    expect(row.height).toBeGreaterThanOrEqual(48)
+    await press(page, isMobile, b.x + b.width / 2, row.y + 2)
+    await expect(s).toHaveAttribute("aria-checked", "true")
+    await page.waitForTimeout(200)
+    expect((await box(thumb)).x - x).toBe(16)
+  })
+})
+
+test.describe("compatibility APIs", { tag: "@webkit" }, () => {
+  test("FieldSeparator and FieldTitle", async ({ page }) => {
+    await open(page, "field")
+    const sep = page.getByTestId("field-separator-demo").locator("[data-slot=field-separator]")
+    await expect(sep).toContainText("または")
+    expect(await css(page.getByTestId("field-title"), "font-size")).toBe("14px")
+    await expect(page.getByRole("checkbox", { name: "自動更新" })).toBeVisible()
+  })
+})
+
+test.describe("error announcements", () => {
+  test("only new blur errors are announced, once", async ({ page }) => {
+    await open(page, "customer-form")
+    const live = page.getByTestId("form-live")
+    await expect(live).toHaveAttribute("aria-live", "polite")
+    // 読み上げ領域に入った文を記録する
+    await live.evaluate((el) => {
+      const w = window as unknown as { announced: string[] }
+      w.announced = []
+      new MutationObserver(() => {
+        if (el.textContent) w.announced.push(el.textContent)
+      }).observe(el, { childList: true, characterData: true, subtree: true })
+    })
+    const announced = () => page.evaluate(() => (window as unknown as { announced: string[] }).announced)
+    const email = page.getByRole("textbox", { name: "メールアドレス" })
+    await email.fill("yamada@")
+    await expect.poll(announced).toEqual([])
+    await email.blur()
+    await expect.poll(announced).toEqual([expect.stringContaining("ドメイン名を入力してください")])
+    // 同じエラーのまま入力しても、フォーカスを外しても、もう一度は知らせない
+    await email.focus()
+    await email.pressSequentially("ex")
+    await email.blur()
+    await page.waitForTimeout(150)
+    expect(await announced()).toHaveLength(1)
+    // FieldError は role="alert" を持たず、aria-describedby で関連付けられる
+    const error = page.getByTestId("email-error")
+    expect(await error.getAttribute("role")).toBeNull()
+    await expect(email).toHaveAccessibleDescription(/ドメイン名を入力してください/)
+    // 送信時は概要（role="alert"）だけが知らせ、個別のエラーは知らせない
+    await page.getByTestId("customer-submit").click()
+    await expect(page.getByTestId("error-summary")).toHaveAttribute("role", "alert")
+    await page.waitForTimeout(150)
+    expect(await announced()).toHaveLength(1)
+    await expect(live).toHaveText("")
+  })
+
+  test("IME composition is not announced", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "CDP（Chromium のみ）で IME を再現するため")
+    await open(page, "customer-form")
+    const kana = page.getByRole("textbox", { name: "会社名（フリガナ）" })
+    const live = page.getByTestId("form-live")
+    await kana.focus()
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send("Input.imeSetComposition", { text: "やまだ", selectionStart: 3, selectionEnd: 3 })
+    await page.waitForTimeout(150)
+    await expect(live).toHaveText("")
+    await cdp.send("Input.insertText", { text: "やまだ" })
+    await expect(live).toHaveText("")
+    await kana.blur()
+    await expect(live).toContainText("全角カタカナ")
+  })
+})
+
+test.describe("textarea sizing", { tag: "@webkit" }, () => {
+  test("grows with content where field-sizing is supported, otherwise stays resizable", async ({ page }) => {
+    await open(page, "textarea")
+    const ta = page.getByTestId("textarea-default")
+    const supported = await page.evaluate(() => CSS.supports("field-sizing", "content"))
+    test.info().annotations.push({ type: "field-sizing", description: supported ? "supported" : "not supported" })
+    expect(await css(ta, "resize")).toBe("vertical")
+    const before = (await box(ta)).height
+    expect(before).toBeGreaterThanOrEqual(96)
+    await ta.fill(Array(10).fill("一行の文章です").join("\n"))
+    const after = (await box(ta)).height
+    if (supported) expect(after).toBeGreaterThan(before)
+    else {
+      expect(after).toBe(before)
+      // 非対応のブラウザでも、中身はスクロールで読める
+      expect(await ta.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+    }
+  })
 })
 
 test.describe("screenshots", () => {

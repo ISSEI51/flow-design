@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/switch.tsx`](../../../registry/components/ui/switch.tsx) |
 | 元にした実装 | shadcn/ui の Switch（Base UI 版） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -26,8 +26,17 @@
 | 内側の円 | 20px、`background`。ON で右へ 16px 移る | `size-5`、`translate-x-4` |
 | ON | `primary` | `bg-primary` |
 | OFF | `input`（白い背景の上で 3.45:1、円との差も 3.45:1） | `bg-input` |
-| 押せる範囲 | 48×48px | `after:-inset-x-0.5 after:-inset-y-2.5` |
+| 押せる範囲 | Field の中では行全体（高さ 48px 以上）。単独では 48×48px | `min-h-control`、`after` 疑似要素 |
 | 状態の変化 | 120ms | `duration-(--duration-fast)` |
+
+### 互換のための大きさ
+
+| `size` | 本体 | 内側の円 | 用途 |
+| --- | --- | --- | --- |
+| `default` | 44×28px | 20px | Flow Design の標準 |
+| `sm` | 36×20px | 16px | shadcn/ui との互換。表の中など高密度の画面 |
+
+`sm` でも、押せる範囲は 48px を保つ。
 
 ## 4. Variants
 

@@ -93,6 +93,17 @@ export function SwitchPage() {
         </Row>
       </Section>
 
+      <Section title="互換のための大きさ" lead='size="sm"（36×20px）は shadcn/ui との互換と、表の中など高密度の画面のために提供する。標準は default。'>
+        <Row label="sm" note="押せる範囲は 48px を保つ">
+          <div className="flex w-full max-w-md flex-col">
+            <Field orientation="horizontal">
+              <FieldLabel>一覧に請求書の番号を表示する</FieldLabel>
+              <Switch data-testid="switch-sm" size="sm" />
+            </Field>
+          </div>
+        </Row>
+      </Section>
+
       <Section title="長いラベル">
         <Row label="日本語・英語">
           <div className="flex w-full max-w-sm flex-col">

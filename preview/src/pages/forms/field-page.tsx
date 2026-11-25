@@ -7,7 +7,9 @@ import {
   FieldLabel,
   FieldLegend,
   FieldOptionalMark,
+  FieldSeparator,
   FieldSet,
+  FieldTitle,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 
@@ -74,6 +76,33 @@ export function FieldPage() {
               </FieldGroup>
             </FieldSet>
           </div>
+        </Row>
+      </Section>
+
+      <Section title="互換のための部品" lead="shadcn/ui のコードを移すときのために提供する。新しいフォームでは、区切りに余白を使い、見出しには FieldLabel と FieldLegend を使う。">
+        <Row label="FieldSeparator" note="線で区切る">
+          <div className="flex w-full max-w-sm flex-col gap-4" data-testid="field-separator-demo">
+            <Field>
+              <FieldLabel>メールアドレス</FieldLabel>
+              <Input type="email" />
+            </Field>
+            <FieldSeparator>または</FieldSeparator>
+            <Field>
+              <FieldLabel>電話番号</FieldLabel>
+              <Input type="tel" />
+            </Field>
+          </div>
+        </Row>
+        <Row label="FieldTitle" note="ラベルではない見出し">
+          <Field orientation="horizontal" className="max-w-sm">
+            <Checkbox aria-labelledby="field-title-demo" />
+            <div data-slot="field-content" className="flex min-w-0 flex-1 flex-col gap-1">
+              <FieldTitle id="field-title-demo" data-testid="field-title">
+                自動更新
+              </FieldTitle>
+              <FieldDescription>契約の終了日に、同じ条件で 1 年間更新する</FieldDescription>
+            </div>
+          </Field>
         </Row>
       </Section>
 

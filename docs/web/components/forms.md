@@ -71,6 +71,20 @@ Input、Textarea、Label、Select、Checkbox、Radio Group、Switch、Field に�
 - Field の `invalid` を指定すると、入力欄に `aria-invalid="true"` が付き、`FieldError` の文字が `aria-describedby` で入力欄の説明になる。
 - 長いフォームでは、送信時にエラーの概要をフォームの上に表示し、フォーカスを移す。概要の各項目から、該当する入力欄へ移動できるようにする（[フォームの例](../../../preview/src/pages/forms/customer-form-page.tsx)）。
 
+### エラーの読み上げ
+
+| 場面 | 知らせ方 | 担当 |
+| --- | --- | --- |
+| すべてのエラー | 入力欄の `aria-invalid="true"` と、`aria-describedby` による `FieldError` の文。入力欄に戻ったときに読み上げられる | コンポーネント（Field） |
+| フォーカスが外れたときに新しく出たエラー | フォームに 1 つ置いた `aria-live="polite"` の領域に、エラーの文を入れる | 製品 |
+| 送信時のエラー | エラーの概要（`role="alert"`）だけで知らせる。個別のエラーは知らせない | 製品 |
+
+- `FieldError` には `role="alert"` を付けない。送信時に多くのエラーが一度に読み上げられ、概要と重複するため。
+- 表示中のエラーと同じ文は、もう一度は知らせない。入力中の再検証と、IME の変換中は知らせない。
+- 実装の例は [フォームの例](../../../preview/src/pages/forms/customer-form-page.tsx) の `announce` を参照する。
+
+自動の検品で確認できるのは、属性（`aria-live`、`aria-invalid`、`aria-describedby`、`role`）と、読み上げ領域に入る文の内容と回数までである。実際にスクリーンリーダーがどう読み上げるか（VoiceOver、NVDA など）は、人が確認する必要がある。
+
 ## 5. 検証のタイミング
 
 <picture>
@@ -83,7 +97,17 @@ Input、Textarea、Label、Select、Checkbox、Radio Group、Switch、Field に�
 - 選択式の項目は、開閉の操作でフォーカスが移るため、フォーカスが外れたときには検証しない。
 - 検証の規則は製品が持つ。コンポーネントは検証をしない。Base UI の Field の `validate` を使うか、製品の処理で `invalid` と `FieldError` を渡す。フォーム管理のライブラリには依存しない。
 
-## 6. 共通の見た目
+## 6. 押せる範囲
+
+Checkbox、Radio、Switch を Field（`orientation="horizontal"`）や `FieldItem` の中に置くと、行全体が押せる範囲になる。
+
+- 行の高さは `min-h-control`（48px）以上。ラベルの `after` 疑似要素が行を覆い、本体、ラベル、行の余白のどこを押しても、その項目だけが切り替わる。
+- 範囲は行の中に収まるため、縦に並べても隣の行と重ならない。高密度の画面で `--control-height` を小さくした場合も、行の高さに合わせて範囲が小さくなる。
+- 横に並べる場合は、項目の間を 16px（`gap-x-4`）以上あける。
+- Field の外に単独で置いた本体は、`after` 疑似要素で 48×48px に広げる。表の中など、隣の操作要素との間が 48px より狭い場所では、本体を `FieldItem` で囲むか、セルを押せる範囲にする。
+- タッチ操作では、ブラウザが押した位置を近くの操作要素へ補正することがある。
+
+## 7. 共通の見た目
 
 | 項目 | 値 | トークン |
 | --- | --- | --- |
@@ -95,6 +119,6 @@ Input、Textarea、Label、Select、Checkbox、Radio Group、Switch、Field に�
 | フォーカス | 2px の線 | `focus-visible:focus-ring` |
 | 状態の変化 | 120ms | `duration-(--duration-fast)` |
 | ラベル、説明、エラー | 14px | `text-ui` |
-| Checkbox、Radio、Switch の行 | 48px 以上 | `min-h-control` |
+| Checkbox、Radio、Switch の行 | 48px 以上。行全体が押せる範囲 | `min-h-control` |
 
 入力文字を 16px にすることで、iOS の Safari がフォーカス時に画面を拡大しない。

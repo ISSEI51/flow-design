@@ -5,14 +5,14 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | コンポーネント | 資料 | 状態 |
 | --- | --- | --- |
 | Button | [button.md](button.md) | v0.1 確定 |
-| Field | [field.md](field.md) | 初期実装 |
-| Label | [label.md](label.md) | 初期実装 |
-| Input | [input.md](input.md) | 初期実装 |
-| Textarea | [textarea.md](textarea.md) | 初期実装 |
-| Select | [select.md](select.md) | 初期実装 |
-| Checkbox | [checkbox.md](checkbox.md) | 初期実装 |
-| Radio Group | [radio-group.md](radio-group.md) | 初期実装 |
-| Switch | [switch.md](switch.md) | 初期実装 |
+| Field | [field.md](field.md) | v0.1 確定 |
+| Label | [label.md](label.md) | v0.1 確定 |
+| Input | [input.md](input.md) | v0.1 確定 |
+| Textarea | [textarea.md](textarea.md) | v0.1 確定 |
+| Select | [select.md](select.md) | v0.1 確定 |
+| Checkbox | [checkbox.md](checkbox.md) | v0.1 確定 |
+| Radio Group | [radio-group.md](radio-group.md) | v0.1 確定 |
+| Switch | [switch.md](switch.md) | v0.1 確定 |
 
 入力系コンポーネントに共通する判断基準は [forms.md](forms.md) にまとめている。
 
@@ -66,7 +66,8 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | 関連付け（入力系） | ラベルで入力欄にフォーカスが移る。説明とエラーが `aria-describedby` に入る |
 | エラー（入力系） | `aria-invalid`、枠の色、アイコンと文字で伝わる |
 | 押せる範囲（入力系） | Checkbox、Radio、Switch の行が 48px 以上 |
-| フォーム全体 | 検証のタイミング、エラーの概要、送信される値、IME の変換中の扱い |
+| 押せる範囲の重なり（入力系） | 本体、ラベル、行のどこを押しても、その項目だけが切り替わる。隣の項目と重ならない |
+| フォーム全体 | 検証のタイミング、エラーの概要、エラーの読み上げ、送信される値、IME の変換中の扱い |
 
 ## プレビュー
 
@@ -76,6 +77,17 @@ npm run preview:dev        # http://localhost:5173/
 npm run test:components    # Playwright（初回は npx playwright install chromium）
 npm run typecheck
 ```
+
+### ブラウザ
+
+| project | ブラウザ | 対象 |
+| --- | --- | --- |
+| `desktop` | Chromium（1280×900） | すべてのテスト |
+| `mobile` | Chromium（Pixel 7） | すべてのテスト |
+| `webkit` | WebKit（Desktop Safari、1280×900） | `@webkit` を付けたテスト |
+| `webkit-mobile` | WebKit（iPhone 15） | `@webkit` を付けたテスト |
+
+WebKit の project は、Playwright の WebKit による基本的な互換性の検品である。実機の iOS Safari での確認ではない。初回は `npx playwright install webkit` で WebKit を入れる。Chromium の CDP を使う IME のテストは、WebKit では実行できないため `desktop` と `mobile` だけで実行する。
 
 ポートは `PREVIEW_PORT`（開発サーバー）と `PREVIEW_TEST_PORT`（検品、既定 5174）で変えられる。検品のスクリーンショットは `preview/screenshots/` に保存される（Git の管理外）。
 

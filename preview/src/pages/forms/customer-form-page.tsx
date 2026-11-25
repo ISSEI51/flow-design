@@ -29,6 +29,8 @@ import { useInstantSetting } from "./switch-page"
 // - 文字数の上限だけは、入力中に知らせる。
 // - IME で変換中の文字は検証しない。変換が確定したときに検証する。
 // - 選択式の項目は、送信時に検証し、エラーの表示後は選び直したときに再検証する。
+// - フォーカスが外れたときに新しく出たエラーだけを、ライブリージョン（aria-live="polite"）で知らせる。
+//   入力中の再検証、IME の変換中、送信時（エラーの概要が role="alert" で知らせる）には知らせない。
 
 const NOTE_MAX = 200
 
@@ -133,6 +135,12 @@ export function CustomerFormPage() {
   const summaryRef = useRef<HTMLDivElement>(null)
   // 一度でも入力した項目。何も入力せずにフォーカスが通り過ぎただけでは、エラーを出さない。
   const dirty = useRef(new Set<Name>())
+  const [announcement, setAnnouncement] = useState("")
+  const announce = (message: string) => {
+    // 同じ文が続いても読み上げられるように、一度空にしてから入れる。
+    setAnnouncement("")
+    requestAnimationFrame(() => setAnnouncement(message))
+  }
   const billing = useInstantSetting(true)
   const overdue = useInstantSetting(false, true)
 
@@ -161,7 +169,11 @@ export function CustomerFormPage() {
     onCompositionEnd: (e: { currentTarget: HTMLInputElement | HTMLTextAreaElement }) =>
       update(name, e.currentTarget.value),
     onBlur: () => {
-      if (dirty.current.has(name) || name in errors) revalidate(name, values)
+      if (!(dirty.current.has(name) || name in errors)) return
+      const message = validate(name, values)
+      // 表示中のエラーと同じ文なら、もう一度は知らせない。
+      if (message && message !== errors[name]) announce(message)
+      revalidate(name, values)
     },
   })
 
@@ -174,6 +186,7 @@ export function CustomerFormPage() {
       if (m) all[n] = m
     }
     setErrors(all)
+    setAnnouncement("")
     if (Object.keys(all).length) {
       setSummary(true)
       requestAnimationFrame(() => summaryRef.current?.focus())
@@ -198,6 +211,9 @@ export function CustomerFormPage() {
       />
 
       <form noValidate onSubmit={onSubmit} className="flex max-w-xl flex-col gap-8" data-testid="customer-form">
+        <p aria-live="polite" className="sr-only" data-testid="form-live">
+          {announcement}
+        </p>
         <p className="text-ui text-muted-foreground" data-testid="form-legend">
           「任意」と書かれていない項目は必須です。
         </p>

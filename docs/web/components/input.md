@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/input.tsx`](../../../registry/components/ui/input.tsx) |
 | 元にした実装 | shadcn/ui の Input（Base UI 版） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 

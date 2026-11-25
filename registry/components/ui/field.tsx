@@ -63,8 +63,10 @@ const fieldVariants = cva("group/field flex w-full min-w-0", {
       vertical: "flex-col gap-2",
       // Checkbox、Radio、Switch とラベルを横に並べる。行の高さは 48px 以上。
       // ラベルに説明を添えるとき（FieldContent）は上端でそろえ、操作部品を 1 行目の中央に合わせる。
+      // 行全体を押せる範囲にする。ラベルの after 疑似要素で行を覆い、隣の行と重ならない。
       horizontal: cn(
-        "min-h-control flex-row items-center gap-2",
+        "relative min-h-control flex-row items-center gap-2",
+        "[&_[data-slot=field-label]]:after:absolute [&_[data-slot=field-label]]:after:inset-0",
         "*:data-[slot=field-label]:min-h-control *:data-[slot=field-label]:flex-auto",
         "has-[>[data-slot=field-content]]:items-start has-[>[data-slot=field-content]]:py-3",
         "*:data-[slot=field-content]:pt-1 has-[>[data-slot=field-content]]:[&>[role=checkbox]]:mt-1"
@@ -106,7 +108,9 @@ function FieldItem({ className, ...props }: FieldPrimitive.Item.Props) {
     <FieldPrimitive.Item
       data-slot="field-item"
       className={cn(
-        "flex min-h-control items-center gap-2 *:data-[slot=field-label]:min-h-control *:data-[slot=field-label]:flex-auto",
+        "relative flex min-h-control items-center gap-2 *:data-[slot=field-label]:min-h-control *:data-[slot=field-label]:flex-auto",
+        // 行全体を押せる範囲にする。隣の選択肢の行と重ならない。
+        "*:data-[slot=field-label]:after:absolute *:data-[slot=field-label]:after:inset-0",
         className
       )}
       {...props}
@@ -122,6 +126,43 @@ function FieldLabel({ className, ...props }: FieldPrimitive.Label.Props) {
       className={cn("w-fit", className)}
       {...props}
     />
+  )
+}
+
+// shadcn/ui との互換のために提供する。ラベルではない見出し（ラベルで囲んだ選択肢の題名など）。
+// Flow Design の標準のフォームでは FieldLabel を使う。
+function FieldTitle({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="field-label"
+      className={cn(
+        "flex w-fit items-center gap-2 text-ui leading-snug font-medium group-data-[disabled]/field:opacity-50",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+// shadcn/ui との互換のために提供する。区切りは余白を優先し（美的基準 03）、線は必要な場合だけ使う。
+function FieldSeparator({ children, className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="field-separator"
+      data-content={!!children}
+      className={cn("relative flex h-5 items-center text-ui text-muted-foreground", className)}
+      {...props}
+    >
+      <div role="separator" aria-hidden="true" className="h-px flex-1 bg-border" />
+      {children && (
+        <>
+          <span data-slot="field-separator-content" className="px-2">
+            {children}
+          </span>
+          <div aria-hidden="true" className="h-px flex-1 bg-border" />
+        </>
+      )}
+    </div>
   )
 }
 
@@ -180,5 +221,7 @@ export {
   FieldLegend,
   FieldOptionalMark,
   FieldRequiredMark,
+  FieldSeparator,
   FieldSet,
+  FieldTitle,
 }

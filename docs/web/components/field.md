@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/field.tsx`](../../../registry/components/ui/field.tsx) |
 | 元にした実装 | shadcn/ui の Field（名前と構造）、Base UI の Field と Fieldset（関連付け） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -37,6 +37,15 @@
 | `FieldGroup` | 項目を 16px の間隔で並べる | `div` |
 | `FieldRequiredMark`、`FieldOptionalMark` | 必須の `*`、任意の「任意」 | `span` |
 
+### 互換のために提供する部品
+
+shadcn/ui のコードを移すときのために提供する。Flow Design の新しいフォームでは使わない。
+
+| 部品 | 役割 | Flow Design での標準 |
+| --- | --- | --- |
+| `FieldSeparator` | 線で項目を区切る。文字を添えられる（「または」など） | 区切りは余白（`FieldGroup`、`FieldSet` の間隔）で表す（美的基準 03） |
+| `FieldTitle` | ラベルではない見出し | `FieldLabel` と `FieldLegend` を使う。使う場合は、操作要素に `aria-labelledby` で名前を付ける |
+
 `FieldLegend` は、まとまりの見出しには `variant="legend"`（20px）、選択肢のグループ名には `variant="label"`（14px、500）を使う。
 
 ## 4. Variants
@@ -44,7 +53,7 @@
 | `orientation` | 並び | 使うもの |
 | --- | --- | --- |
 | `vertical`（既定） | ラベル、入力欄、説明、エラーを上から 8px 間隔で並べる | Input、Textarea、Select |
-| `horizontal` | 操作部品とラベルを横に並べ、行の高さを 48px 以上にする | Checkbox、Switch |
+| `horizontal` | 操作部品とラベルを横に並べ、行の高さを 48px 以上にする。行全体が押せる範囲になる | Checkbox、Switch |
 
 ## 5. Behavior
 

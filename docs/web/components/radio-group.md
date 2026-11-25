@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/radio-group.tsx`](../../../registry/components/ui/radio-group.tsx) |
 | 元にした実装 | shadcn/ui の RadioGroup（Base UI 版） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -28,7 +28,7 @@
 | 未選択の枠 | 1px、`input` | `border-input` |
 | 選択時 | 枠と中央の円（10px）を `primary` | |
 | ラベルとの間隔 | 8px | `gap-2` |
-| 押せる範囲 | 本体の外側 14px まで。行は 48px 以上 | `after:-inset-3.5`、`FieldItem` |
+| 押せる範囲 | `FieldItem` の中では行全体（高さ 48px 以上）。単独では本体の外側 14px まで | `FieldItem`、`after:-inset-3.5` |
 
 ## 4. Variants
 

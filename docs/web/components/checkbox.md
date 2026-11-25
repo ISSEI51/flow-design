@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/checkbox.tsx`](../../../registry/components/ui/checkbox.tsx) |
 | 元にした実装 | shadcn/ui の Checkbox（Base UI 版） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -29,7 +29,7 @@
 | 選択時 | 面と枠を `primary`、印を `primary-foreground` | |
 | 印 | Lucide の Check（一部選択は Minus）、16px、線の太さ 3（2px 相当） | |
 | ラベルとの間隔 | 8px | `gap-2` |
-| 押せる範囲 | 本体の外側 14px まで（48×48px）。ラベルを含む行は 48px 以上 | `after:-inset-3.5`、`min-h-control` |
+| 押せる範囲 | Field や `FieldItem` の中では行全体（高さ 48px 以上）。単独では本体の外側 14px まで（48×48px） | `min-h-control`、`after:-inset-3.5` |
 
 印は 16px と小さいため、線の太さを `--icon-stroke-width: 3`（16px で 2px）に上書きしている。
 

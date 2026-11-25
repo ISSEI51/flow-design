@@ -10,6 +10,10 @@ export default defineConfig({
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } } },
     { name: "mobile", use: { ...devices["Pixel 7"] } },
+    // WebKit の基本的な互換性の検品。@webkit を付けたテストだけを実行する。
+    // Playwright の WebKit であり、実機の iOS Safari による確認ではない。
+    { name: "webkit", grep: /@webkit/, use: { ...devices["Desktop Safari"], viewport: { width: 1280, height: 900 } } },
+    { name: "webkit-mobile", grep: /@webkit/, use: { ...devices["iPhone 15"] } },
   ],
   webServer: {
     command: "npx vite --config vite.config.ts",

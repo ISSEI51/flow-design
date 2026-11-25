@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/label.tsx`](../../../registry/components/ui/label.tsx) |
 | 元にした実装 | shadcn/ui の Label |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 

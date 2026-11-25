@@ -74,7 +74,7 @@ export function CheckboxPage() {
           <Field>
             <FieldSet>
               <FieldLegend variant="label">対応できる時間帯</FieldLegend>
-              <div>
+              <div data-testid="checkbox-group">
                 {["午前（9〜12 時）", "午後（13〜17 時）", "夜間（18〜21 時）"].map((t) => (
                   <FieldItem key={t}>
                     <Checkbox name="time" value={t} />
@@ -83,6 +83,29 @@ export function CheckboxPage() {
                 ))}
               </div>
             </FieldSet>
+          </Field>
+        </Row>
+      </Section>
+
+      <Section title="押せる範囲" lead="行全体が押せる範囲になる。行どうしは重ならない。">
+        <Row label="横に並べる" note="選択肢の間は 16px 以上あける">
+          <Field className="flex-row flex-wrap gap-x-4" data-testid="checkbox-inline">
+            {["月", "火", "水", "木", "金"].map((d) => (
+              <FieldItem key={d}>
+                <Checkbox name="weekday" value={d} />
+                <FieldLabel>{d}曜日</FieldLabel>
+              </FieldItem>
+            ))}
+          </Field>
+        </Row>
+        <Row label="高密度" note="--control-height を 32px にした場合。表の中など">
+          <Field className="w-64 gap-0 [--control-height:2rem]" data-testid="checkbox-dense">
+            {["請求書 1001", "請求書 1002", "請求書 1003"].map((t) => (
+              <FieldItem key={t}>
+                <Checkbox name="invoice" value={t} />
+                <FieldLabel>{t}</FieldLabel>
+              </FieldItem>
+            ))}
           </Field>
         </Row>
       </Section>
