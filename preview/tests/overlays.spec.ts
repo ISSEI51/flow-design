@@ -3,8 +3,10 @@ import { join } from "node:path"
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { buttonContrast, colorContrast, css, sameColor, token } from "./helpers"
+import { collectPageErrors } from "./page-errors"
 
 // Overlay（Dialog、Alert Dialog、Popover、Dropdown Menu、Sheet、Drawer）の検品。
+collectPageErrors(test)
 const pages = ["dialog", "alert-dialog", "popover", "dropdown-menu", "sheet", "drawer"]
 
 async function open(page: Page, id: string) {
@@ -83,13 +85,39 @@ async function rgba(page: Page, color: string) {
   }, color)
 }
 
-// Base UI のフォーカスガードは、次のフレームでフォーカスを Overlay の中に戻す。
-// 人のキー操作と同じく、Tab の間に 1 フレーム以上の間隔を空ける。
+// フォーカスが通った要素を記録する。Base UI のフォーカスガード（data-base-ui-focus-guard）は、
+// Tab で一時的にフォーカスを受け、次のフレームでフォーカスを Overlay の中へ戻す。
+async function recordFocus(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __fdFocus: Element[] }
+    w.__fdFocus = []
+    document.addEventListener("focusin", (e) => w.__fdFocus.push(e.target as Element), true)
+  })
+}
+
+// フォーカスが通った要素のうち、container の外で、フォーカスガードでもない要素の説明。空なら漏れていない。
+const focusLeaks = (container: Locator) =>
+  container.evaluate((root) => {
+    const w = window as unknown as { __fdFocus: Element[] }
+    const leaks = w.__fdFocus.filter((el) => !root.contains(el) && !el.hasAttribute("data-base-ui-focus-guard"))
+    w.__fdFocus = []
+    return leaks.map((el) => `${el.tagName}${el.id ? "#" + el.id : ""} ${(el.textContent ?? "").trim().slice(0, 20)}`)
+  })
+
+// キーを押し、フォーカスが container の中のフォーカスガード以外の要素に着いたことを条件に次へ進む（固定時間で待たない）。
+// その間にフォーカスが container の外の要素に移っていないことも確かめる。
 async function tabInside(page: Page, container: Locator, times: number, key = "Tab") {
+  await recordFocus(page)
   for (let i = 0; i < times; i++) {
     await page.keyboard.press(key)
-    await page.waitForTimeout(50)
-    expect(await containsFocus(container), `${key} ${i + 1}`).toBe(true)
+    await expect
+      .poll(() =>
+        container.evaluate(
+          (root) => root.contains(document.activeElement) && !document.activeElement!.hasAttribute("data-base-ui-focus-guard")
+        )
+      , { message: `${key} ${i + 1}` })
+      .toBe(true)
+    expect(await focusLeaks(container), `${key} ${i + 1}`).toEqual([])
   }
 }
 
@@ -996,7 +1024,7 @@ test.describe("brand and portal", { tag: "@webkit" }, () => {
     expect(await buttonContrast(primary)).toBeGreaterThanOrEqual(4.5)
   })
 
-  test("all overlays share one z-index; stacking follows the order of opening", async ({ page }) => {
+  test("modal surfaces share z-40; stacking within the layer follows the order of opening", async ({ page }) => {
     await open(page, "dialog")
     await page.getByTestId("dialog-dirty-trigger").click()
     await page.getByTestId("dialog-dirty-name").fill("x")
@@ -1008,9 +1036,536 @@ test.describe("brand and portal", { tag: "@webkit" }, () => {
     const z = await page.evaluate(() =>
       Array.from(document.querySelectorAll("[data-slot$=overlay],[data-slot$=viewport]")).map((el) => getComputedStyle(el).zIndex)
     )
-    expect(new Set(z)).toEqual(new Set(["50"]))
+    expect(new Set(z)).toEqual(new Set(["40"]))
     const ab = await box(alert)
     expect(await hitInside(page, ab.x + ab.width / 2, ab.y + 12, alert)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------- v0.1 の最終調整の回帰テスト
+
+const outlineOf = (l: Locator) =>
+  l.evaluate((el) => {
+    const s = getComputedStyle(el)
+    return { style: s.outlineStyle, width: s.outlineWidth, offset: s.outlineOffset, color: s.outlineColor }
+  })
+
+// キー操作のフォーカスの枠：2px、項目の内側（offset -2px）、色は ring。項目の面と 3:1 以上。
+async function expectItemRing(page: Page, item: Locator) {
+  await expect(item).toBeFocused()
+  const o = await outlineOf(item)
+  expect(o.style).toBe("solid")
+  expect(o.width).toBe("2px")
+  expect(o.offset).toBe("-2px")
+  expect(sameColor(o.color, await token(page, "--ring"))).toBe(true)
+  expect(await colorContrast(page, o.color, await css(item, "background-color"))).toBeGreaterThanOrEqual(3)
+}
+const expectNoRing = async (item: Locator) => expect((await outlineOf(item)).style).toBe("none")
+const focused = (page: Page) => page.locator(":focus")
+
+test.describe("keyboard highlight", { tag: "@webkit" }, () => {
+  test("dropdown menu: pointer keeps the subtle background, keys show the ring", async ({ page, isMobile }) => {
+    test.skip(isMobile, "pointer hover")
+    await open(page, "dropdown-menu")
+    await page.getByTestId("menu-actions-trigger").click()
+    const menu = page.getByTestId("menu-actions")
+    await settle(menu)
+    const copy = menu.getByRole("menuitem", { name: "複製" })
+    await copy.hover()
+    await expect(copy).toHaveAttribute("data-highlighted", "")
+    expect(sameColor(await css(copy, "background-color"), await token(page, "--accent"))).toBe(true)
+    await expectNoRing(copy)
+    // キー操作に切り替えると枠が出る
+    await page.keyboard.press("ArrowDown")
+    await expectItemRing(page, menu.getByRole("menuitem", { name: "CSV で書き出す" }))
+    // ポインターを動かすと、枠を消して背景色だけに戻る
+    const del = menu.getByRole("menuitem", { name: "削除" })
+    await del.hover()
+    await expect(del).toBeFocused()
+    await expectNoRing(del)
+    // 再びキーを押すと枠が出る。危険な操作でも枠は ring の色で、文字は 4.5:1 以上
+    await page.keyboard.press("ArrowUp")
+    await page.keyboard.press("ArrowDown")
+    await expectItemRing(page, del)
+    expect(await colorContrast(page, await css(del, "color"), await css(del, "background-color"))).toBeGreaterThanOrEqual(4.5)
+  })
+
+  test("dropdown menu: ring on every item kind, selection is shown separately", async ({ page, isMobile }) => {
+    await open(page, "dropdown-menu")
+    await openWithKeyboard(page, page.getByTestId("menu-view-trigger"))
+    const view = page.getByTestId("menu-view")
+    await settle(view)
+    // RadioItem
+    await expectItemRing(page, view.getByRole("menuitemradio", { name: "更新日の新しい順" }))
+    await page.keyboard.press("ArrowDown")
+    const byName = view.getByRole("menuitemradio", { name: "会社名の順" })
+    await expectItemRing(page, byName)
+    // 選択中（aria-checked と Check）の項目は、フォーカスがなければ枠を出さない
+    const checkedRadio = view.getByRole("menuitemradio", { name: "更新日の新しい順" })
+    await expect(checkedRadio).toHaveAttribute("aria-checked", "true")
+    await expect(checkedRadio.locator("svg")).toBeVisible()
+    await expectNoRing(checkedRadio)
+    // CheckboxItem
+    await page.keyboard.press("ArrowDown")
+    const company = view.getByRole("menuitemcheckbox", { name: "会社名" })
+    await expectItemRing(page, company)
+    await expect(company).toHaveAttribute("aria-checked", "true")
+    await page.keyboard.press("ArrowDown")
+    await expectItemRing(page, view.getByRole("menuitemcheckbox", { name: "担当者" }))
+    await expectNoRing(company)
+    await page.keyboard.press("Escape")
+    // SubmenuTrigger
+    await openWithKeyboard(page, page.getByTestId("menu-inset-trigger"))
+    const inset = page.getByTestId("menu-inset")
+    await settle(inset)
+    await page.keyboard.press("End")
+    await expectItemRing(page, page.getByTestId("menu-sub-trigger"))
+    if (!isMobile) {
+      await page.keyboard.press("ArrowRight")
+      await settle(page.getByTestId("menu-sub"))
+      await expectItemRing(page, page.getByTestId("menu-sub").getByRole("menuitem").first())
+      // サブメニューを開いたトリガーは accent の面で示し、枠は出さない
+      await expectNoRing(page.getByTestId("menu-sub-trigger"))
+    }
+  })
+
+  test("ring keeps contrast when a product sets --ring to the brand color", async ({ page }) => {
+    await open(page, "dropdown-menu")
+    for (const ring of ["#1e40af", "#6d28d9"]) {
+      await page.evaluate((r) => document.documentElement.style.setProperty("--ring", r), ring)
+      await openWithKeyboard(page, page.getByTestId("menu-actions-trigger"))
+      const menu = page.getByTestId("menu-actions")
+      await settle(menu)
+      const item = menu.getByRole("menuitem", { name: "編集" })
+      await expectItemRing(page, item)
+      expect(await colorContrast(page, await css(item, "outline-color"), await token(page, "--popover"))).toBeGreaterThanOrEqual(3)
+      await page.keyboard.press("Escape")
+      await expect(menu).toBeHidden()
+    }
+  })
+
+  test("select: ring stays visible at the scroll edges and differs from the selection", async ({ page }) => {
+    await open(page, "select")
+    const trigger = page.getByTestId("select-industry")
+    await trigger.scrollIntoViewIfNeeded()
+    await openWithKeyboard(page, trigger)
+    const listbox = page.getByRole("listbox")
+    await settle(page.locator("[data-slot=select-content]"))
+    const count = await page.getByRole("option").count()
+    // 先頭から末尾まで ↓ で移り、末尾から先頭まで ↑ で戻る。どの位置でも、フォーカスした選択肢の全体
+    // （内側の枠を含む）がリストの表示範囲にあり、スクロールのボタンに隠れない。
+    for (const key of ["ArrowDown", "ArrowUp"]) {
+      for (let i = 0; i < count; i++) {
+        if (i > 0) await page.keyboard.press(key)
+        const item = focused(page)
+        await expect(item).toHaveRole("option")
+        await expect
+          .poll(() =>
+            item.evaluate((el) => {
+              const list = el.closest("[role=listbox]")!.getBoundingClientRect()
+              const r = el.getBoundingClientRect()
+              const inside = r.top >= list.top - 0.5 && r.bottom <= list.bottom + 0.5
+              const covered = Array.from(document.querySelectorAll("[data-slot^=select-scroll-]")).some((a) => {
+                const b = a.getBoundingClientRect()
+                return b.height > 0 && b.bottom > r.top + 0.5 && b.top < r.bottom - 0.5
+              })
+              return inside && !covered
+            })
+          , { message: `${key} ${i}` })
+          .toBe(true)
+        await expectItemRing(page, item)
+      }
+    }
+    // 選択する。開き直すと、選択中の選択肢は Check で示し、フォーカスが移った別の選択肢にだけ枠を出す
+    await page.keyboard.press("ArrowDown")
+    await page.keyboard.press("Enter")
+    await expect(listbox).toBeHidden()
+    await page.keyboard.press("Enter")
+    await settle(page.locator("[data-slot=select-content]"))
+    const selected = page.getByRole("option", { selected: true })
+    await expectItemRing(page, selected)
+    await page.keyboard.press("ArrowDown")
+    await expectNoRing(selected)
+    await expect(selected.locator("[data-slot=select-item-indicator] svg")).toBeVisible()
+    await expectItemRing(page, focused(page))
+  })
+
+  test("select: pointer hover shows no ring", async ({ page, isMobile }) => {
+    test.skip(isMobile, "pointer hover")
+    await open(page, "select")
+    const trigger = page.getByTestId("select-industry")
+    await trigger.click()
+    await settle(page.locator("[data-slot=select-content]"))
+    const option = page.getByRole("option", { name: "漁業" })
+    await option.hover()
+    await expect(option).toHaveAttribute("data-highlighted", "")
+    await expectNoRing(option)
+    await page.keyboard.press("ArrowDown")
+    await expectItemRing(page, focused(page))
+  })
+})
+
+test.describe("Sheet mode and modal", { tag: "@webkit" }, () => {
+  async function choose(page: Page, testId: string, name: string) {
+    await page.getByTestId(testId).click()
+    await page.getByRole("option", { name, exact: true }).click()
+    await expect(page.getByRole("listbox")).toBeHidden()
+  }
+
+  const combos = [
+    { mode: "edit", modal: "指定しない", expected: "true" },
+    { mode: "view", modal: "指定しない", expected: "false" },
+    { mode: "view", modal: "true", expected: "true" },
+    { mode: "edit", modal: "false", expected: "false" },
+    { mode: "edit", modal: '"trap-focus"', expected: "trap-focus" },
+  ] as const
+
+  for (const c of combos) {
+    test(`mode=${c.mode}, modal=${c.modal}: backdrop, background, scroll and focus follow modal=${c.expected}`, async ({ page, isMobile }) => {
+      await open(page, "sheet")
+      await choose(page, "sheet-matrix-mode", c.mode)
+      await choose(page, "sheet-matrix-modal", c.modal)
+      const behind = page.getByTestId("sheet-matrix-behind")
+      await behind.scrollIntoViewIfNeeded()
+      await page.getByTestId("sheet-matrix-trigger").click()
+      const sheet = page.getByTestId("sheet-matrix")
+      await settle(sheet)
+      await expect(sheet).toHaveAttribute("data-mode", c.mode)
+      await expect(sheet).toHaveAttribute("data-modal", c.expected)
+      // 背景を暗くするのは、実際のモーダル性が true のときだけ
+      await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(c.expected === "true" ? 1 : 0)
+      // 背景の操作：true のときだけ止める（モバイルは Sheet が画面全体を覆うため確かめない）
+      if (!isMobile) {
+        const bb = await box(behind)
+        expect(await hitInside(page, bb.x + 4, bb.y + bb.height / 2, behind)).toBe(c.expected !== "true")
+        // 背景のスクロール：true のときだけ止める
+        const before = await page.evaluate(() => window.scrollY)
+        await page.mouse.move(100, 400)
+        await page.mouse.wheel(0, 300)
+        await page.waitForTimeout(200)
+        const after = await page.evaluate(() => window.scrollY)
+        if (c.expected === "true") expect(after).toBe(before)
+        else expect(after).not.toBe(before)
+      }
+      // フォーカス：false のときだけ Sheet の外に出られる
+      await page.getByTestId("sheet-matrix-input").focus()
+      if (c.expected === "false") {
+        let left = false
+        for (let i = 0; i < 8 && !left; i++) {
+          await page.keyboard.press("Tab")
+          await page.waitForTimeout(30)
+          left = !(await containsFocus(sheet))
+        }
+        expect(left).toBe(true)
+      } else {
+        await tabInside(page, sheet, 6)
+      }
+      // 外側のクリック：true のときだけ閉じる（背景を操作できる間は、背景を押しても閉じない）
+      await clickOutside(page)
+      await page.waitForTimeout(300)
+      if (c.expected === "true") await expect(sheet).toBeHidden()
+      else await expect(sheet).toBeVisible()
+    })
+  }
+
+  test("switching an open sheet between view and edit updates backdrop, background and focus", async ({ page, isMobile }) => {
+    test.skip(isMobile, "the sheet covers the whole screen on mobile")
+    await open(page, "sheet")
+    await page.getByTestId("sheet-row-C-0012").click()
+    const sheet = page.getByTestId("sheet-customer")
+    await settle(sheet)
+    const row2 = page.getByTestId("sheet-row-C-0015")
+    for (const round of [1, 2]) {
+      // 閲覧 → 編集
+      await page.getByTestId("sheet-edit").click()
+      await expect(sheet).toHaveAttribute("data-modal", "true")
+      await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(1)
+      const rb = await box(row2)
+      expect(await hitInside(page, rb.x + 4, rb.y + rb.height / 2, row2), `round ${round}`).toBe(false)
+      await tabInside(page, sheet, 4)
+      // 編集 → 閲覧（変更なしでキャンセル）
+      await page.getByTestId("sheet-cancel").click()
+      await expect(sheet).toHaveAttribute("data-modal", "false")
+      await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(0)
+      const rb2 = await box(row2)
+      expect(await hitInside(page, rb2.x + 4, rb2.y + rb2.height / 2, row2)).toBe(true)
+      // 背景の要素への aria-hidden、スクロールの固定が外れている
+      expect(await page.locator("#root").getAttribute("aria-hidden")).toBeNull()
+      const before = await page.evaluate(() => window.scrollY)
+      await page.mouse.move(100, 600)
+      await page.mouse.wheel(0, 200)
+      await expect.poll(() => page.evaluate(() => window.scrollY)).not.toBe(before)
+      await page.evaluate(() => window.scrollTo(0, 0))
+    }
+    // 閲覧に戻った後は、別の行を選ぶと表示が切り替わる
+    await row2.click()
+    await expect(sheet).toHaveAccessibleName("佐藤製作所")
+    await expect(row2).toBeFocused()
+  })
+})
+
+test.describe("unsaved changes", { tag: "@webkit" }, () => {
+  test("without onDiscardRequest: outside click is ignored, explicit closes still close", async ({ page }) => {
+    await open(page, "dialog")
+    const trigger = page.getByTestId("dialog-noconfirm-trigger")
+    const popup = page.getByTestId("dialog-noconfirm")
+    for (const close of ["Escape", "button"] as const) {
+      await trigger.click()
+      await settle(popup)
+      await page.getByTestId("dialog-noconfirm-field").fill("来週電話する")
+      await clickOutside(page)
+      await page.waitForTimeout(300)
+      await expect(popup).toBeVisible()
+      if (close === "Escape") await page.keyboard.press("Escape")
+      else await popup.getByRole("button", { name: "閉じる" }).first().click()
+      await expect(popup).toBeHidden()
+      await expect(page.locator("[role=alertdialog]")).toHaveCount(0)
+    }
+  })
+
+  test("while saving, close requests are ignored; the product closes it after saving", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-dirty-trigger").click()
+    const popup = page.getByTestId("dialog-dirty")
+    await settle(popup)
+    await page.getByTestId("dialog-dirty-name").fill("山田商事株式会社")
+    await page.getByTestId("dialog-dirty-save").click()
+    await expect(page.getByTestId("dialog-dirty-save")).toHaveAttribute("aria-busy", "true")
+    await page.keyboard.press("Escape")
+    await popup.locator("[data-slot=dialog-close-button]").click()
+    await expect(popup).toBeVisible()
+    await expect(page.getByTestId("dialog-discard")).toHaveCount(0)
+    await expect(popup.getByRole("button", { name: "キャンセル" })).toBeDisabled()
+    // 保存が終わると、製品が open を false にして閉じる
+    await expect(popup).toBeHidden()
+    await expect(page.getByTestId("dialog-dirty-status")).toHaveText("会社情報を保存しました")
+  })
+
+  test("repeated close requests open a single confirmation", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-dirty-trigger").click()
+    const popup = page.getByTestId("dialog-dirty")
+    await settle(popup)
+    await page.getByTestId("dialog-dirty-name").fill("x")
+    const close = popup.locator("[data-slot=dialog-close-button]")
+    // 閉じるボタンを続けて押しても、確認は 1 つだけ開く（2 回目は確認の背景に当たる）
+    await close.click()
+    await close.click({ force: true })
+    await expect(page.locator("[role=alertdialog]")).toHaveCount(1)
+    await page.waitForTimeout(300)
+    await expect(page.locator("[role=alertdialog]")).toHaveCount(1)
+    // Escape は確認だけを閉じる。もう一度 Escape を押すと、確認が 1 つだけ開く
+    await page.keyboard.press("Escape")
+    await expect(page.locator("[role=alertdialog]")).toHaveCount(0)
+    await expect(popup).toBeVisible()
+    await page.keyboard.press("Escape")
+    await page.keyboard.press("Escape")
+    await expect(popup).toBeVisible()
+    await page.getByTestId("dialog-dirty-name").focus()
+    await page.keyboard.press("Escape")
+    await expect(page.locator("[role=alertdialog]")).toHaveCount(1)
+  })
+})
+
+test.describe("focus guards", { tag: "@webkit" }, () => {
+  test("a dialog with one control keeps focus on it with Tab and Shift+Tab", async ({ page }) => {
+    await open(page, "dialog")
+    const trigger = page.getByTestId("dialog-single-trigger")
+    await openWithKeyboard(page, trigger)
+    const popup = page.getByTestId("dialog-single")
+    await settle(popup)
+    const close = popup.getByRole("button", { name: "閉じる" })
+    await expect(close).toBeFocused()
+    await tabInside(page, popup, 4)
+    await expect(close).toBeFocused()
+    await tabInside(page, popup, 4, "Shift+Tab")
+    await expect(close).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(popup).toBeHidden()
+    await expect(trigger).toBeFocused()
+  })
+
+  test("nested alert dialog traps focus; closing returns focus inside the dialog", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-dirty-trigger").click()
+    const popup = page.getByTestId("dialog-dirty")
+    await settle(popup)
+    const name = page.getByTestId("dialog-dirty-name")
+    await name.fill("x")
+    await page.keyboard.press("Escape")
+    const alert = page.getByTestId("dialog-discard")
+    await settle(alert)
+    await tabInside(page, alert, 5)
+    await tabInside(page, alert, 5, "Shift+Tab")
+    await page.keyboard.press("Escape")
+    await expect(alert).toBeHidden()
+    await expect(name).toBeFocused()
+    await tabInside(page, popup, 6)
+  })
+
+  test("continuous Tab at key-repeat speed (30ms) does not reach the page behind", async ({ page }) => {
+    await open(page, "drawer")
+    await openWithKeyboard(page, page.getByTestId("drawer-share-trigger"))
+    const popup = page.getByTestId("drawer-share")
+    await settle(popup)
+    await recordFocus(page)
+    for (let i = 0; i < 16; i++) {
+      await page.keyboard.press("Tab")
+      await page.waitForTimeout(30)
+    }
+    await expect.poll(() => containsFocus(popup)).toBe(true)
+    expect(await focusLeaks(popup)).toEqual([])
+  })
+})
+
+test.describe("stacking with feedback components", { tag: "@webkit" }, () => {
+  async function expectToastUsable(page: Page, behind: Locator) {
+    const toast = page.locator("[data-slot=toast]").first()
+    await expect(toast).toBeVisible()
+    const tb = await box(toast)
+    // Toast は Overlay の上にあり、押せる。支援技術から隠れない（aria-live の領域）
+    expect(await hitInside(page, tb.x + tb.width / 2, tb.y + 12, toast)).toBe(true)
+    expect(await toast.evaluate((el) => el.closest("[aria-hidden=true]") === null)).toBe(true)
+    await expect(toast.locator("xpath=ancestor-or-self::*[@aria-live]").first()).toHaveAttribute("aria-live", "polite")
+    // 閉じるボタンは Base UI の Toast の設計で aria-hidden のため、data-slot で取得する（Feedback の仕様）
+    await toast.locator("[data-slot=toast-close]").click()
+    await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+    await expect(behind).toBeVisible()
+  }
+
+  test("toast above a dialog: visible, clickable, announced; the dialog stays open", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-combo-trigger").click()
+    const popup = page.getByTestId("dialog-combo")
+    await settle(popup)
+    await page.getByTestId("dialog-combo-copy").click()
+    await expectToastUsable(page, popup)
+  })
+
+  test("toast above a sheet in view mode", async ({ page }) => {
+    await open(page, "sheet")
+    await page.getByTestId("sheet-row-C-0012").click()
+    const sheet = page.getByTestId("sheet-customer")
+    await settle(sheet)
+    await page.getByTestId("sheet-actions-trigger").click()
+    await page.getByTestId("sheet-actions").getByRole("menuitem", { name: "複製" }).click()
+    await expectToastUsable(page, sheet)
+  })
+
+  test("tooltip and popover in a dialog: above it, Escape closes the frontmost first", async ({ page, isMobile }) => {
+    test.skip(isMobile, "Base UI の Tooltip はタッチ操作では開かない")
+    await open(page, "dialog")
+    const trigger = page.getByTestId("dialog-combo-trigger")
+    await openWithKeyboard(page, trigger)
+    const popup = page.getByTestId("dialog-combo")
+    await settle(popup)
+    // Tooltip（キーボードのフォーカスで開く）
+    const copy = page.getByTestId("dialog-combo-copy")
+    await tabInside(page, popup, 1)
+    while (!(await isFocused(copy))) await tabInside(page, popup, 1)
+    const tip = page.getByTestId("dialog-combo-tooltip")
+    await expect(tip).toBeVisible()
+    const tb = await box(tip)
+    expect(await hitInside(page, tb.x + tb.width / 2, tb.y + tb.height / 2, tip)).toBe(true)
+    await page.keyboard.press("Escape")
+    await expect(tip).toBeHidden()
+    await expect(popup).toBeVisible()
+    await expect(copy).toBeFocused()
+    // Popover
+    const pt = page.getByTestId("dialog-combo-popover-trigger")
+    await pt.focus()
+    await page.keyboard.press("Enter")
+    const pop = page.getByTestId("dialog-combo-popover")
+    await settle(pop)
+    const pb = await box(pop)
+    expect(await hitInside(page, pb.x + pb.width / 2, pb.y + 8, pop)).toBe(true)
+    await page.keyboard.press("Escape")
+    await expect(pop).toBeHidden()
+    await expect(popup).toBeVisible()
+    await expect(pt).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(popup).toBeHidden()
+    await expect(trigger).toBeFocused()
+  })
+
+  test("after opening and closing several overlays, nothing is left behind", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-select-trigger").click()
+    await settle(page.getByTestId("dialog-select"))
+    await page.getByTestId("dialog-select-field").click()
+    await page.getByRole("option", { name: "請求管理" }).click()
+    // 選択肢の一覧が閉じる動きの途中で Dialog を閉じると、Chromium が ResizeObserver の通知の持ち越しを
+    // window の error として報告する（docs/web/components/overlays.md の「検品で記録している事象」）。
+    // ここでは、一覧が閉じてから Escape を押す。
+    await expect(page.getByRole("listbox")).toBeHidden()
+    await page.keyboard.press("Escape")
+    await expect(page.getByTestId("dialog-select")).toBeHidden()
+    await page.getByTestId("dialog-dirty-trigger").click()
+    await page.getByTestId("dialog-dirty-name").fill("x")
+    await page.keyboard.press("Escape")
+    await page.getByTestId("dialog-discard").getByRole("button", { name: "変更を破棄" }).click()
+    await expect(page.getByTestId("dialog-dirty")).toBeHidden()
+    await open(page, "sheet")
+    await page.getByTestId("sheet-row-C-0012").click()
+    await settle(page.getByTestId("sheet-customer"))
+    await page.getByTestId("sheet-actions-trigger").click()
+    await settle(page.getByTestId("sheet-actions"))
+    await page.keyboard.press("Escape")
+    await expect(page.getByTestId("sheet-actions")).toBeHidden()
+    await page.getByTestId("sheet-customer").locator("[data-slot=sheet-close-button]").click()
+    await expect(page.getByTestId("sheet-customer")).toBeHidden()
+    await expect
+      .poll(() =>
+        page.evaluate(() => ({
+          inert: document.querySelectorAll("[data-base-ui-inert]").length,
+          hidden: document.querySelectorAll("#root[aria-hidden], body > [aria-hidden=true]").length,
+          popups: document.querySelectorAll("[role=dialog],[role=alertdialog],[role=menu],[role=listbox]").length,
+          overflow: [getComputedStyle(document.documentElement).overflow, getComputedStyle(document.body).overflow].join(","),
+        }))
+      )
+      .toEqual({ inert: 0, hidden: 0, popups: 0, overflow: "visible,visible" })
+    // 背景の要素を押せる
+    const row = page.getByTestId("sheet-row-C-0015")
+    const rb = await box(row)
+    expect(await hitInside(page, rb.x + 4, rb.y + rb.height / 2, row)).toBe(true)
+  })
+
+  test("floating elements (z-50) stay above modal surfaces (z-40)", async ({ page }) => {
+    await open(page, "dialog")
+    await page.getByTestId("dialog-select-trigger").click()
+    await settle(page.getByTestId("dialog-select"))
+    await page.getByTestId("dialog-select-field").click()
+    await expect(page.getByRole("listbox")).toBeVisible()
+    const z = await page.evaluate(() => ({
+      modal: Array.from(document.querySelectorAll("[data-slot=dialog-overlay],[data-slot=dialog-viewport]")).map((el) => getComputedStyle(el).zIndex),
+      floating: getComputedStyle(document.querySelector("[role=listbox]")!.closest("[data-side]")!.parentElement!).zIndex,
+    }))
+    expect(new Set(z.modal)).toEqual(new Set(["40"]))
+    expect(z.floating).toBe("50")
+  })
+})
+
+test.describe("AlertDialogMedia (compatibility)", { tag: "@webkit" }, () => {
+  test("renders a 40px media above the title without changing the name or the safe focus", async ({ page }) => {
+    await open(page, "alert-dialog")
+    await openWithKeyboard(page, page.getByTestId("alert-media-trigger"))
+    const popup = page.getByTestId("alert-media")
+    await settle(popup)
+    const media = page.getByTestId("alert-media-icon")
+    const mb = await box(media)
+    expect([mb.width, mb.height]).toEqual([40, 40])
+    expect(mb.y).toBeLessThan((await box(popup.locator("[data-slot=alert-dialog-title]"))).y)
+    await expect(popup).toHaveAccessibleName("山田商事を削除しますか？")
+    await expect(popup.getByRole("button", { name: "キャンセル" })).toBeFocused()
+  })
+
+  test("a ref passed to AlertDialogContent does not disable the safe initial focus", async ({ page }) => {
+    // プレビューの削除の確認は、AlertDialogContent に ref を渡している。開き終わった後、その ref が指す要素の
+    // data-slot を画面に書き出す。製品の ref に要素が入り、かつキャンセルに初期フォーカスが当たることを確かめる。
+    await open(page, "alert-dialog")
+    await openWithKeyboard(page, page.getByTestId("alert-delete-trigger"))
+    await expect(page.getByTestId("alert-delete").getByRole("button", { name: "キャンセル" })).toBeFocused()
+    await expect(page.getByTestId("alert-delete-ref")).toHaveText("alert-dialog-content")
   })
 })
 
@@ -1076,6 +1631,25 @@ test.describe("screenshots", () => {
     await shot("sheet-edit")
     await page.getByTestId("sheet-cancel").click()
     await shot("sheet-edit-discard")
+    // v0.1：キー操作のハイライト、Select の端、Dialog の上の Toast
+    await open(page, "dropdown-menu")
+    await openWithKeyboard(page, page.getByTestId("menu-view-trigger"))
+    await settle(page.getByTestId("menu-view"))
+    for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown")
+    await shot("dropdown-menu-keyboard")
+    await page.keyboard.press("Escape")
+    await open(page, "select")
+    await page.getByTestId("select-industry").scrollIntoViewIfNeeded()
+    await openWithKeyboard(page, page.getByTestId("select-industry"))
+    await settle(page.locator("[data-slot=select-content]"))
+    for (let i = 0; i < 18; i++) await page.keyboard.press("ArrowDown")
+    await shot("select-keyboard-end")
+    await page.keyboard.press("Escape")
+    await open(page, "dialog")
+    await page.getByTestId("dialog-combo-trigger").click()
+    await settle(page.getByTestId("dialog-combo"))
+    await page.getByTestId("dialog-combo-copy").click()
+    await shot("dialog-toast")
     await open(page, "drawer")
     await page.getByTestId("drawer-share-trigger").click()
     await shot("drawer-share")

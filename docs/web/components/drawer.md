@@ -75,6 +75,7 @@ shadcn/ui の Base UI 版の Drawer は、Base UI の `Drawer` を使ってい�
 | 閉じた後 | フォーカスをトリガーに戻す |
 
 - 未保存の変更があるときは、`unsavedChanges` を渡す。外側のクリックでは閉じず、Escape、閉じるボタン、スワイプでは `onDiscardRequest` を呼ぶ（[overlays.md](overlays.md#2-閉じる操作と未保存の変更)）。スワイプした面は元の位置に戻る。
+- Android の Chromium では、戻る操作を Base UI が `CloseWatcher` で受ける。戻る操作が続いた場合、ブラウザは閉じる要求の取り消しを認めないため、未保存の内容があっても閉じる。下書きの保存などは製品が担う。
 - 横にスクロールする要素など、スワイプさせたくない要素には `data-base-ui-swipe-ignore` を付ける（Base UI）。
 - ソフトウェアキーボードが開いたときは、Base UI の `VirtualKeyboardProvider` が、フォーカスした入力欄を表示範囲に保つ。`DrawerContent` が内部で使う。
 - 動きを減らす設定では、移動せずに表示し、開閉の時間を 0ms にする。スワイプ中は指の位置に合わせて動く。

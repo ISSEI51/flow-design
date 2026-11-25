@@ -44,11 +44,15 @@ function Drawer({
         disablePointerDismissal={disablePointerDismissal ?? unsavedChanges}
         onOpenChange={(open, details) => {
           if (!open && unsavedChanges && details.reason !== "imperative-action" && details.reason !== "none") {
-            details.cancel()
-            // 取り消せない閉じる要求（ブラウザの戻る操作が続いた場合など）は、そのまま閉じる。
-            if (details.isCanceled) {
-              if (details.reason !== "outside-press" && details.reason !== "focus-out") onDiscardRequest?.()
-              return
+            const pointer = details.reason === "outside-press" || details.reason === "focus-out"
+            // onDiscardRequest がない場合は、閉じる手段がなくならないよう、明示的な閉じる操作は止めない。
+            if (pointer || onDiscardRequest) {
+              details.cancel()
+              // 取り消せない閉じる要求（Android で戻る操作が続いた場合など）は、そのまま閉じる。
+              if (details.isCanceled) {
+                if (!pointer) onDiscardRequest?.()
+                return
+              }
             }
           }
           onOpenChange?.(open, details)
@@ -77,7 +81,7 @@ function DrawerOverlay({ className, ...props }: DrawerPrimitive.Backdrop.Props) 
     <DrawerPrimitive.Backdrop
       data-slot="drawer-overlay"
       className={cn(
-        "fixed inset-0 z-50 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
+        "fixed inset-0 z-40 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
         "opacity-[calc(1-var(--drawer-swipe-progress,0))]",
         "transition-opacity duration-(--duration-slow) ease-standard data-swiping:duration-0",
         "data-starting-style:opacity-0 data-ending-style:opacity-0",
@@ -122,7 +126,7 @@ function DrawerContent({
         <DrawerPrimitive.Viewport
           data-slot="drawer-viewport"
           data-modal={modal === true || undefined}
-          className="pointer-events-none fixed inset-0 z-50 flex items-end justify-center data-modal:pointer-events-auto"
+          className="pointer-events-none fixed inset-0 z-40 flex items-end justify-center data-modal:pointer-events-auto"
         >
           <DrawerPrimitive.Popup
             data-slot="drawer-popup"

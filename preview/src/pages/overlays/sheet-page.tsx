@@ -14,9 +14,11 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
+  type SheetModal,
   type SheetMode,
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/components/ui/toast"
 
 import { customers as initialCustomers, statusLabel, type Customer } from "../../data/customers"
 import { industries } from "../../data/industries"
@@ -51,6 +53,7 @@ function CustomerList() {
   // 破棄を確かめた後の行き先。閉じる操作なら Sheet を閉じ、キャンセルなら閲覧に戻る。
   const [confirm, setConfirm] = useState<null | "close" | "view">(null)
   const [status, setStatus] = useState("")
+  const { toast } = useToast()
   const firstFieldRef = useRef<HTMLInputElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
 
@@ -143,7 +146,10 @@ function CustomerList() {
                   <Button variant="secondary" size="sm" onClick={startEdit} data-testid="sheet-edit">
                     編集
                   </Button>
-                  <CustomerActions name={selected.name} testId="sheet-actions" align="start" onSelect={(a) => setStatus(`「${a}」を選びました`)} />
+                  <CustomerActions name={selected.name} testId="sheet-actions" align="start" onSelect={(a) => {
+                      setStatus(`「${a}」を選びました`)
+                      if (a === "複製") toast({ variant: "success", title: `${selected.name}を複製しました`, id: "sheet-duplicate" })
+                    }} />
                 </div>
               </SheetHeader>
               <SheetBody>
@@ -248,6 +254,83 @@ function CustomerList() {
   )
 }
 
+const modalOptions = [
+  { value: "unset", label: "指定しない" },
+  { value: "true", label: "true" },
+  { value: "false", label: "false" },
+  { value: "trap-focus", label: '"trap-focus"' },
+]
+const modeOptions = [
+  { value: "edit", label: "edit" },
+  { value: "view", label: "view" },
+]
+
+// mode と modal の組み合わせ。modal を指定した場合は modal が優先し、背景の表示も実際のモーダル性に従う。
+function ModeModalMatrix() {
+  const [mode, setMode] = useState<SheetMode>("edit")
+  const [modal, setModal] = useState("unset")
+  const modalProp: SheetModal | undefined = modal === "unset" ? undefined : modal === "trap-focus" ? "trap-focus" : modal === "true"
+  return (
+    <div className="flex w-full flex-col gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field>
+          <FieldLabel>mode</FieldLabel>
+          <Select items={modeOptions} value={mode} onValueChange={(v) => setMode(v as SheetMode)}>
+            <SelectTrigger data-testid="sheet-matrix-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {modeOptions.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field>
+          <FieldLabel>modal</FieldLabel>
+          <Select items={modalOptions} value={modal} onValueChange={(v) => setModal(v as string)}>
+            <SelectTrigger data-testid="sheet-matrix-modal">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {modalOptions.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+      <Sheet mode={mode} modal={modalProp}>
+        <SheetTrigger render={<Button variant="secondary" className="self-start" data-testid="sheet-matrix-trigger" />}>
+          この組み合わせで開く
+        </SheetTrigger>
+        <SheetContent size="sm" data-testid="sheet-matrix">
+          <SheetHeader>
+            <SheetTitle>{`mode="${mode}"、modal=${modalOptions.find((o) => o.value === modal)!.label}`}</SheetTitle>
+            <SheetDescription>背景の表示、背景の操作、スクロール、フォーカスの閉じ込めは、実際のモーダル性に従う。</SheetDescription>
+          </SheetHeader>
+          <SheetBody>
+            <Field>
+              <FieldLabel>メモ</FieldLabel>
+              <Input data-testid="sheet-matrix-input" />
+            </Field>
+          </SheetBody>
+          <SheetFooter>
+            <SheetClose render={<Button variant="secondary" />}>閉じる</SheetClose>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+      <Button variant="outline" size="sm" className="self-start" data-testid="sheet-matrix-behind">
+        背景のボタン
+      </Button>
+    </div>
+  )
+}
+
 const sizes = [
   { size: "sm", name: "Small", width: "360px" },
   { size: "default", name: "Default", width: "480px" },
@@ -267,6 +350,13 @@ export function SheetPage() {
         lead="会社名を押すと、閲覧の Sheet が開く。背景は暗くならず、開いたまま別の顧客を選ぶと表示が切り替わる。「編集」を押すと、背景の操作を止める編集に切り替わる。"
       >
         <CustomerList />
+      </Section>
+
+      <Section
+        title="mode と modal"
+        lead="modal を指定した場合は modal が mode より優先する。背景を暗くするのは、実際のモーダル性が true のときだけ。"
+      >
+        <ModeModalMatrix />
       </Section>
 
       <Section title="幅" lead="左右に開くときは 3 段階から選ぶ。画面の幅が足りないときは、画面の幅全体に広がる。">

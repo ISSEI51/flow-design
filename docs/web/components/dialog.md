@@ -94,7 +94,7 @@
 | `unsavedChanges` | 未保存の変更がある。製品が判断して渡す |
 | `onDiscardRequest` | `unsavedChanges` のときに、Escape、閉じるボタン、`DialogClose` が押された。破棄を確かめる Alert Dialog を開く |
 
-`unsavedChanges` が `true` のときは、外側のクリックでは閉じない。手順と例は [overlays.md](overlays.md#2-閉じる操作と未保存の変更) にまとめている。
+`unsavedChanges` が `true` のときは、外側のクリックでは閉じない。`onDiscardRequest` を渡さない場合は、閉じる手段がなくならないよう、外側のクリックだけを止める。保存中の扱い、閉じる要求が続く場合、保護する範囲（ブラウザの戻る操作、ページの移動などは製品の責務）は [overlays.md](overlays.md#2-閉じる操作と未保存の変更) にまとめている。
 
 - 初期フォーカスを変える場合は、`DialogContent` に `initialFocus` を、戻す先を変える場合は `finalFocus` を渡す（Base UI）。
 - 閉じるボタンの名前は `closeLabel`（既定は「閉じる」）で変える。英語の画面では `closeLabel="Close"` にする。

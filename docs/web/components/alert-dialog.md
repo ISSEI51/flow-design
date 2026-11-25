@@ -43,7 +43,19 @@ Dialog と共通の見た目を使う。
 | 実行（`AlertDialogAction`） | 危険な操作は Destructive。右に置く | [Button](button.md) |
 | 開閉 | 240ms | `duration-(--duration-slow)` |
 
-- 大きな警告のアイコンや飾りのアイコンは置かない。意味はタイトル、説明、ボタンの文字で伝える。shadcn/ui の `AlertDialogMedia` は提供しない。
+- 大きな警告のアイコンや飾りのアイコンは置かない。意味はタイトル、説明、ボタンの文字で伝える。
+
+### AlertDialogMedia（互換）
+
+shadcn/ui から移行するコードのために、`AlertDialogMedia` を提供する。Flow Design の標準では使わない。
+
+| | shadcn/ui | Flow Design |
+| --- | --- | --- |
+| API | `div` の props | 同じ |
+| 大きさ | 40px、アイコン 24px、`muted` の面 | 同じ |
+| 配置 | 640px 以上の幅では、アイコンを左に、タイトルと説明を右に並べる。狭い幅では中央そろえ | タイトルの上に左寄せで置く。見出しの配置は変えない |
+
+移行するときは、`AlertDialogMedia` を削除し、アイコンで伝えていた意味（削除、取り消せないことなど）をタイトルと説明に書く。
 - 閉じるボタン（X）は置かない。閉じる操作はキャンセルに 1 つにする。
 
 ```tsx

@@ -7,7 +7,8 @@ import { cn } from "@/lib/utils"
 // Flow Design Alert Dialog
 // shadcn/ui（Base UI 版）の Alert Dialog と同じ名前と構造。見た目は Dialog と共通にしている。
 // shadcn/ui との違い：
-// - AlertDialogMedia（大きなアイコン）を持たない。意味はタイトル、説明、ボタンで伝える。
+// - AlertDialogMedia（大きなアイコン）は互換のためだけに提供する。Flow Design の標準では使わず、
+//   意味はタイトル、説明、ボタンで伝える。置いた場合は、見出しの上に左寄せで表示する。
 // - AlertDialogCancel の既定を Secondary にする。
 // - 開いたとき、AlertDialogCancel に初期フォーカスを当てる。
 // 外側のクリックでは閉じない（Base UI の Alert Dialog の動作）。Escape はキャンセルとして閉じる。
@@ -29,7 +30,7 @@ function AlertDialogOverlay({ className, ...props }: AlertDialogPrimitive.Backdr
     <AlertDialogPrimitive.Backdrop
       data-slot="alert-dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
+        "fixed inset-0 z-40 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
         "transition-opacity duration-(--duration-slow) ease-standard",
         "data-starting-style:opacity-0 data-ending-style:opacity-0",
         className
@@ -67,7 +68,7 @@ function AlertDialogContent({
       <AlertDialogOverlay />
       <AlertDialogPrimitive.Viewport
         data-slot="alert-dialog-viewport"
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+        className="fixed inset-0 z-40 flex items-center justify-center p-4 sm:p-6"
       >
         <AlertDialogPrimitive.Popup
           data-slot="alert-dialog-content"
@@ -95,6 +96,21 @@ function AlertDialogHeader({ className, ...props }: React.ComponentProps<"div">)
 }
 
 // Dialog と同じ配置。右寄せで、キャンセルを左、実行する操作を右に置く。
+// shadcn/ui との互換のための部品。標準では使わない（docs/web/components/alert-dialog.md）。
+function AlertDialogMedia({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="alert-dialog-media"
+      className={cn(
+        "mb-2 inline-flex size-10 shrink-0 items-center justify-center self-start rounded-md bg-muted text-foreground",
+        "[&_svg:not([class*='size-'])]:size-6",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
 function AlertDialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -154,6 +170,7 @@ export {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogOverlay,
   AlertDialogPortal,
   AlertDialogTitle,

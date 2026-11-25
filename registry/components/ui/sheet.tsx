@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils"
 // - mode：閲覧（view）と編集（edit）。コンポーネントは推測せず、製品が指定する。
 //     view … 非モーダル。背景を暗くせず、元の画面を操作できる。外側のクリックでは閉じない。
 //     edit … モーダル（既定）。Dialog と同じ背景で、背景の操作を止め、フォーカスを Sheet の中に閉じ込める。
+//   modal を指定した場合は、modal が mode より優先する。背景の表示も含め、すべて実際のモーダル性に従う。
 // - size（sm / default / lg）：左右に開くときの幅
 // - SheetBody：ヘッダーとフッターを固定し、この部分だけをスクロールする
 // - unsavedChanges と onDiscardRequest：Dialog と同じ、未保存の変更があるときの閉じる操作の制御
@@ -17,7 +18,10 @@ import { cn } from "@/lib/utils"
 
 type SheetMode = "view" | "edit"
 
-const SheetModeContext = React.createContext<SheetMode>("edit")
+type SheetModal = NonNullable<SheetPrimitive.Root.Props["modal"]>
+
+// mode と、実際のモーダル性。背景の表示は、実際のモーダル性に合わせる。
+const SheetModeContext = React.createContext<{ mode: SheetMode; modal: SheetModal }>({ mode: "edit", modal: true })
 
 function Sheet({
   mode = "edit",
@@ -28,26 +32,37 @@ function Sheet({
   disablePointerDismissal,
   ...props
 }: SheetPrimitive.Root.Props & {
-  /** 閲覧（非モーダル）か編集（モーダル）か。既定は edit */
+  /**
+   * 閲覧（view）か編集（edit）か。既定は edit。モーダル性の既定値を決める（edit は true、view は false）。
+   * modal を指定した場合は、modal を優先する（shadcn/ui、Base UI との互換）。
+   */
   mode?: SheetMode
   /** 未保存の変更がある。外側のクリックでは閉じず、Escape と閉じるボタンでは onDiscardRequest を呼ぶ */
   unsavedChanges?: boolean
   onDiscardRequest?: () => void
 }) {
-  const view = mode === "view"
+  // 優先順位：modal（指定した場合）→ mode。背景の表示、背景の操作、スクロール、フォーカスの閉じ込めは、
+  // すべてこの値に従う（背景を暗くするのは true のときだけ。"trap-focus" はフォーカスだけを閉じ込める）。
+  const resolvedModal: SheetModal = modal ?? mode === "edit"
+  const value = React.useMemo(() => ({ mode, modal: resolvedModal }), [mode, resolvedModal])
   return (
-    <SheetModeContext.Provider value={mode}>
+    <SheetModeContext.Provider value={value}>
       <SheetPrimitive.Root
-        modal={modal ?? !view}
-        // 閲覧中は、一覧の別の行を選んでも閉じずに内容を切り替えられるよう、外側のクリックとフォーカスの移動では閉じない。
-        disablePointerDismissal={disablePointerDismissal ?? (view || unsavedChanges)}
+        modal={resolvedModal}
+        // 背景を操作できる間（モーダルでないとき）は、一覧の別の行を選んでも閉じずに内容を切り替えられるよう、
+        // 外側のクリックとフォーカスの移動では閉じない。
+        disablePointerDismissal={disablePointerDismissal ?? (resolvedModal !== true || unsavedChanges)}
         onOpenChange={(open, details) => {
           if (!open && unsavedChanges && details.reason !== "imperative-action" && details.reason !== "none") {
-            details.cancel()
-            // 取り消せない閉じる要求（ブラウザの戻る操作が続いた場合など）は、そのまま閉じる。
-            if (details.isCanceled) {
-              if (details.reason !== "outside-press" && details.reason !== "focus-out") onDiscardRequest?.()
-              return
+            const pointer = details.reason === "outside-press" || details.reason === "focus-out"
+            // onDiscardRequest がない場合は、閉じる手段がなくならないよう、明示的な閉じる操作は止めない。
+            if (pointer || onDiscardRequest) {
+              details.cancel()
+              // 取り消せない閉じる要求（Android で戻る操作が続いた場合など）は、そのまま閉じる。
+              if (details.isCanceled) {
+                if (!pointer) onDiscardRequest?.()
+                return
+              }
             }
           }
           onOpenChange?.(open, details)
@@ -70,13 +85,13 @@ function SheetPortal(props: SheetPrimitive.Portal.Props) {
   return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
 }
 
-// Dialog と同じ背景。黒 40%、ぼかしなし。編集のときだけ表示する。
+// Dialog と同じ背景。黒 40%、ぼかしなし。モーダル（modal が true）のときだけ表示する。
 function SheetOverlay({ className, ...props }: SheetPrimitive.Backdrop.Props) {
   return (
     <SheetPrimitive.Backdrop
       data-slot="sheet-overlay"
       className={cn(
-        "fixed inset-0 z-50 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
+        "fixed inset-0 z-40 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
         "transition-opacity duration-(--duration-slow) ease-standard",
         "data-starting-style:opacity-0 data-ending-style:opacity-0",
         className
@@ -102,18 +117,19 @@ function SheetContent({
   /** 閉じるボタンのアクセシブルな名前 */
   closeLabel?: string
 }) {
-  const mode = React.useContext(SheetModeContext)
+  const { mode, modal } = React.useContext(SheetModeContext)
   return (
     <SheetPortal>
-      {mode === "edit" && <SheetOverlay />}
+      {modal === true && <SheetOverlay />}
       <SheetPrimitive.Popup
         data-slot="sheet-content"
         data-side={side}
         data-size={size}
         data-mode={mode}
+        data-modal={String(modal)}
         data-close-button={showCloseButton || undefined}
         className={cn(
-          "group/sheet-content fixed z-50 flex flex-col bg-background text-body text-foreground outline-none",
+          "group/sheet-content fixed z-40 flex flex-col bg-background text-body text-foreground outline-none",
           "transition-[translate,opacity] duration-(--duration-slow) ease-enter data-ending-style:ease-exit",
           // 左右：画面の高さ全体。元の画面と接する側だけに線を引き、角は丸めない。
           "data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:border-r",
@@ -235,4 +251,4 @@ export {
   SheetTitle,
   SheetTrigger,
 }
-export type { SheetMode }
+export type { SheetMode, SheetModal }
