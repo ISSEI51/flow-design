@@ -14,32 +14,59 @@ export type DateString = string
 /** 開始日と終了日。どちらも日付を含む（終了日の 23:59:59 までを含む）。片側だけの指定も表せる。 */
 export type DateRange = { from: Date | undefined; to?: Date | undefined }
 
+/**
+ * 扱う年の範囲。西暦 1 年 1 月 1 日〜9999 年 12 月 31 日（先発グレゴリオ暦）。
+ * - 0 年は Intl.DateTimeFormat が「紀元前 1 年」として表示し、"YYYY-MM-DD" と往復できないため扱わない
+ * - 10000 年以降は "YYYY" の 4 桁に収まらないため扱わない
+ */
+export const MIN_YEAR = 1
+export const MAX_YEAR = 9999
+
 const pad = (n: number, len = 2) => String(n).padStart(len, "0")
 
-/** ローカル時刻の年月日を "YYYY-MM-DD" にする。 */
+/** Date として有効か（new Date("x") などの Invalid Date でないか）。 */
+export function isValidDate(date: unknown): date is Date {
+  return date instanceof Date && !Number.isNaN(date.getTime())
+}
+
+/** ローカル時刻の年月日を "YYYY-MM-DD" にする。Invalid Date と扱う範囲の外の年は ""。 */
 export function toDateString(date: Date): DateString {
+  if (!isValidDate(date) || date.getFullYear() < MIN_YEAR || date.getFullYear() > MAX_YEAR) return ""
   return `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-/** "YYYY-MM-DD" をローカル時刻の 0 時の Date にする。存在しない日付は undefined。 */
+/** "YYYY-MM-DD" をローカル時刻の 0 時の Date にする。形式が違う場合と存在しない日付は undefined。 */
 export function fromDateString(value: DateString | null | undefined): Date | undefined {
   const m = value?.match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (!m) return undefined
   return makeDate(Number(m[1]), Number(m[2]), Number(m[3]))
 }
 
-/** 年月日から Date を作る。存在しない日付（2 月 30 日など）は、別の日付に繰り越さずに undefined を返す。 */
+/**
+ * 年月日から、ローカル時刻の 0 時の Date を作る。存在しない日付（2 月 30 日など）は、別の日付に繰り越さずに undefined を返す。
+ * new Date(year, month, day) は 0〜99 年を 1900 年代として扱う（new Date(4, 1, 29) は 1904 年）。
+ * さらに 1900 年はうるう年ではないため、0 年 2 月 29 日などが 3 月に繰り越される。
+ * そのため、年月日を setFullYear で同時に設定し、設定した値がそのまま残っているかで存在を確かめる。
+ * 夏時間で 0 時が存在しない日（一部の地域）は 1 時になるが、年月日は変わらない。
+ */
 export function makeDate(year: number, month: number, day: number): Date | undefined {
-  if (month < 1 || month > 12 || day < 1) return undefined
-  const d = new Date(year, month - 1, day)
-  // 0〜99 年は new Date が 1900 年代として扱うため、年を設定し直す。
-  d.setFullYear(year)
-  return d.getMonth() === month - 1 && d.getDate() === day ? d : undefined
+  if (![year, month, day].every(Number.isInteger)) return undefined
+  if (year < MIN_YEAR || year > MAX_YEAR || month < 1 || month > 12 || day < 1 || day > 31) return undefined
+  const d = new Date(2000, 0, 1)
+  d.setFullYear(year, month - 1, day)
+  d.setHours(0, 0, 0, 0)
+  return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day ? d : undefined
 }
 
-/** 年月日だけを比べる。 */
+/** 年月日だけを比べる。Invalid Date は一致しない。 */
 export function isSameDate(a: Date | undefined, b: Date | undefined) {
-  return !!a && !!b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  return (
+    isValidDate(a) &&
+    isValidDate(b) &&
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
 }
 
 /** a が b より前の日付か。時刻は無視する。 */
@@ -50,64 +77,123 @@ export function isBeforeDate(a: Date, b: Date) {
 /**
  * 指定したタイムゾーンでの「今日」。返す値はローカル時刻の 0 時の Date。
  * 例：ブラウザが UTC で、timeZone が "Asia/Tokyo" の場合、UTC の 11 月 24 日 20 時には 11 月 25 日を返す。
+ * timeZone は IANA の名前（"Asia/Tokyo" など）。不正な timeZone と Invalid Date の now は、誤った日付を返さずに
+ * RangeError を投げる（設定の誤りを、日付がずれた状態で見逃さないため）。
  */
 export function todayIn(timeZone?: string, now: Date = new Date()): Date {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "numeric", day: "numeric" }).formatToParts(now)
+  if (!isValidDate(now)) throw new RangeError("todayIn: now が Invalid Date です")
+  let parts: Intl.DateTimeFormatPart[]
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      calendar: "gregory",
+      numberingSystem: "latn",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+    }).formatToParts(now)
+  } catch {
+    throw new RangeError(`todayIn: 不正なタイムゾーンです（${timeZone}）`)
+  }
   const get = (type: string) => Number(parts.find((p) => p.type === type)!.value)
-  return makeDate(get("year"), get("month"), get("day"))!
+  const date = makeDate(get("year"), get("month"), get("day"))
+  if (!date) throw new RangeError(`todayIn: 扱う範囲（${MIN_YEAR}〜${MAX_YEAR} 年）の外の日付です`)
+  return date
 }
 
 // ---- 表示と入力
 
-/** ロケールの年月日の並び。ja-JP は年、月、日。en-US は月、日、年。 */
-function partOrder(locale: string) {
-  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" })
+type Part = { type: "year" | "month" | "day" | "literal"; value: string }
+
+/** ロケールの年月日の表示の部品。ja-JP は [年, "/", 月, "/", 日]。 */
+function localeParts(locale: string): Part[] {
+  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit", calendar: "gregory", numberingSystem: "latn" })
     .formatToParts(new Date(2026, 10, 25))
-    .filter((p) => p.type === "year" || p.type === "month" || p.type === "day")
-    .map((p) => p.type as "year" | "month" | "day")
+    .filter((p) => p.type === "year" || p.type === "month" || p.type === "day" || p.type === "literal") as Part[]
 }
 
-/** 日付を表示用の文字列にする。ja-JP は "YYYY/MM/DD"。 */
+/**
+ * 日付を表示用の文字列にする。ja-JP は "YYYY/MM/DD"。年は 4 桁にそろえる（0005/01/03）。
+ * Invalid Date、undefined、扱う範囲の外の年は ""。
+ */
 export function formatDate(date: Date | undefined, locale = "ja-JP") {
-  if (!date) return ""
-  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" }).format(date)
+  if (!isValidDate(date) || date.getFullYear() < MIN_YEAR || date.getFullYear() > MAX_YEAR) return ""
+  const values = { year: pad(date.getFullYear(), 4), month: pad(date.getMonth() + 1), day: pad(date.getDate()) }
+  return localeParts(locale)
+    .map((p) => (p.type === "literal" ? p.value : values[p.type]))
+    .join("")
 }
 
-/** 入力欄の形式の説明。ja-JP は "YYYY/MM/DD"。 */
+/** 入力欄の形式の説明。ja-JP は "YYYY/MM/DD"、en-US は "MM/DD/YYYY"。 */
 export function dateFormatHint(locale = "ja-JP") {
-  const sample = formatDate(new Date(2026, 10, 25), locale)
-  return sample.replace("2026", "YYYY").replace("11", "MM").replace("25", "DD")
+  const names = { year: "YYYY", month: "MM", day: "DD" }
+  return localeParts(locale)
+    .map((p) => (p.type === "literal" ? p.value : names[p.type]))
+    .join("")
 }
 
 export type DateInputResult =
   | { status: "empty" }
   | { status: "valid"; date: Date }
-  /** 形式が違う。年月日の 3 つがそろっていない場合も含む。 */
+  /** 形式が違う。年月日の 3 つがそろっていない、区切りが違う、余分な区切りがある場合を含む。 */
   | { status: "invalid"; reason: "format" }
-  /** 形式は正しいが、存在しない日付（2026/02/30 など）。 */
+  /** 形式は正しいが、存在しない日付（2026/02/30、2026/13/01、0000/01/01 など）。 */
   | { status: "invalid"; reason: "nonexistent" }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
 /**
- * 入力欄の文字列を日付にする。別の日付へ黙って変換しない。
- * 受け付ける形式：ロケールの並びの年月日（ja-JP は 2026/11/25、2026/1/5）、区切りは「/」「-」「.」、
- * 区切りのない 8 桁（20261125）、ISO の 2026-11-25。全角の数字も受け付ける。年は 4 桁。
+ * ロケールの表示形式から、入力を読み取る正規表現を作る。区切りの前後の空白は省略してよい。月と日は 1〜2 桁。
+ * 区切りは表示形式と同じ記号に限る。先頭と末尾の記号だけは省略してよい。
+ */
+function localePattern(locale: string) {
+  const order: ("year" | "month" | "day")[] = []
+  const parts = localeParts(locale)
+  const source = parts
+    .map((p, i) => {
+      if (p.type === "literal") {
+        const lit = p.value.trim()
+        const re = lit === "" ? "\\s+" : `\\s*${escapeRe(lit)}\\s*`
+        // 先頭と末尾の記号（ko-KR の末尾の「.」など）は省略してよい
+        return i === 0 || i === parts.length - 1 ? `(?:${re})?` : re
+      }
+      order.push(p.type)
+      return p.type === "year" ? "(\\d{4})" : "(\\d{1,2})"
+    })
+    .join("")
+  return { re: new RegExp(`^${source}$`), order }
+}
+
+/**
+ * 入力欄の文字列を日付にする。形式の妥当性（format）と、日付として存在するか（nonexistent）を分けて判定する。
+ * 別の日付へ黙って変換しない。全角の数字と記号は半角にそろえてから判定する（NFKC）。前後の空白は無視する。
+ *
+ * 受け付ける形式（これ以外は format）
+ * 1. ロケールの表示形式。月と日は 1〜2 桁でよい。ja-JP は 2026/11/25、2026/1/5。en-US は 11/25/2026。
+ *    de-DE は 25.11.2026。ko-KR は 2026. 11. 25.
+ * 2. ISO 8601 の YYYY-MM-DD（2026-11-25）。どのロケールでも受け付ける
+ * 3. 年が先のロケール（ja-JP、zh-CN、ko-KR など）では、区切りのない 8 桁（20261125）
+ * 4. ja-JP では、2026年11月25日（「日」は省略できない）
+ * 年は 4 桁（0001〜9999）。区切りの混在（2026/11-25）、空の区切り（2026//11/25）、先頭と末尾の余分な区切り
+ * （/2026/11/25、2026/11/25/）は format とする。
  */
 export function parseDateInput(text: string, locale = "ja-JP"): DateInputResult {
   const v = text.normalize("NFKC").trim()
   if (v === "") return { status: "empty" }
-  const order = partOrder(locale)
-  let y: number, m: number, d: number
+  let ymd: [number, number, number] | undefined
   const iso = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
-  const compact = v.match(/^(\d{4})(\d{2})(\d{2})$/)
-  const parts = v.split(/\s*[/.\-年月日]\s*/).filter(Boolean)
-  if (iso) [y, m, d] = [Number(iso[1]), Number(iso[2]), Number(iso[3])]
-  else if (compact && order[0] === "year") [y, m, d] = [Number(compact[1]), Number(compact[2]), Number(compact[3])]
-  else if (parts.length === 3 && parts.every((p) => /^\d+$/.test(p))) {
-    const at = (t: "year" | "month" | "day") => parts[order.indexOf(t)]
-    if (at("year").length !== 4 || at("month").length > 2 || at("day").length > 2) return { status: "invalid", reason: "format" }
-    ;[y, m, d] = [Number(at("year")), Number(at("month")), Number(at("day"))]
-  } else return { status: "invalid", reason: "format" }
-  const date = makeDate(y, m, d)
+  const { re, order } = localePattern(locale)
+  const local = v.match(re)
+  const compact = order[0] === "year" ? v.match(/^(\d{4})(\d{2})(\d{2})$/) : null
+  const kanji = locale.startsWith("ja") ? v.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日$/) : null
+  if (iso) ymd = [Number(iso[1]), Number(iso[2]), Number(iso[3])]
+  else if (local) {
+    const at = (t: "year" | "month" | "day") => Number(local[order.indexOf(t) + 1])
+    ymd = [at("year"), at("month"), at("day")]
+  } else if (compact) ymd = [Number(compact[1]), Number(compact[2]), Number(compact[3])]
+  else if (kanji) ymd = [Number(kanji[1]), Number(kanji[2]), Number(kanji[3])]
+  if (!ymd) return { status: "invalid", reason: "format" }
+  const date = makeDate(...ymd)
   return date ? { status: "valid", date } : { status: "invalid", reason: "nonexistent" }
 }
 

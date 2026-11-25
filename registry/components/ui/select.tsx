@@ -137,7 +137,9 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
         "focus-visible:focus-ring [--focus-ring-offset:calc(var(--focus-ring-width)*-1)] [[data-pointer]_&]:focus-visible:outline-none",
         // キー操作で項目を表示範囲に入れるとき、上下のスクロールボタン（24px）に隠れないよう余白を残す。
         "scroll-my-6",
-        "data-selected:font-medium",
+        // 選択中は太さ 500。shadcn/tailwind.css の data-selected: は [data-selected="true"] だけに一致し、
+        // Base UI が付ける値のない data-selected には一致しないため、aria-selected で指定する。
+        "aria-selected:font-medium",
         "data-disabled:pointer-events-none data-disabled:opacity-50",
         className
       )}

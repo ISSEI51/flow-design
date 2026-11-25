@@ -153,6 +153,7 @@ function MultipleFiles() {
         {...limits}
         multiple
         currentCount={upload.entries.length}
+        existingFiles={upload.entries.map((e) => e.file)}
         disabled={upload.entries.length >= limits.maxFiles}
         title={upload.entries.length >= limits.maxFiles ? "これ以上追加できません" : "ここにファイルをドロップ"}
         onFilesSelected={({ accepted, rejected }) => {
@@ -183,7 +184,9 @@ function MultipleFiles() {
         <Button disabled={waiting === 0} onClick={upload.startAll}>
           {waiting > 0 ? `${waiting} 件をアップロード` : "アップロード"}
         </Button>
-        <p className="text-ui text-muted-foreground">名前に「失敗」を含むファイルは、送信の途中で失敗します</p>
+        <p className="text-ui text-muted-foreground">
+          名前に「失敗」を含むファイルは送信の途中で失敗し、「遅延」を含むファイルは中止の後に完了の通知が遅れて届きます（無視されます）
+        </p>
       </div>
     </div>
   )

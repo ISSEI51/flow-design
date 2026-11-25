@@ -32,20 +32,17 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Card | [card.md](card.md) | v0.1 確定 |
 | Accordion | [accordion.md](accordion.md) | v0.1 確定 |
 | Separator | [separator.md](separator.md) | v0.1 確定 |
-<<<<<<< HEAD
+| Combobox | [combobox.md](combobox.md) | v0.1 確定 |
+| Multi Select | [multi-select.md](multi-select.md) | v0.1 確定 |
+| Command | [command.md](command.md) | v0.1 確定 |
+| Calendar | [calendar.md](calendar.md) | v0.1 確定 |
+| Date Picker | [date-picker.md](date-picker.md) | v0.1 確定 |
+| File Upload | [file-upload.md](file-upload.md) | v0.1 確定 |
+| Empty | [empty.md](empty.md) | v0.1 確定 |
 | Table | [table.md](table.md) | v0.1 確定 |
 | Data Table | [data-table.md](data-table.md) | v0.1 確定 |
 | Pagination | [pagination.md](pagination.md) | v0.1 確定 |
 | Chart | [chart.md](chart.md) | v0.1 確定 |
-=======
-| Combobox | [combobox.md](combobox.md) | 初期実装 |
-| Multi Select | [multi-select.md](multi-select.md) | 初期実装 |
-| Command | [command.md](command.md) | 初期実装 |
-| Calendar | [calendar.md](calendar.md) | 初期実装 |
-| Date Picker | [date-picker.md](date-picker.md) | 初期実装 |
-| File Upload | [file-upload.md](file-upload.md) | 初期実装 |
-| Empty | [empty.md](empty.md) | 初期実装 |
->>>>>>> origin/main
 
 入力系コンポーネントに共通する判断基準は [forms.md](forms.md)、Feedback コンポーネントの判断基準は [feedback.md](feedback.md)、Overlay コンポーネントの判断基準は [overlays.md](overlays.md)、画面の構造（ナビゲーション、内容の幅、余白、区切り方）の判断基準は [navigation-layout.md](navigation-layout.md)、Advanced Components（検索付きの選択、Command、日付、ファイル、空の状態）の判断基準は [advanced.md](advanced.md) にまとめている。
 

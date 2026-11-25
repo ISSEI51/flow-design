@@ -1,3 +1,5 @@
+"use client"
+
 import * as React from "react"
 import { CalendarDays, X } from "lucide-react"
 import type { Matcher } from "react-day-picker"
@@ -12,6 +14,7 @@ import {
   dateFormatHint,
   formatDate,
   isBeforeDate,
+  isValidDate,
   isSameDate,
   parseDateInput,
   toDateString,
@@ -97,11 +100,19 @@ function useControllable<T>(value: T | undefined, defaultValue: T, onChange?: (v
 function useDateText(date: Date | undefined, locale: string) {
   const [text, setText] = React.useState(() => formatDate(date, locale))
   const last = React.useRef(date)
+  // コンポーネント自身が値を変えたとき（不正な入力で値を null にしたときなど）は、入力した文字を残す。
+  const own = React.useRef<{ date: Date | undefined } | null>(null)
   if (!isSameDate(last.current, date) && !(last.current === undefined && date === undefined)) {
     last.current = date
-    setText(formatDate(date, locale))
+    const self = own.current !== null && (isSameDate(own.current.date, date) || (own.current.date === undefined && date === undefined))
+    own.current = null
+    if (!self) setText(formatDate(date, locale))
   }
-  return [text, setText] as const
+  /** 次の値の変化は、このコンポーネントが行ったものとして扱う。 */
+  const markOwn = (d: Date | undefined) => {
+    own.current = { date: d }
+  }
+  return [text, setText, markOwn] as const
 }
 
 // ---- Calendar を開く部分
@@ -171,19 +182,113 @@ function CalendarOverlay({
   )
 }
 
+// ---- フォームとの連携
+
+/**
+ * 入力中の文字（下書き）から、送信する値と妥当性を決める。
+ * - 送信する値（"YYYY-MM-DD"）は、確定を待たずに下書きから作る。下書きが不正なときは ""。
+ *   以前に確定した古い日付が、不正な入力のまま送信されることはない
+ * - 下書きが不正なときは、値を持つ入力欄（DateValueInput）に setCustomValidity でエラーの文を設定する。
+ *   form.checkValidity() は false になり、noValidate のないフォームは送信されない
+ */
+function draftState(text: string, locale: string, constraints: DateConstraints) {
+  const r = parseDateInput(text, locale)
+  if (r.status === "empty") return { date: undefined, error: null, submit: "" }
+  if (r.status === "invalid") return { date: undefined, error: r.reason as DateError, submit: "" }
+  const error = checkConstraints(r.date, constraints)
+  return { date: error ? undefined : r.date, error, submit: error ? "" : toDateString(r.date) }
+}
+
+/**
+ * 送信する値と、日付の妥当性を持つ入力欄。画面には表示せず、フォーカスも受けない。
+ * type="hidden" は妥当性の検証の対象外のため、見えない text の入力欄にする。
+ * 見える入力欄（Base UI の Field.Control）に setCustomValidity を設定しないのは、Base UI の Field が入力のたびに
+ * 妥当性を読み、React の描画の前の古い値でエラーを表示し続けるため。
+ * ブラウザの検証で送信が止まったとき（invalid）は、見える入力欄にフォーカスを移し、エラーを確定して表示する。
+ */
+function DateValueInput({
+  name,
+  value,
+  message,
+  disabled,
+  target,
+  onInvalid,
+  slot,
+}: {
+  name?: string
+  value: string
+  message: string
+  disabled?: boolean
+  /** 見える入力欄。data-for に id を入れ、エラーの概要から見える入力欄のラベルをたどれるようにする。 */
+  target: React.RefObject<HTMLInputElement | null>
+  onInvalid: () => void
+  slot: string
+}) {
+  const ref = React.useRef<HTMLInputElement>(null)
+  React.useEffect(() => {
+    ref.current?.setCustomValidity(message)
+  }, [message])
+  React.useEffect(() => {
+    if (ref.current && target.current) ref.current.dataset.for = target.current.id
+  })
+  return (
+    <input
+      ref={ref}
+      type="text"
+      name={name}
+      value={value}
+      onChange={() => {}}
+      disabled={disabled}
+      tabIndex={-1}
+      aria-hidden="true"
+      autoComplete="off"
+      data-slot={slot}
+      className="pointer-events-none absolute size-px overflow-hidden opacity-0 [clip-path:inset(50%)]"
+      onInvalid={(e) => {
+        e.preventDefault()
+        onInvalid()
+      }}
+    />
+  )
+}
+
+/** 入力欄が属するフォームの submit（キャプチャ）と reset に反応する。 */
+function useFormEvents(ref: React.RefObject<HTMLInputElement | null>, handlers: { submit: () => void; reset: () => void }) {
+  const latest = React.useRef(handlers)
+  latest.current = handlers
+  React.useEffect(() => {
+    const form = ref.current?.form
+    if (!form) return
+    // 送信の前に下書きを確定し、エラーを表示する。製品の onSubmit より前に呼ばれる。
+    const onSubmit = () => latest.current.submit()
+    // reset はフォームの値を戻す前に発生する。状態を初期値に戻し、描画し直したときに入力欄へ反映する。
+    const onReset = () => latest.current.reset()
+    form.addEventListener("submit", onSubmit, true)
+    form.addEventListener("reset", onReset)
+    return () => {
+      form.removeEventListener("submit", onSubmit, true)
+      form.removeEventListener("reset", onReset)
+    }
+  }, [ref])
+}
+
+const validDate = (d: Date | null | undefined) => (isValidDate(d) ? d : undefined)
+
 // ---- 単一の日付
 
 type DatePickerProps = DateConstraints & {
+  /** 確定した日付。Invalid Date は null として扱う。 */
   value?: Date | null
+  /** 初期値。フォームの reset でもこの値に戻る。 */
   defaultValue?: Date | null
   /** 確定した日付が変わった。不正な入力のときは null。 */
   onValueChange?: (date: Date | null) => void
-  /** 直接入力のエラーが変わった。エラーがなくなったときは null。 */
+  /** 入力のエラーが変わった。フォーカスが外れたとき、Enter、フォームの送信で確定した時点の結果。エラーがなくなったときは null。 */
   onErrorChange?: (error: DateError | null) => void
   /** 表示と入力の形式のロケール。既定は ja-JP（YYYY/MM/DD）。 */
   locale?: string
   /** Calendar に渡す設定（開始曜日、ロケール、「今日」のタイムゾーンなど） */
-  calendarProps?: Pick<CalendarProps, "weekStartsOn" | "locale" | "timeZone" | "captionLayout">
+  calendarProps?: Pick<CalendarProps, "weekStartsOn" | "locale" | "timeZone" | "captionLayout" | "today">
   /** フォームで "YYYY-MM-DD" を送信する名前 */
   name?: string
   id?: string
@@ -220,12 +325,19 @@ function DatePicker({
   isDateDisabled,
   ...aria
 }: DatePickerProps) {
-  const [value, setValue] = useControllable<Date | null>(valueProp, defaultValue, onValueChange)
-  const [text, setText] = useDateText(value ?? undefined, locale)
+  const [rawValue, setValue] = useControllable<Date | null>(
+    valueProp === undefined ? undefined : (validDate(valueProp) ?? null),
+    validDate(defaultValue) ?? null,
+    onValueChange
+  )
+  const value = validDate(rawValue) ?? null
+  const [text, setText, markOwn] = useDateText(value ?? undefined, locale)
   const [error, setErrorState] = React.useState<DateError | null>(null)
   const [open, setOpen] = React.useState(false)
   const narrow = useIsMobile()
+  const inputRef = React.useRef<HTMLInputElement>(null)
   const constraints = { min, max, isDateDisabled }
+  const draft = draftState(text, locale, constraints)
 
   const setError = (e: DateError | null) => {
     if (e !== error) onErrorChange?.(e)
@@ -233,42 +345,39 @@ function DatePicker({
   }
 
   const commit = (raw: string) => {
-    const r = parseDateInput(raw, locale)
-    if (r.status === "empty") {
-      setError(null)
-      if (value) setValue(null)
-      return
+    const d = draftState(raw, locale, constraints)
+    setError(d.error)
+    if (d.date) setText(formatDate(d.date, locale))
+    if (!isSameDate(value ?? undefined, d.date) && !(value === null && d.date === undefined)) {
+      markOwn(d.date)
+      setValue(d.date ?? null)
     }
-    if (r.status === "invalid") {
-      setError(r.reason)
-      if (value) setValue(null)
-      return
-    }
-    const e = checkConstraints(r.date, constraints)
-    setError(e)
-    if (e) {
-      if (value) setValue(null)
-      return
-    }
-    setText(formatDate(r.date, locale))
-    if (!isSameDate(value ?? undefined, r.date)) setValue(r.date)
   }
 
-  const draft = parseDateInput(text, locale)
-  const shown = draft.status === "valid" ? draft.date : (value ?? undefined)
+  useFormEvents(inputRef, {
+    submit: () => commit(inputRef.current?.value ?? text),
+    reset: () => {
+      const initial = validDate(defaultValue) ?? null
+      setText(formatDate(initial ?? undefined, locale))
+      setError(null)
+      if (!isSameDate(value ?? undefined, initial ?? undefined)) setValue(initial)
+    },
+  })
+
+  const shown = draft.date ?? value ?? undefined
 
   return (
     <div data-slot="date-picker" className={cn("relative w-full min-w-0", className)}>
       <Input
+        ref={inputRef}
         id={id}
         value={text}
         onChange={(e) => setText(e.currentTarget.value)}
         onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-            e.preventDefault()
-            commit(e.currentTarget.value)
-          }
+          // IME の変換中の Enter は、変換の確定であり、日付の確定ではない。
+          // Enter では確定し、フォームの中では通常の入力欄と同じく送信を続ける（送信の前に submit で確定する）。
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) commit(e.currentTarget.value)
         }}
         placeholder={placeholder ?? dateFormatHint(locale)}
         inputMode="numeric"
@@ -281,7 +390,18 @@ function DatePicker({
         data-slot="date-picker-input"
         className={cn("tabular-nums", clearable && value ? "pr-24" : "pr-14")}
       />
-      {name && <input type="hidden" name={name} value={value ? toDateString(value) : ""} />}
+      <DateValueInput
+        name={name}
+        value={draft.submit}
+        message={draft.error ? dateErrorMessage(draft.error, { min, max, locale }) : ""}
+        disabled={disabled}
+        target={inputRef}
+        slot="date-picker-value"
+        onInvalid={() => {
+          commit(inputRef.current?.value ?? text)
+          inputRef.current?.focus()
+        }}
+      />
       <div className="absolute inset-y-0 right-1 flex items-center gap-1">
         {clearable && value && !disabled && !readOnly && (
           <Button
@@ -294,6 +414,7 @@ function DatePicker({
               setText("")
               setError(null)
               setValue(null)
+              inputRef.current?.focus()
             }}
           >
             <X />
@@ -332,15 +453,18 @@ function DatePicker({
 
 // ---- 期間
 
+type DateRangeErrors = { from: DateError | null; to: DateError | null; range: "end-before-start" | null }
+
 type DateRangePickerProps = DateConstraints & {
   value?: DateRange
+  /** 初期値。フォームの reset でもこの値に戻る。 */
   defaultValue?: DateRange
   onValueChange?: (range: DateRange) => void
-  /** 開始日、終了日、開始日と終了日の関係のエラー */
-  onErrorChange?: (errors: { from: DateError | null; to: DateError | null; range: "end-before-start" | null }) => void
+  /** 開始日、終了日、開始日と終了日の関係のエラー。確定した時点の結果。 */
+  onErrorChange?: (errors: DateRangeErrors) => void
   locale?: string
-  calendarProps?: Pick<CalendarProps, "weekStartsOn" | "locale" | "timeZone" | "captionLayout">
-  /** よく使う期間。指定したときだけ表示する。 */
+  calendarProps?: Pick<CalendarProps, "weekStartsOn" | "locale" | "timeZone" | "captionLayout" | "today">
+  /** よく使う期間。指定したときだけ表示する。min、max、isDateDisabled に合わない期間は押せない。 */
   presets?: DateRangePreset[]
   /** 「今日」のタイムゾーン。プリセットの計算に使う。 */
   timeZone?: string
@@ -349,6 +473,7 @@ type DateRangePickerProps = DateConstraints & {
   id?: string
   disabled?: boolean
   readOnly?: boolean
+  /** 開始日と終了日の両方を必須にする。片側だけを必須にする場合は、製品が検証する。 */
   required?: boolean
   className?: string
   "aria-describedby"?: string
@@ -377,15 +502,18 @@ function DateRangePicker({
   isDateDisabled,
   ...aria
 }: DateRangePickerProps) {
-  const [value, setValue] = useControllable<DateRange>(valueProp, defaultValue, onValueChange)
-  const [fromText, setFromText] = useDateText(value.from, locale)
-  const [toText, setToText] = useDateText(value.to, locale)
+  const [rawValue, setValue] = useControllable<DateRange>(valueProp, defaultValue, onValueChange)
+  const value: DateRange = { from: validDate(rawValue.from), to: validDate(rawValue.to) }
+  const [fromText, setFromText, markOwnFrom] = useDateText(value.from, locale)
+  const [toText, setToText, markOwnTo] = useDateText(value.to, locale)
   const [errors, setErrorsState] = React.useState<{ from: DateError | null; to: DateError | null }>({ from: null, to: null })
   const [open, setOpen] = React.useState(false)
   const narrow = useIsMobile()
   const baseId = React.useId()
   const fromId = id ?? `${baseId}-from`
   const toId = `${baseId}-to`
+  const fromRef = React.useRef<HTMLInputElement>(null)
+  const toRef = React.useRef<HTMLInputElement>(null)
   const constraints = { min, max, isDateDisabled }
   const weekStartsOn = calendarProps?.weekStartsOn ?? 1
 
@@ -400,18 +528,25 @@ function DateRangePicker({
     }
   })
 
+  // 下書きによる送信の値と妥当性。開始日と終了日の逆転も、下書きの時点で妥当性に反映する。
+  const draftFrom = draftState(fromText, locale, constraints)
+  const draftTo = draftState(toText, locale, constraints)
+  const draftReversed = !!draftFrom.date && !!draftTo.date && isBeforeDate(draftTo.date, draftFrom.date)
+  const fromMessage = draftFrom.error ? dateErrorMessage(draftFrom.error, { min, max, locale }) : ""
+  const toMessage = draftTo.error
+    ? dateErrorMessage(draftTo.error, { min, max, locale })
+    : draftReversed
+      ? dateErrorMessage("end-before-start")
+      : ""
+
   const commit = (side: "from" | "to", raw: string) => {
-    const r = parseDateInput(raw, locale)
-    let date: Date | undefined
-    let e: DateError | null = null
-    if (r.status === "invalid") e = r.reason
-    else if (r.status === "valid") {
-      e = checkConstraints(r.date, constraints)
-      if (!e) date = r.date
+    const d = draftState(raw, locale, constraints)
+    setErrorsState((prev) => ({ ...prev, [side]: d.error }))
+    if (d.date) (side === "from" ? setFromText : setToText)(formatDate(d.date, locale))
+    if (!isSameDate(value[side], d.date) && !(value[side] === undefined && d.date === undefined)) {
+      ;(side === "from" ? markOwnFrom : markOwnTo)(d.date)
+      setValue({ ...value, [side]: d.date })
     }
-    setErrorsState((prev) => ({ ...prev, [side]: e }))
-    if (date) (side === "from" ? setFromText : setToText)(formatDate(date, locale))
-    if (!isSameDate(value[side], date) && !(value[side] === undefined && date === undefined)) setValue({ ...value, [side]: date })
   }
 
   const applyRange = (range: DateRange) => {
@@ -421,9 +556,28 @@ function DateRangePicker({
     setValue(range)
   }
 
+  useFormEvents(fromRef, {
+    submit: () => {
+      // 2 つの欄を同時に確定する（commit を続けて呼ぶと、後の呼び出しが前の値を上書きするため）。
+      const f = draftState(fromRef.current?.value ?? fromText, locale, constraints)
+      const t = draftState(toRef.current?.value ?? toText, locale, constraints)
+      setErrorsState({ from: f.error, to: t.error })
+      if (f.date) setFromText(formatDate(f.date, locale))
+      if (t.date) setToText(formatDate(t.date, locale))
+      markOwnFrom(f.date)
+      markOwnTo(t.date)
+      if (!isSameDate(value.from, f.date) || !isSameDate(value.to, t.date)) setValue({ from: f.date, to: t.date })
+    },
+    reset: () => {
+      const initial = { from: validDate(defaultValue.from), to: validDate(defaultValue.to) }
+      applyRange(initial)
+    },
+  })
+
   const today = todayIn(timeZone ?? calendarProps?.timeZone)
+  const presetRange = (p: DateRangePreset) => p.range(calendarProps?.today ?? today, { weekStartsOn })
   const activePreset = presets?.find((p) => {
-    const r = p.range(today, { weekStartsOn })
+    const r = presetRange(p)
     return isSameDate(r.from, value.from) && isSameDate(r.to, value.to)
   })
 
@@ -438,15 +592,13 @@ function DateRangePicker({
           {side === "from" ? (labels?.start ?? "開始日") : (labels?.end ?? "終了日")}
         </label>
         <input
+          ref={side === "from" ? fromRef : toRef}
           id={inputId}
           value={text}
           onChange={(e) => setText(e.currentTarget.value)}
           onBlur={(e) => commit(side, e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              commit(side, e.currentTarget.value)
-            }
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) commit(side, e.currentTarget.value)
           }}
           placeholder={dateFormatHint(locale)}
           inputMode="numeric"
@@ -470,34 +622,62 @@ function DateRangePicker({
       data-slot="date-range-presets"
       className={cn("flex gap-1", narrow ? "flex-wrap justify-center" : "w-36 shrink-0 flex-col border-r border-border pr-3")}
     >
-      {presets.map((p) => (
-        <Button
-          key={p.id}
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-pressed={activePreset?.id === p.id}
-          className={cn("justify-start aria-pressed:bg-accent aria-pressed:font-semibold", narrow && "justify-center")}
-          onClick={() => {
-            applyRange(p.range(today, { weekStartsOn }))
-            setOpen(false)
-          }}
-        >
-          {p.label}
-        </Button>
-      ))}
+      {presets.map((p) => {
+        const r = presetRange(p)
+        // 選べる範囲の外の日や、選べない日で始まる・終わる期間は、選べない。
+        const unavailable = checkConstraints(r.from, constraints) !== null || checkConstraints(r.to, constraints) !== null
+        return (
+          <Button
+            key={p.id}
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={unavailable}
+            aria-pressed={activePreset?.id === p.id}
+            className={cn("justify-start aria-pressed:bg-accent aria-pressed:font-semibold", narrow && "justify-center")}
+            onClick={() => {
+              applyRange(r)
+              setOpen(false)
+            }}
+          >
+            {p.label}
+          </Button>
+        )
+      })}
     </div>
   )
 
   return (
-    <div data-slot="date-range-picker" className={cn("flex w-full min-w-0 flex-wrap items-end gap-x-2 gap-y-4", className)}>
+    <div data-slot="date-range-picker" className={cn("relative flex w-full min-w-0 flex-wrap items-end gap-x-2 gap-y-4", className)}>
       {field("from")}
       <span aria-hidden="true" className="hidden h-control items-center text-muted-foreground sm:flex">
         〜
       </span>
       {field("to")}
-      {startName && <input type="hidden" name={startName} value={value.from ? toDateString(value.from) : ""} />}
-      {endName && <input type="hidden" name={endName} value={value.to ? toDateString(value.to) : ""} />}
+      <DateValueInput
+        name={startName}
+        value={draftFrom.submit}
+        message={fromMessage}
+        disabled={disabled}
+        target={fromRef}
+        slot="date-range-from-value"
+        onInvalid={() => {
+          commit("from", fromRef.current?.value ?? fromText)
+          fromRef.current?.focus()
+        }}
+      />
+      <DateValueInput
+        name={endName}
+        value={draftTo.submit}
+        message={toMessage}
+        disabled={disabled}
+        target={toRef}
+        slot="date-range-to-value"
+        onInvalid={() => {
+          commit("to", toRef.current?.value ?? toText)
+          if (!fromMessage) toRef.current?.focus()
+        }}
+      />
       {!readOnly && (
         <div className="flex h-control items-center">
           <CalendarOverlay
@@ -536,4 +716,4 @@ function DateRangePicker({
 }
 
 export { DatePicker, dateErrorMessage, DateRangePicker }
-export type { DateError, DatePickerProps, DateRangeError, DateRangePickerProps }
+export type { DateError, DatePickerProps, DateRangeError, DateRangeErrors, DateRangePickerProps }

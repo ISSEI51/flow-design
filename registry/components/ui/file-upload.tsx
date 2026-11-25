@@ -1,3 +1,5 @@
+"use client"
+
 import * as React from "react"
 import {
   CircleAlert,
@@ -31,7 +33,7 @@ import { cn } from "@/lib/utils"
 
 type FileUploadStatus = "selected" | "validating" | "uploading" | "uploaded" | "processing" | "done" | "error" | "canceled"
 
-type FileRejectionCode = "type" | "size" | "count"
+type FileRejectionCode = "type" | "size" | "count" | "duplicate"
 type FileRejection = { file: File; errors: { code: FileRejectionCode; message: string }[] }
 
 type FileLimits = {
@@ -43,6 +45,8 @@ type FileLimits = {
   maxFiles?: number
   /** すでに選んでいる件数 */
   currentCount?: number
+  /** すでに選んでいるファイル。名前、大きさ、更新日時が同じファイルを、重複として選べないようにする。 */
+  existingFiles?: readonly File[]
 }
 
 // ---- 検証と表示の補助
@@ -87,12 +91,24 @@ function describeFileLimits({ accept, maxSize, maxFiles }: FileLimits) {
   return parts.join(" ／ ")
 }
 
-/** クライアント側の検証。結果は選べたファイルと、理由つきの選べなかったファイルに分ける。 */
-function validateFiles(files: File[], { accept, maxSize, maxFiles, currentCount = 0 }: FileLimits) {
+/** 同じファイルか。名前、大きさ、更新日時（lastModified）で比べる。内容は比べない。 */
+function isSameFile(a: File, b: File) {
+  return a.name === b.name && a.size === b.size && a.lastModified === b.lastModified
+}
+
+/**
+ * クライアント側の検証。結果は選べたファイルと、理由つきの選べなかったファイルに分ける。
+ * 件数の上限は、すでに選んでいる件数（currentCount）を含めて数える。重複は existingFiles と、同じ選択の中で調べる。
+ */
+function validateFiles(files: File[], { accept, maxSize, maxFiles, currentCount = 0, existingFiles = [] }: FileLimits) {
   const accepted: File[] = []
   const rejected: FileRejection[] = []
   for (const file of files) {
     const errors: FileRejection["errors"] = []
+    if (existingFiles.some((f) => isSameFile(f, file)) || accepted.some((f) => isSameFile(f, file))) {
+      rejected.push({ file, errors: [{ code: "duplicate", message: "同じファイルがすでに選ばれています" }] })
+      continue
+    }
     if (!matchesAccept(file, accept)) {
       const exts = acceptList(accept).filter((a) => a.startsWith("."))
       errors.push({ code: "type", message: exts.length ? `${exts.join("、")} のファイルを選んでください` : "この形式のファイルは選べません" })
@@ -122,7 +138,7 @@ type FileSelectProps = FileLimits & {
 }
 
 /** ファイルの選択とドラッグ＆ドロップの処理。独自の見た目を作るときに使う。 */
-function useFileSelect({ accept, maxSize, maxFiles, currentCount, multiple, disabled, onFilesSelected, name }: FileSelectProps) {
+function useFileSelect({ accept, maxSize, maxFiles, currentCount, existingFiles, multiple, disabled, onFilesSelected, name }: FileSelectProps) {
   const inputRef = React.useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = React.useState(false)
   const depth = React.useRef(0)
@@ -130,7 +146,7 @@ function useFileSelect({ accept, maxSize, maxFiles, currentCount, multiple, disa
   const handle = (list: FileList | null) => {
     if (!list || disabled) return
     const files = Array.from(list)
-    onFilesSelected?.(validateFiles(multiple ? files : files.slice(0, 1), { accept, maxSize, maxFiles, currentCount }))
+    onFilesSelected?.(validateFiles(multiple ? files : files.slice(0, 1), { accept, maxSize, maxFiles, currentCount, existingFiles }))
   }
 
   const open = () => {
@@ -418,6 +434,7 @@ export {
   FileUploadItem,
   FileUploadList,
   formatFileSize,
+  isSameFile,
   matchesAccept,
   useFileSelect,
   validateFiles,

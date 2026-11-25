@@ -97,9 +97,12 @@ export function ReportFilterPage() {
       <form
         className="flex flex-col gap-6"
         data-testid="report-form"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
-          if (!hasError) setApplied({ range, regions, owner })
+          // 入力中の期間が不正なときは集計しない。確定前の入力も Date Range Picker が妥当性に反映している。
+          if (!e.currentTarget.checkValidity()) return
+          setApplied({ range, regions, owner })
         }}
       >
         <FieldSet>

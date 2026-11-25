@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/empty.tsx`](../../../registry/components/ui/empty.tsx) |
 | 元にした実装 | shadcn/ui の Empty |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -66,6 +66,7 @@
 - 取得失敗の Empty を、操作の結果として後から表示する場合は、製品が `role="alert"` を付けて知らせる。最初から表示されている空の状態には付けない。
 - 画面の一部の取得に失敗し、ほかの内容は使える場合は、Empty ではなく Alert を使う。
 - Data Table のデータ未登録、検索結果なし、取得失敗の表示は、Data Display Components の `DataTableMessage` が Empty で描く（[data-table.md](data-table.md#データの状態)）。
+- Empty は hook もイベントも使わないため、サーバーの部品（React Server Components）として使える。
 
 ## 6. Anti-patterns
 

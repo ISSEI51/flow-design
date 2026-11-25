@@ -1,3 +1,5 @@
+"use client"
+
 import * as React from "react"
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete"
 import type { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
@@ -224,33 +226,87 @@ function isMac() {
   return /mac|iphone|ipad/i.test(platform)
 }
 
-/** ショートカットの表示。macOS は「⌘K」、それ以外は「Ctrl+K」。 */
+/** ショートカットの表示。macOS は「⌘K」、それ以外は「Ctrl+K」。描画の外（イベントの処理など）で使う。 */
 function commandShortcutLabel(key = "k") {
   return isMac() ? `⌘${key.toUpperCase()}` : `Ctrl+${key.toUpperCase()}`
 }
 
+const noopSubscribe = () => () => {}
+
 /**
- * Cmd + K（macOS）、Ctrl + K（Windows、Linux）で onTrigger を呼ぶ。
- * - enabled を false にすると登録しない。key で別のキーに変えられる
- * - IME の変換中（isComposing）と、Shift・Alt を併用したときは反応しない
- * - 一致したときだけ preventDefault する。ほかのショートカットには干渉しない
+ * ショートカットの表示を、描画の中で使う。サーバーでの描画と Hydration の間は null を返し、Hydration の後に
+ * ブラウザの OS に合わせた表示（「⌘K」か「Ctrl+K」）にする。サーバーとブラウザで HTML が食い違わないようにするため。
  */
-function useCommandShortcut(onTrigger: () => void, { key = "k", enabled = true }: { key?: string; enabled?: boolean } = {}) {
-  const ref = React.useRef(onTrigger)
-  ref.current = onTrigger
+function useCommandShortcutLabel(key = "k") {
+  return React.useSyncExternalStore(
+    noopSubscribe,
+    () => commandShortcutLabel(key),
+    () => null
+  )
+}
+
+// 登録されたショートカット。同じキーが複数登録された場合は、最後に登録された（後から表示された）ものだけが反応する。
+type Registration = { key: string; handler: React.RefObject<() => void>; allowInEditable: boolean }
+const registrations: Registration[] = []
+let listening = false
+
+// Command 以外の Overlay（Dialog、Alert Dialog、Sheet、Drawer、Popover）が開いているか。開いている間は Command を開かない。
+function otherOverlayOpen() {
+  return !!document.querySelector(
+    '[role="dialog"][data-open]:not([data-slot="command-dialog"]), [role="alertdialog"][data-open]'
+  )
+}
+
+function onShortcutKeyDown(e: KeyboardEvent) {
+  // IME の変換中、キーの長押しによる繰り返し、ほかの処理がすでに扱ったキーには反応しない。
+  if (e.isComposing || e.keyCode === 229 || e.repeat || e.defaultPrevented) return
+  if (e.shiftKey || e.altKey) return
+  const mac = isMac()
+  if (mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return
+  const key = e.key.toLowerCase()
+  const target = [...registrations].reverse().find((r) => r.key === key)
+  if (!target) return
+  // contenteditable（リッチテキストの編集）では、Cmd/Ctrl + K がリンクの挿入などに使われるため、既定では反応しない。
+  const el = e.target instanceof HTMLElement ? e.target : null
+  if (el?.isContentEditable && !target.allowInEditable) return
+  const commandOpen = !!document.querySelector('[data-slot="command-dialog"][data-open]')
+  if (!commandOpen && otherOverlayOpen()) return
+  e.preventDefault()
+  target.handler.current()
+}
+
+/**
+ * Cmd + K（macOS）、Ctrl + K（Windows、Linux）で onTrigger を呼ぶ。アプリケーションに 1 つだけ登録する。
+ * - enabled を false にすると登録しない。key で別のキーに変えられる
+ * - 反応しない場合：IME の変換中（isComposing）、キーの長押しによる繰り返し（repeat）、ほかの処理が preventDefault したキー、
+ *   Shift・Alt の併用、別の修飾キー（macOS の Ctrl + K など）、contenteditable の中（allowInEditable で変えられる）、
+ *   Command 以外の Overlay が開いている間
+ * - input と textarea の中では反応する（Cmd/Ctrl + K は文字の入力に使われないため）
+ * - 一致したときだけ preventDefault する。ほかのショートカットには干渉しない
+ * - 同じキーが複数登録された場合は、最後に登録されたものだけが反応する
+ */
+function useCommandShortcut(
+  onTrigger: () => void,
+  { key = "k", enabled = true, allowInEditable = false }: { key?: string; enabled?: boolean; allowInEditable?: boolean } = {}
+) {
+  const handler = React.useRef(onTrigger)
+  handler.current = onTrigger
   React.useEffect(() => {
     if (!enabled) return
-    const mac = isMac()
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.isComposing || e.keyCode === 229) return
-      if (e.key.toLowerCase() !== key.toLowerCase() || e.shiftKey || e.altKey) return
-      if (mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return
-      e.preventDefault()
-      ref.current()
+    const r: Registration = { key: key.toLowerCase(), handler, allowInEditable }
+    registrations.push(r)
+    if (!listening) {
+      document.addEventListener("keydown", onShortcutKeyDown)
+      listening = true
     }
-    document.addEventListener("keydown", onKeyDown)
-    return () => document.removeEventListener("keydown", onKeyDown)
-  }, [key, enabled])
+    return () => {
+      registrations.splice(registrations.indexOf(r), 1)
+      if (registrations.length === 0) {
+        document.removeEventListener("keydown", onShortcutKeyDown)
+        listening = false
+      }
+    }
+  }, [key, enabled, allowInEditable])
 }
 
 export {
@@ -267,5 +323,6 @@ export {
   CommandStatus,
   commandShortcutLabel,
   useCommandShortcut,
+  useCommandShortcutLabel,
 }
 export type { CommandGroupData, CommandItemData }
