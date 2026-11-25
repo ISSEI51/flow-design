@@ -136,6 +136,8 @@ test.describe("Tooltip", () => {
     expect([await css(tip, "padding-top"), await css(tip, "padding-left")]).toEqual(["8px", "12px"])
     expect(await css(tip, "box-shadow")).toContain("0px 2px 8px")
     expect(await css(tip, "transition-duration")).toBe("0.12s")
+    // 開くときの拡大（95% → 100%、120ms）が終わってから位置を測る。途中では間隔が 8px より狭く測られる。
+    await tip.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
     const t = await box(trigger)
     const p = await box(tip)
     expect(Math.round(t.y - (p.y + p.height))).toBe(8)

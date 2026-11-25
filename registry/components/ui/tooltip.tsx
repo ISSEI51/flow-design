@@ -27,17 +27,24 @@ function TooltipProvider({ delay = TOOLTIP_DELAY, ...props }: TooltipPrimitive.P
 // ポインターで開いた Tooltip（フォーカスは別の要素）があるとき、Escape が背後の Dialog に届き、両方が閉じる。
 // 開いている間だけ、この Tooltip の Escape を document のキャプチャの段階で受け、Tooltip だけを閉じて伝播を止める。
 // 閉じる操作は Base UI の actionsRef.close() を使う。IME の変換中の Escape は扱わない。
+// キーボードのフォーカスで開いた Tooltip は、トリガーからフォーカスが離れると閉じる（Base UI が閉じるまでに少し時間がある）。
+// 閉じるまでの間に、フォーカスの移った先（Dropdown Menu など）で押した Escape を横取りしないよう、
+// フォーカスで開いた Tooltip は、トリガーにフォーカスがあるときだけ Escape を受ける。
 function Tooltip({ actionsRef, onOpenChange, ...props }: TooltipPrimitive.Root.Props) {
   const ownActions = useRef<TooltipPrimitive.Root.Actions>(null)
   // 製品が actionsRef を渡した場合はそれを使い、渡さない場合は内部の ref を使う。
   const actions = actionsRef ?? ownActions
   const [openState, setOpenState] = useState(props.defaultOpen ?? false)
   const open = props.open ?? openState
+  // フォーカスで開いたときのトリガー。ポインターなど、ほかの理由で開いたときは null
+  const focusTrigger = useRef<Element | null>(null)
 
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return
+      const trigger = focusTrigger.current
+      if (trigger && !trigger.contains(document.activeElement)) return
       event.preventDefault()
       event.stopPropagation()
       actions.current?.close()
@@ -51,6 +58,10 @@ function Tooltip({ actionsRef, onOpenChange, ...props }: TooltipPrimitive.Root.P
       data-slot="tooltip"
       actionsRef={actions}
       onOpenChange={(next, details) => {
+        if (next) {
+          const target = details.event?.target
+          focusTrigger.current = details.reason === "trigger-focus" && target instanceof Element ? target : null
+        }
         onOpenChange?.(next, details)
         if (!details.isCanceled) setOpenState(next)
       }}
