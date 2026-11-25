@@ -1,0 +1,238 @@
+import * as React from "react"
+import { Dialog as SheetPrimitive } from "@base-ui/react/dialog"
+import { X } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
+
+// Flow Design Sheet
+// shadcn/ui（Base UI 版）の Sheet と同じ名前と構造（side、showCloseButton）。Flow Design では次を追加している。
+// - mode：閲覧（view）と編集（edit）。コンポーネントは推測せず、製品が指定する。
+//     view … 非モーダル。背景を暗くせず、元の画面を操作できる。外側のクリックでは閉じない。
+//     edit … モーダル（既定）。Dialog と同じ背景で、背景の操作を止め、フォーカスを Sheet の中に閉じ込める。
+// - size（sm / default / lg）：左右に開くときの幅
+// - SheetBody：ヘッダーとフッターを固定し、この部分だけをスクロールする
+// - unsavedChanges と onDiscardRequest：Dialog と同じ、未保存の変更があるときの閉じる操作の制御
+// 定義は docs/web/components/sheet.md を参照。
+
+type SheetMode = "view" | "edit"
+
+const SheetModeContext = React.createContext<SheetMode>("edit")
+
+function Sheet({
+  mode = "edit",
+  modal,
+  unsavedChanges = false,
+  onDiscardRequest,
+  onOpenChange,
+  disablePointerDismissal,
+  ...props
+}: SheetPrimitive.Root.Props & {
+  /** 閲覧（非モーダル）か編集（モーダル）か。既定は edit */
+  mode?: SheetMode
+  /** 未保存の変更がある。外側のクリックでは閉じず、Escape と閉じるボタンでは onDiscardRequest を呼ぶ */
+  unsavedChanges?: boolean
+  onDiscardRequest?: () => void
+}) {
+  const view = mode === "view"
+  return (
+    <SheetModeContext.Provider value={mode}>
+      <SheetPrimitive.Root
+        modal={modal ?? !view}
+        // 閲覧中は、一覧の別の行を選んでも閉じずに内容を切り替えられるよう、外側のクリックとフォーカスの移動では閉じない。
+        disablePointerDismissal={disablePointerDismissal ?? (view || unsavedChanges)}
+        onOpenChange={(open, details) => {
+          if (!open && unsavedChanges && details.reason !== "imperative-action" && details.reason !== "none") {
+            details.cancel()
+            // 取り消せない閉じる要求（ブラウザの戻る操作が続いた場合など）は、そのまま閉じる。
+            if (details.isCanceled) {
+              if (details.reason !== "outside-press" && details.reason !== "focus-out") onDiscardRequest?.()
+              return
+            }
+          }
+          onOpenChange?.(open, details)
+        }}
+        {...props}
+      />
+    </SheetModeContext.Provider>
+  )
+}
+
+function SheetTrigger(props: SheetPrimitive.Trigger.Props) {
+  return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />
+}
+
+function SheetClose(props: SheetPrimitive.Close.Props) {
+  return <SheetPrimitive.Close data-slot="sheet-close" {...props} />
+}
+
+function SheetPortal(props: SheetPrimitive.Portal.Props) {
+  return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
+}
+
+// Dialog と同じ背景。黒 40%、ぼかしなし。編集のときだけ表示する。
+function SheetOverlay({ className, ...props }: SheetPrimitive.Backdrop.Props) {
+  return (
+    <SheetPrimitive.Backdrop
+      data-slot="sheet-overlay"
+      className={cn(
+        "fixed inset-0 z-50 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
+        "transition-opacity duration-(--duration-slow) ease-standard",
+        "data-starting-style:opacity-0 data-ending-style:opacity-0",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function SheetContent({
+  className,
+  children,
+  side = "right",
+  size = "default",
+  showCloseButton = true,
+  closeLabel = "閉じる",
+  ...props
+}: SheetPrimitive.Popup.Props & {
+  side?: "top" | "right" | "bottom" | "left"
+  /** 左右に開くときの幅。sm 360px、default 480px、lg 640px。画面が狭いときは画面の幅になる */
+  size?: "sm" | "default" | "lg"
+  showCloseButton?: boolean
+  /** 閉じるボタンのアクセシブルな名前 */
+  closeLabel?: string
+}) {
+  const mode = React.useContext(SheetModeContext)
+  return (
+    <SheetPortal>
+      {mode === "edit" && <SheetOverlay />}
+      <SheetPrimitive.Popup
+        data-slot="sheet-content"
+        data-side={side}
+        data-size={size}
+        data-mode={mode}
+        data-close-button={showCloseButton || undefined}
+        className={cn(
+          "group/sheet-content fixed z-50 flex flex-col bg-background text-body text-foreground outline-none",
+          "transition-[translate,opacity] duration-(--duration-slow) ease-enter data-ending-style:ease-exit",
+          // 左右：画面の高さ全体。元の画面と接する側だけに線を引き、角は丸めない。
+          "data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:border-r",
+          "data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:border-l",
+          "data-[side=left]:w-full data-[side=right]:w-full",
+          "data-[side=left]:data-[size=sm]:max-w-[22.5rem] data-[side=right]:data-[size=sm]:max-w-[22.5rem]",
+          "data-[side=left]:data-[size=default]:max-w-[30rem] data-[side=right]:data-[size=default]:max-w-[30rem]",
+          "data-[side=left]:data-[size=lg]:max-w-[40rem] data-[side=right]:data-[size=lg]:max-w-[40rem]",
+          // 上下：内容に合わせた高さ。画面の 90% までにする。
+          "data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:max-h-[90dvh] data-[side=top]:border-b",
+          "data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:max-h-[90dvh] data-[side=bottom]:border-t",
+          // 位置の動き。動きを減らす設定では移動しない。
+          "motion-safe:data-[side=right]:data-starting-style:translate-x-full motion-safe:data-[side=right]:data-ending-style:translate-x-full",
+          "motion-safe:data-[side=left]:data-starting-style:-translate-x-full motion-safe:data-[side=left]:data-ending-style:-translate-x-full",
+          "motion-safe:data-[side=top]:data-starting-style:-translate-y-full motion-safe:data-[side=top]:data-ending-style:-translate-y-full",
+          "motion-safe:data-[side=bottom]:data-starting-style:translate-y-full motion-safe:data-[side=bottom]:data-ending-style:translate-y-full",
+          // 入れ子の Dialog（変更の破棄の確認など）が開いている間は、背後のこの面を少し暗くし、最前面を区別する。
+          "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:bg-black/0",
+          "after:transition-[background-color] after:duration-(--duration-slow) data-nested-dialog-open:after:bg-black/10",
+          className
+        )}
+        {...props}
+      >
+        {children}
+        {showCloseButton && (
+          <SheetPrimitive.Close
+            data-slot="sheet-close-button"
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={closeLabel}
+                className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 group-data-[side=bottom]/sheet-content:top-4"
+              />
+            }
+          >
+            <X />
+          </SheetPrimitive.Close>
+        )}
+      </SheetPrimitive.Popup>
+    </SheetPortal>
+  )
+}
+
+// 固定のヘッダー。画面の上端に接するとき（下から開く場合以外）は、Safe Area の分だけ下げる。
+function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="sheet-header"
+      className={cn(
+        "flex shrink-0 flex-col gap-2 px-6 pt-[max(1.5rem,env(safe-area-inset-top))] pb-4 group-data-[side=bottom]/sheet-content:pt-6",
+        "group-data-[close-button]/sheet-content:pr-16",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+// スクロールする内容。フッターがないときは、下端の Safe Area の分だけ余白を足す。
+function SheetBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="sheet-body"
+      className={cn(
+        "min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-1 pb-6 last:pb-[calc(1.5rem+env(safe-area-inset-bottom))]",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+// 固定のフッター。編集の完了、キャンセル、変更の破棄を置く。Dialog と同じく右寄せで、主要な操作を右に置く。
+function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="sheet-footer"
+      className={cn(
+        "mt-auto flex shrink-0 flex-wrap gap-2 border-t border-border px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]",
+        "*:flex-1 sm:justify-end sm:*:flex-none",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props) {
+  return (
+    <SheetPrimitive.Title
+      data-slot="sheet-title"
+      className={cn("text-heading text-foreground [word-break:auto-phrase]", className)}
+      {...props}
+    />
+  )
+}
+
+function SheetDescription({ className, ...props }: SheetPrimitive.Description.Props) {
+  return (
+    <SheetPrimitive.Description
+      data-slot="sheet-description"
+      className={cn("text-ui text-muted-foreground [word-break:auto-phrase]", className)}
+      {...props}
+    />
+  )
+}
+
+export {
+  Sheet,
+  SheetBody,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetOverlay,
+  SheetPortal,
+  SheetTitle,
+  SheetTrigger,
+}
+export type { SheetMode }

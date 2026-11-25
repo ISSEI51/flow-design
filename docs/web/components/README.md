@@ -13,12 +13,31 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Checkbox | [checkbox.md](checkbox.md) | v0.1 確定 |
 | Radio Group | [radio-group.md](radio-group.md) | v0.1 確定 |
 | Switch | [switch.md](switch.md) | v0.1 確定 |
+| Badge | [badge.md](badge.md) | v0.1 確定 |
+| Avatar | [avatar.md](avatar.md) | v0.1 確定 |
+| Tooltip | [tooltip.md](tooltip.md) | v0.1 確定 |
+| Alert | [alert.md](alert.md) | v0.1 確定 |
+| Toast | [toast.md](toast.md) | v0.1 確定 |
+| Skeleton | [skeleton.md](skeleton.md) | v0.1 確定 |
+| Progress | [progress.md](progress.md) | v0.1 確定 |
+| Dialog | [dialog.md](dialog.md) | 初期実装 |
+| Alert Dialog | [alert-dialog.md](alert-dialog.md) | 初期実装 |
+| Popover | [popover.md](popover.md) | 初期実装 |
+| Dropdown Menu | [dropdown-menu.md](dropdown-menu.md) | 初期実装 |
+| Sheet | [sheet.md](sheet.md) | 初期実装 |
+| Drawer | [drawer.md](drawer.md) | 初期実装 |
+| Sidebar | [sidebar.md](sidebar.md) | 初期実装 |
+| Tabs | [tabs.md](tabs.md) | 初期実装 |
+| Breadcrumb | [breadcrumb.md](breadcrumb.md) | 初期実装 |
+| Card | [card.md](card.md) | 初期実装 |
+| Accordion | [accordion.md](accordion.md) | 初期実装 |
+| Separator | [separator.md](separator.md) | 初期実装 |
 | Table | [table.md](table.md) | 初期実装 |
 | Data Table | [data-table.md](data-table.md) | 初期実装（Overlay・Feedback の統合待ち） |
 | Pagination | [pagination.md](pagination.md) | 初期実装 |
 | Chart | [chart.md](chart.md) | 初期実装 |
 
-入力系コンポーネントに共通する判断基準は [forms.md](forms.md) にまとめている。
+入力系コンポーネントに共通する判断基準は [forms.md](forms.md)、Feedback コンポーネントの判断基準は [feedback.md](feedback.md)、Overlay コンポーネントの判断基準は [overlays.md](overlays.md)、画面の構造（ナビゲーション、内容の幅、余白、区切り方）の判断基準は [navigation-layout.md](navigation-layout.md) にまとめている。
 
 Data Display（Table、Data Table、Pagination、Chart）に共通する判断基準は [data-display.md](data-display.md) にまとめている。
 
@@ -28,9 +47,10 @@ Data Display（Table、Data Table、Pagination、Chart）に共通する判断�
 | --- | --- |
 | `registry/components/ui/<name>.tsx` | 実装。shadcn/ui と同じ場所と名前にする |
 | `registry/lib/utils.ts` | `cn()`。Flow Design の設定を追加した tailwind-merge を使う |
+| `registry/hooks/<name>.ts` | 複数のコンポーネントが使うフック（`use-mobile` など）。shadcn/ui の `hooks/` と同じ場所 |
 | `registry/lib/tailwind-merge.ts` | テーマが追加したクラス名の登録。既存の `cn()` に追加する方法は [tokens.md](../tokens.md#cn-の設定) |
 | `docs/web/components/<name>.md` | 資料 |
-| `preview/src/pages/<name>-page.tsx` | プレビューのページ。実装は `@/components/ui/<name>` から読み込み、複製しない |
+| `preview/src/pages/<group>/<name>-page.tsx` | プレビューのページ。実装は `@/components/ui/<name>` から読み込み、複製しない |
 | `preview/tests/<name>.spec.ts` | Playwright の検品 |
 
 `registry/` は、shadcn/ui のプロジェクトの `components/` と `lib/` と同じ構成にしている。将来 Registry で配布するときに、import のパス（`@/components/ui/...`、`@/lib/utils`）を変えずに済む。
@@ -74,6 +94,9 @@ Data Display（Table、Data Table、Pagination、Chart）に共通する判断�
 | 押せる範囲（入力系） | Checkbox、Radio、Switch の行が 48px 以上 |
 | 押せる範囲の重なり（入力系） | 本体、ラベル、行のどこを押しても、その項目だけが切り替わる。隣の項目と重ならない |
 | フォーム全体 | 検証のタイミング、エラーの概要、エラーの読み上げ、送信される値、IME の変換中の扱い |
+| 開閉（Overlay） | 初期フォーカス、フォーカスの閉じ込めと復帰、Escape、外側のクリック、背景の操作とスクロール、未保存の変更、入れ子、重なり順、画面の端 |
+| 現在位置（ナビゲーション） | `aria-current="page"` と、色だけに頼らない見た目の区別 |
+| 開閉（ナビゲーション） | 幅、`aria-expanded`、非表示の内容が支援技術から隠れること、入力内容が残ること |
 
 ## プレビュー
 
@@ -97,4 +120,6 @@ WebKit の project は、Playwright の WebKit による基本的な互換性の
 
 ポートは `PREVIEW_PORT`（開発サーバー）と `PREVIEW_TEST_PORT`（検品、既定 5174）で変えられる。検品のスクリーンショットは `preview/screenshots/` に保存される（Git の管理外）。
 
-コンポーネントを追加するときは、`preview/src/pages/` にページを作り、`preview/src/catalog.ts` に 1 行追加する。
+コンポーネントを追加するときは、`preview/src/pages/` にページを作り、`preview/src/catalog.ts` に 1 行追加する。`fullscreen: true` を付けたページ（業務アプリの例）は、プレビューの見出しを付けずに画面全体で表示する。
+
+WebKit は既定の設定では Tab でリンクへ移動しないため、検品ではリンクへの移動に Option + Tab を使う。

@@ -1,4 +1,7 @@
-import { useEffect, useState, type CSSProperties } from "react"
+import { useEffect, useState } from "react"
+
+import { Toaster, ToastProvider } from "@/components/ui/toast"
+import { TooltipProvider } from "@/components/ui/tooltip"
 
 import { catalog } from "./catalog"
 
@@ -9,7 +12,8 @@ const brands = [
 ] as const
 
 function currentId() {
-  const id = window.location.hash.replace("#/", "")
+  // "#/app?page=customers" のように、ページの中の状態をハッシュの ? 以降に持つページがある。
+  const id = window.location.hash.replace("#/", "").split("?")[0]
   return catalog.some((c) => c.id === id) ? id : catalog[0].id
 }
 
@@ -27,8 +31,31 @@ export function App() {
   const Page = entry.page
   const vars = brands.find((b) => b.id === brand)!.vars
 
+  // ブランドカラーは :root に設定し、ポータルで表示する Toast や Tooltip にも反映する。
+  useEffect(() => {
+    const root = document.documentElement
+    for (const b of brands) for (const k of Object.keys(b.vars)) root.style.removeProperty(k)
+    for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
+  }, [vars])
+
+  // 画面全体を使うページ（業務アプリケーションの例）は、プレビューの見出しと幅の制限を付けずに表示する。
+  if (entry.fullscreen) {
+    return (
+      <ToastProvider>
+        <TooltipProvider>
+          <div className="min-h-dvh bg-background text-foreground">
+            <Page />
+          </div>
+          <Toaster />
+        </TooltipProvider>
+      </ToastProvider>
+    )
+  }
+
   return (
-    <div style={vars as CSSProperties} className="min-h-dvh bg-background text-foreground">
+    <ToastProvider>
+    <TooltipProvider>
+    <div className="min-h-dvh bg-background text-foreground">
       <header className="mx-auto flex max-w-[960px] flex-wrap items-center justify-between gap-4 px-6 pt-8">
         <nav aria-label="コンポーネント" className="flex flex-wrap items-center gap-x-6 gap-y-2 text-ui">
           <span className="font-semibold">Flow Design</span>
@@ -67,5 +94,8 @@ export function App() {
         <Page />
       </main>
     </div>
+    <Toaster />
+    </TooltipProvider>
+    </ToastProvider>
   )
 }
