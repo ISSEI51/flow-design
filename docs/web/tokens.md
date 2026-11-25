@@ -6,7 +6,7 @@ v0.1 は初期仕様である。実際のコンポーネントを使った検品
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/tokens-dark.svg">
-  <img alt="トークンの 3 層。1 Primitive は元の値で、--fd-neutral-0〜900、--fd-font-sans、--spacing（4px）がある。製品はここでニュートラルの色味とフォントを上書きする。2 Semantic は用途を表す名前で、--background、--primary、--muted-foreground、--text-body、--radius-lg、--shadow-menu などがある。製品はここでブランドカラーと、任意でダークモードを上書きする。3 Component は部品に固有の値で、--control-height、--table-row-height、--focus-ring-width、--icon-stroke-width がある。製品は高密度の画面でここの高さを上書きする。トークンは @theme inline で Tailwind CSS v4 のユーティリティ（bg-primary、text-body、rounded-lg、shadow-menu、h-control、focus-ring など）として公開される。shadcn/ui のコンポーネントは既存のクラスのまま動き、高さとフォーカス表示は各部品の指定に従う。Flow Design のコンポーネントは Registry で配布する予定で、48px の高さと 2px のフォーカス表示を使う。" src="../diagrams/tokens-light.svg">
+  <img alt="トークンの 3 層。1 Primitive は元の値で、--fd-neutral-0〜900、--fd-radius-xs〜2xl、--fd-font-sans、--spacing（4px）がある。製品はここでニュートラルの色味、角丸、フォントを上書きする。2 Semantic は用途を表す名前で、--background、--primary、--muted-foreground、--text-body、--radius-lg、--shadow-menu などがある。製品はここでブランドカラーと、任意でダークモードを上書きする。3 Component は部品に固有の値で、--control-height、--table-row-height、--focus-ring-width、--icon-stroke-width がある。製品は高密度の画面でここの高さを上書きする。トークンは @theme inline で Tailwind CSS v4 のユーティリティ（bg-primary、text-body、rounded-lg、shadow-menu、h-control、focus-ring など）として公開される。shadcn/ui のコンポーネントは既存のクラスのまま動き、高さとフォーカス表示は各部品の指定に従う。Flow Design のコンポーネントは Registry で配布する予定で、48px の高さと 2px のフォーカス表示を使う。" src="../diagrams/tokens-light.svg">
 </picture>
 
 ## 基本方針
@@ -34,7 +34,7 @@ v0.1 は初期仕様である。実際のコンポーネントを使った検品
 
 | 層 | 役割 | 例 |
 | --- | --- | --- |
-| Primitive | 元の値。コンポーネントからは直接参照しない | `--fd-neutral-500`、`--fd-font-sans` |
+| Primitive | 元の値。コンポーネントからは直接参照しない | `--fd-neutral-500`、`--fd-radius-md`、`--fd-font-sans` |
 | Semantic | 用途を表す名前。コンポーネントはこの層を参照する | `--muted-foreground`、`--text-body`、`--radius-md` |
 | Component | 部品に固有の値。共通トークンで表せないものだけを置く | `--control-height`、`--focus-ring-width` |
 
@@ -93,17 +93,26 @@ Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn
 
 ## 3. Radius（角丸）
 
-shadcn/ui と Tailwind CSS のキー名を使い、値を Flow Design の段階に合わせた。
+値は Primitive の `--fd-radius-*` に 1 か所だけ書き、`@theme inline` で shadcn/ui と Tailwind CSS のキー名に公開する。
 
-| 用途 | クラス | 値 |
-| --- | --- | ---: |
-| 小さな要素（チェックボックスなど） | `rounded-xs` | 4px |
-| 補助的な要素（メニューの項目、タグなど） | `rounded-sm` | 8px |
-| 入力欄 | `rounded-md` | 12px |
-| ボタン | `rounded-lg` | 14px（`--radius`） |
-| コンテナ | `rounded-xl` | 20px |
-| 大きなコンテナ | `rounded-2xl` | 24px |
-| アバターなど | `rounded-full` | 円 |
+| 用途 | クラス | Primitive | 値 |
+| --- | --- | --- | ---: |
+| 小さな要素（チェックボックスなど） | `rounded-xs` | `--fd-radius-xs` | 4px |
+| 補助的な要素（メニューの項目、タグなど） | `rounded-sm` | `--fd-radius-sm` | 8px |
+| 入力欄 | `rounded-md` | `--fd-radius-md` | 12px |
+| ボタン | `rounded-lg` | `--fd-radius-lg`（`--radius` を経由） | 14px |
+| コンテナ | `rounded-xl` | `--fd-radius-xl` | 20px |
+| 大きなコンテナ | `rounded-2xl` | `--fd-radius-2xl` | 24px |
+| アバターなど | `rounded-full` | なし（Tailwind CSS の標準） | 円 |
+
+参照の向きは次のとおりである。
+
+```text
+--fd-radius-md  →  --radius-md（@theme inline）  →  rounded-md
+--fd-radius-lg  →  --radius  →  --radius-lg（@theme inline）  →  rounded-lg
+```
+
+`@theme inline` は、生成するユーティリティに `var(--fd-radius-md)` などの参照をそのまま書き出す。そのため、製品が `:root` などで `--fd-radius-*` を上書きすると、対応するクラスの角丸が変わる。`rounded-lg` は、shadcn/ui と同じく `--radius` の上書きでも変わる。
 
 入れ子になる要素では、内側の角丸を「外側の角丸 − 内側の余白」にする。たとえば、角丸 20px、内側の余白 8px のメニューでは、項目の角丸を 12px（`rounded-md`）にする。差が 0 以下になる場合は、内側を角丸なしか `rounded-xs` にする。
 
@@ -126,7 +135,7 @@ shadcn/ui と Tailwind CSS のキー名を使い、値を Flow Design の段階�
 | `border-strong` | #8a8a8a | 識別に必要な境界線 |
 | `input` | `border-strong` と同じ | 入力欄、チェックボックスの枠 |
 | `ring` | #262626 | キーボードフォーカスの表示 |
-| `destructive` / `destructive-foreground` | #dc2626 / #ffffff | 削除などの取り消せない操作、エラー |
+| `destructive` / `destructive-foreground` | #d32424 / #ffffff | 削除などの取り消せない操作、エラー |
 | `success` / `success-foreground` | #15803d / #ffffff | 完了、正常 |
 | `warning` / `warning-foreground` | #b45309 / #ffffff | 注意 |
 | `info` / `info-foreground` | #2563eb / #ffffff | お知らせ |
@@ -139,7 +148,7 @@ shadcn/ui と Tailwind CSS のキー名を使い、値を Flow Design の段階�
 
 | 状態 | 表し方 |
 | --- | --- |
-| ホバー | 塗りの部品は `hover:bg-primary/90` のように面を少し明るくする。塗りのない部品は `hover:bg-accent` にする |
+| ホバー | `primary` の塗りの部品は `hover:bg-primary/90` で面を少し明るくする。`destructive` の塗りの部品は `hover:bg-[color-mix(in_srgb,var(--destructive)_90%,black)]` で面を暗くする。塗りのない部品は `hover:bg-accent` にする |
 | 押下 | 押下専用の色は定義しない。押した時点で処理を始め、画面の状態を変える |
 | フォーカス | `focus-visible:focus-ring`（2px の線、2px 離す）。詳しくは「5. Border」 |
 | 無効 | `disabled:opacity-50`。あわせて `disabled` 属性を付け、ポインターの形を変える |
@@ -149,34 +158,42 @@ shadcn/ui と Tailwind CSS のキー名を使い、値を Flow Design の段階�
 
 ### コントラスト
 
-`node scripts/tokens/check-contrast.mjs` で検証した。数値は WCAG 2 のコントラスト比である。
+`node scripts/tokens/check-contrast.mjs` で検証した。数値は WCAG 2 のコントラスト比で、小数点以下 2 桁に丸めて表示している。合否は丸める前の値で判定している。
 
 | 組み合わせ | 比 | 基準 |
 | --- | ---: | --- |
 | `foreground` / `background` | 16.29 | 4.5 以上 |
 | `foreground` / `muted` | 14.94 | 4.5 以上 |
 | `muted-foreground` / `background` | 5.10 | 4.5 以上 |
-| `muted-foreground` / `muted` | 4.68 | 4.5 以上 |
+| `muted-foreground` / `muted`、`accent` | 4.68 | 4.5 以上 |
 | `primary-foreground` / `primary` | 15.13 | 4.5 以上 |
-| `primary-foreground` / `primary/90`（ホバー） | 11.03 | 4.5 以上 |
+| `primary-foreground` / `primary/90`（ホバー） | 11.08 | 4.5 以上 |
 | `secondary-foreground` / `secondary` | 13.88 | 4.5 以上 |
-| `destructive` / `background` | 4.83 | 4.5 以上 |
-| `destructive-foreground` / `destructive` | 4.83 | 4.5 以上 |
+| `destructive` / `background` | 5.19 | 4.5 以上 |
+| `destructive` / `muted` | 4.76 | 4.5 以上 |
+| `destructive-foreground` / `destructive` | 5.19 | 4.5 以上 |
+| `destructive-foreground` / `destructive` を 10% 暗くした面（ホバー） | 6.14 | 4.5 以上 |
 | `success` / `background`、`success-foreground` / `success` | 5.02 | 4.5 以上 |
+| `success` / `muted` | 4.60 | 4.5 以上 |
 | `warning` / `background`、`warning-foreground` / `warning` | 5.02 | 4.5 以上 |
+| `warning` / `muted` | 4.61 | 4.5 以上 |
 | `info` / `background`、`info-foreground` / `info` | 5.17 | 4.5 以上 |
-| `input` / `background` | 3.45 | 3 以上（非テキスト） |
-| `input` / `muted` | 3.17 | 3 以上（非テキスト） |
-| `ring` / `background` | 15.13 | 3 以上（非テキスト） |
-| `ring/50` / `background` | 3.07 | 3 以上（非テキスト） |
+| `info` / `muted` | 4.74 | 4.5 以上 |
+| `input`、`border-strong` / `background` | 3.45 | 3 以上（非テキスト） |
+| `input`、`border-strong` / `muted` | 3.17 | 3 以上（非テキスト） |
+| `ring` / `background`（`focus-ring`） | 15.13 | 3 以上（非テキスト） |
+| `ring` / `muted`（`focus-ring`） | 13.88 | 3 以上（非テキスト） |
+| `ring/50` / `background`（shadcn/ui の標準の部品） | 3.09 | 3 以上（非テキスト） |
+| `ring/50` / `muted`（shadcn/ui の標準の部品） | 3.02 | 3 以上（非テキスト） |
 
-次の組み合わせは基準を満たさないため、使わない。
+半透明の色（`primary/90`、`ring/50`）は、実際に下にある色と合成してから比を計算している。
 
-| 組み合わせ | 比 | 代わりの方法 |
-| --- | ---: | --- |
-| `destructive` の文字 / `muted` の面 | 4.43 | エラーの文字は `background` の上に置く |
-| `destructive-foreground` / `destructive/90` | 4.30 | 削除ボタンのホバーは、面を明るくせず暗くする（`color-mix(in srgb, var(--destructive) 90%, black)` で 5.75） |
-| `border` / `background` | 1.26 | `border` は装飾の区切りだけに使う。部品の識別に必要な枠には `input` か `border-strong` を使う |
+`ring/50` は、`muted` の上で基準との差が 0.02 しかない。`ring` を明るくしたり、`muted` を暗くしたりすると、基準を下回る。Flow Design のコンポーネントは不透明な 2px の `focus-ring` を使うため、この差の影響を受けない。shadcn/ui の標準の部品で余裕を持たせる場合は、色を変えずに次のどちらかを選ぶ。
+
+- 不透明度を上げる（`ring-ring/70` にすると、`muted` の上で 5.42:1）
+- フォーカスの表示を `focus-visible:focus-ring` に置き換える
+
+`border`（#e5e5e5）は白の上で 1.26:1 であり、3:1 に届かない。`border` は装飾の区切りだけに使い、部品の識別に必要な枠には `input` か `border-strong` を使う。
 
 無効な部品の文字は、WCAG 1.4.3 でコントラストの基準の対象外である。そのため、無効の状態は透明度だけでなく、`disabled` 属性で支援技術にも伝える。
 
@@ -184,11 +201,10 @@ shadcn/ui と Tailwind CSS のキー名を使い、値を Flow Design の段階�
 
 | トークン | 候補 | 採用 | 理由 |
 | --- | --- | --- | --- |
-| `muted-foreground` | #737373 | #6e6e6e | #737373 は `muted`（#f5f5f5）の上で 4.35:1 となり、4.5:1 に届かない。shadcn/ui の Tabs は `bg-muted` の上に `text-muted-foreground` を置くため、標準の部品で基準を満たさない組み合わせが生じる。#6e6e6e は白の上で 5.10:1、`muted` の上で 4.68:1 |
-| `input`、`border-strong` | 指定なし（`border` と同じ #e5e5e5） | #8a8a8a | #e5e5e5 は白の上で 1.26:1。入力欄の枠は部品の識別に必要なため、WCAG 1.4.11 の 3:1 が必要になる。#8a8a8a は白の上で 3.45:1、`muted` の上で 3.17:1 |
-| `ring` | 指定なし | #262626 | shadcn/ui の標準の部品は、フォーカスの表示に `ring-ring/50`（透明度 50%）を使う。#262626 は透明度 50% でも白の上で 3.07:1 になる |
-
-`muted-foreground` を候補の #737373 に戻す場合は、`muted` の面の上に補足の文字を置かない運用が必要になる。
+| `muted-foreground` | #737373 | #6e6e6e | #737373 は `muted`（#f5f5f5）の上で 4.35:1 となり、4.5:1 に届かない。shadcn/ui の Tabs は `bg-muted` の上に `text-muted-foreground` を置く |
+| `input`、`border-strong` | 指定なし（`border` と同じ #e5e5e5） | #8a8a8a | 入力欄の枠は部品の識別に必要なため、WCAG 1.4.11 の 3:1 が必要になる。#e5e5e5 は白の上で 1.26:1 |
+| `ring` | 指定なし | #262626 | shadcn/ui の標準の部品は、フォーカスの表示に `ring-ring/50`（透明度 50%）を使う。#262626 は透明度 50% でも 3:1 以上になる |
+| `destructive` | #dc2626 | #d32424 | #dc2626 は `muted` の上で 4.43:1 となり、エラーの文字を置く面を `background` に限る必要があった。#d32424 は `muted` の上で 4.76:1 となり、この制限が不要になる |
 
 ## 5. Border（境界線）
 
@@ -259,9 +275,9 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 | ブランドカラー | `--primary`、`--primary-foreground`。必要に応じて `--ring` |
 | ニュートラルの色味 | `--fd-neutral-0`〜`--fd-neutral-900` |
 | フォント | `--fd-font-sans` |
-| 角丸の大きさ | `--radius` と `--radius-xs`〜`--radius-2xl` |
+| 角丸の大きさ | `--fd-radius-xs`〜`--fd-radius-2xl`。ボタンの角丸だけを変える場合は、shadcn/ui と同じく `--radius` でもよい |
 
-上書きした後は、`node scripts/tokens/check-contrast.mjs 上書き後のCSS` を実行して、コントラストを確認する。スクリプトが読み取れる色は 6 桁の 16 進数と `var()` の参照だけである。
+上書きした後は、「検証の方法」の 2 つのスクリプトで確認する。
 
 角丸は shadcn/ui の既定のように `--radius` からの倍率で計算していない。Flow Design の段階（4、8、12、14、20、24px）が倍率では表せないためである。
 
@@ -269,15 +285,35 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 
 テーマは `@custom-variant dark` を定義しており、`.dark` に Semantic トークンの値を追加すれば、ダークモードを提供できる。v0.1 ではダークモードの値を定義していない。提供するかどうかと値は、製品ごとに決める。
 
+## 検証の方法
+
+| スクリプト | 検査すること | 必要なもの |
+| --- | --- | --- |
+| `node scripts/tokens/check-contrast.mjs [CSS]` | `var()` の未定義と循環、「4. Color」の組み合わせのコントラスト | Node.js だけ |
+| `node scripts/tokens/verify-theme.mjs [CSS]` | Tailwind CSS v4 でのコンパイル、ユーティリティの生成、Chromium での計算後のスタイル、CSS 変数の上書き、動きを減らす設定 | Node.js、初回のネットワーク接続、Playwright の Chromium |
+
+どちらも結果を 1 行に 1 つの JSON で出力し、失敗があれば終了コード 1 で終わる。
+
+`check-contrast.mjs` の検査範囲と制約は次のとおりである。
+
+- 最上位の `:root` ブロックの変数だけを読む。`@media` の中は読まない。
+- 色は `#rrggbb` に解決できるものだけを計算する。`oklch()` などを使う `chart-*` は対象外である。
+- 検査する組み合わせは、スクリプト内の一覧に書いたものだけである。部品が新しい組み合わせを使う場合は、一覧に追加する。
+
+`verify-theme.mjs` は、バージョンを固定したパッケージ（tailwindcss 4.3.5、@tailwindcss/cli 4.3.5、shadcn 4.23.0、playwright-core 1.65.1）を、リポジトリの外の一時ディレクトリに入れて使う。リポジトリに依存パッケージは追加しない。Chromium がない場合は `npx playwright-core@1.65.1 install chromium` で入れる。
+
 ## 検証の結果
 
 | 項目 | 方法 | 結果 |
 | --- | --- | --- |
-| Tailwind CSS v4 | v4.3.5 の CLI で、`shadcn/tailwind.css` と一緒にコンパイル | `text-body`、`rounded-md`、`shadow-menu`、`ease-standard`、`h-control`、`focus-ring`、`bg-success` などが生成された |
+| Tailwind CSS v4 | `verify-theme.mjs`（v4.3.5 の CLI で `shadcn/tailwind.css` と一緒にコンパイル） | 検査した 42 のユーティリティがすべて生成された |
 | shadcn/ui | 既定のテーマのトークン名と照合。base-nova スタイルの Button、Input、Card、Dialog、Popover、Dropdown Menu、Table、Tabs のクラスを確認 | `:root` のトークン名はすべて定義している。`@theme inline` のうち `--radius-3xl` と `--radius-4xl` は定義せず、Tailwind CSS の標準の値（24px、32px）になる。これらを使う Badge は、高さより角丸が大きいため形が変わらない。部品のクラスは変更なしで動く |
-| 参照関係 | スクリプトで `var()` をたどる | 未定義と循環はない |
-| コントラスト | スクリプト | 「4. Color」の表のとおり |
-| 表示 | ボタン、入力欄、メニュー、ダイアログ、テーブルを並べたページを Chromium で表示 | 余白、文字、角丸、高さの段階が意図どおりに表示された |
+| 削除ボタンのホバー | `verify-theme.mjs`（Playwright の Chromium 159） | 面が rgb(190, 32, 32)（`destructive` を 10% 暗くした色）になった |
+| CSS 変数の上書き | `verify-theme.mjs`（Playwright の Chromium 159） | `--fd-radius-md`、`--fd-radius-xl`、`--fd-radius-lg`、`--radius`、`--primary`、`--fd-neutral-500`、`--control-height`、`--table-row-height`、`--focus-ring-width`、`--icon-stroke-width` の上書きが、計算後のスタイルに反映された。`--fd-radius-md` の上書きで、他の角丸は変わらなかった |
+| 参照関係 | `check-contrast.mjs` | 63 の変数で、未定義と循環はない |
+| コントラスト | `check-contrast.mjs` | 32 の組み合わせがすべて基準を満たした |
+| 動きを減らす設定 | `verify-theme.mjs` | `--duration-slow` と `--duration-layout` が 0ms になり、`--duration-fast` は 120ms のまま |
+| 表示 | ボタン、入力欄、メニュー、ダイアログ、テーブルを並べたページを Chromium で表示（v0.1 の作成時） | 余白、文字、角丸、高さの段階が意図どおりに表示された |
 
 テーマを読み込んだとき、shadcn/ui の標準の部品で変わる見た目は次のとおりである。
 

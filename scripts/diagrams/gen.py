@@ -430,8 +430,8 @@ def tokens():
     d.text(0, 0, 400, 18, "トークンの 3 層", S_LABEL, MUTED, bold=True)
     d.text(RX, 0, W - RX, 18, "製品が上書きする値", S_LABEL, MUTED, bold=True)
     layers = [
-        ("1", "Primitive", "元の値", "--fd-neutral-0〜900\n--fd-font-sans、--spacing（4px）",
-         "ニュートラルの色味\nフォント"),
+        ("1", "Primitive", "元の値", "--fd-neutral-0〜900、--fd-radius-*\n--fd-font-sans、--spacing（4px）",
+         "ニュートラルの色味\n角丸\nフォント"),
         ("2", "Semantic", "用途を表す名前", "--background、--primary、--muted-foreground\n--text-body、--radius-lg、--shadow-menu",
          "ブランドカラー\nダークモード（任意）"),
         ("3", "Component", "部品に固有の値", "--control-height、--table-row-height\n--focus-ring-width、--icon-stroke-width",

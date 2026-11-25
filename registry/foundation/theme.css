@@ -14,7 +14,7 @@
 
 /* ------------------------------------------------------------------
  * 1. Primitive
- *    元の値。製品はここを上書きして、ニュートラルの色味とフォントを変える。
+ *    元の値。製品はここを上書きして、ニュートラルの色味、角丸、フォントを変える。
  *    コンポーネントからは直接参照しない。
  * ------------------------------------------------------------------ */
 :root {
@@ -25,6 +25,13 @@
   --fd-neutral-500: #6e6e6e;
   --fd-neutral-800: #262626;
   --fd-neutral-900: #202020;
+
+  --fd-radius-xs: 0.25rem;
+  --fd-radius-sm: 0.5rem;
+  --fd-radius-md: 0.75rem;
+  --fd-radius-lg: 0.875rem;
+  --fd-radius-xl: 1.25rem;
+  --fd-radius-2xl: 1.5rem;
 
   --fd-font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
     "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
@@ -55,7 +62,7 @@
   --input: var(--border-strong);
   --ring: var(--fd-neutral-800);
 
-  --destructive: #dc2626;
+  --destructive: #d32424;
   --destructive-foreground: var(--fd-neutral-0);
   --success: #15803d;
   --success-foreground: var(--fd-neutral-0);
@@ -80,8 +87,9 @@
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
 
-  /* shadcn/ui の基準の角丸。Flow Design ではボタンの角丸（14px）に当たる。 */
-  --radius: 0.875rem;
+  /* shadcn/ui の基準の角丸。Flow Design ではボタンの角丸（14px）に当たる。
+     shadcn/ui と同じく --radius を上書きすると、rounded-lg が変わる。 */
+  --radius: var(--fd-radius-lg);
 
   --duration-fast: 120ms;
   --duration-normal: 180ms;
@@ -179,13 +187,14 @@
   --text-caption--line-height: 1.5;
   --text-caption--font-weight: 400;
 
-  /* 角丸。shadcn/ui と Tailwind CSS のキー名を使い、値を Flow Design の段階に合わせる。 */
-  --radius-xs: 0.25rem;
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
+  /* 角丸。shadcn/ui と Tailwind CSS のキー名で、Primitive の値を公開する。
+     inline のため、ユーティリティは var(--fd-radius-*) を直接参照し、上書きが反映される。 */
+  --radius-xs: var(--fd-radius-xs);
+  --radius-sm: var(--fd-radius-sm);
+  --radius-md: var(--fd-radius-md);
   --radius-lg: var(--radius);
-  --radius-xl: 1.25rem;
-  --radius-2xl: 1.5rem;
+  --radius-xl: var(--fd-radius-xl);
+  --radius-2xl: var(--fd-radius-2xl);
 
   /* 影。浮かぶ要素だけに使う。 */
   --shadow-menu: 0 2px 8px rgb(0 0 0 / 0.06);
