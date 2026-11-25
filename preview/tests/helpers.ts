@@ -74,3 +74,26 @@ export async function buttonContrast(button: Locator) {
   })
   return contrast(fg as Rgb, bg as Rgb)
 }
+
+// 2 つの CSS の色のコントラスト比。背景はページの背景に、前景は背景に合成する。
+export async function colorContrast(page: Page, fg: string, bg: string) {
+  const [f, b] = await page.evaluate(
+    ([fg, bg]) => {
+      const canvas = document.createElement("canvas")
+      canvas.width = canvas.height = 1
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })!
+      const paint = (...colors: string[]) => {
+        for (const c of colors) {
+          ctx.fillStyle = c
+          ctx.fillRect(0, 0, 1, 1)
+        }
+        return Array.from(ctx.getImageData(0, 0, 1, 1).data.slice(0, 3))
+      }
+      const pageBg = getComputedStyle(document.body).backgroundColor
+      const surface = paint(pageBg, bg)
+      return [paint(`rgb(${surface.join(",")})`, fg), surface]
+    },
+    [fg, bg]
+  )
+  return contrast(f as Rgb, b as Rgb)
+}

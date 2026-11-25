@@ -563,7 +563,103 @@ def button_hierarchy():
     d.save("button-hierarchy")
 
 
+# ---------------------------------------------------------------- 12 field anatomy
+def field_anatomy():
+    d = D()
+    S = 1.5
+    x0, y0 = 64, 20
+    d.text(x0, y0, 400, 30, "メールアドレス", 14 * S, TEXT, bold=True, valign="middle")
+    iy = y0 + 30 + 8 * S
+    iw, ih = 420, 48 * S
+    d.rect(x0, iy, iw, ih, fill="none", stroke=DANGER, r=12 * S, sw=1.5)
+    d.text(x0 + 16 * S, iy, iw - 48, ih, "yamada@", 16 * S, TEXT, valign="middle")
+    dy = iy + ih + 8 * S
+    d.text(x0, dy, 420, 30, "請求書の送付先になる", 14 * S, MUTED, valign="middle")
+    ey = dy + 30 + 8 * S
+    d.dot(x0 + 10, ey + 15, d=18, fill="none", stroke=DANGER)
+    d.text(x0 + 28, ey, 420, 30, "「@」の後にドメイン名を入力してください", 14 * S, DANGER, valign="middle")
+    # callouts on the left edge
+    for n, y in (("1", y0 + 15), ("2", iy + ih / 2), ("3", dy + 15), ("4", ey + 15)):
+        d.line([(x0 - 26, y), (x0 - 8, y)], color=ACCENT, arrow=False, sw=1)
+        d.dot(x0 - 38, y, d=24, fill=ACCENT_SURFACE, stroke=ACCENT)
+        d.text(x0 - 50, y - 12, 24, 24, n, 14, ACCENT, bold=True, align="center", valign="middle")
+    LX = 560
+    rows = [("1", "FieldLabel", "14px、太さ 500\n必須・任意の印はフォームで決める"),
+            ("2", "入力欄", "高さ 48px、角丸 12px、余白 16px\n文字 16px。エラーは枠を destructive"),
+            ("3", "FieldDescription（任意）", "14px、muted-foreground\n入力の前に知っておくこと"),
+            ("4", "FieldError", "14px、アイコンと文字\n原因と直し方を示す")]
+    for i, (n, name, sub) in enumerate(rows):
+        y = i * 92
+        d.text(LX, y + 2, 24, 20, n, S_NUM, ACCENT, bold=True)
+        d.text(LX + 30, y, 320, 24, name, S_NAME, TEXT, bold=True)
+        for k, ln in enumerate(sub.split("\n")):
+            d.text(LX + 30, y + 30 + k * 24, 330, 20, ln, S_SUB, MUTED)
+    d.text(x0, ey + 70, 480, 20, "各部分の間隔は 8px。関連付けは Field が自動で行う", S_SUB, MUTED)
+    d.save("field-anatomy")
+
+
+# ---------------------------------------------------------------- 13 form choice
+def form_choice():
+    d = D()
+    W = 900
+    d.text(0, 0, 400, 18, "選ぶ内容", S_LABEL, MUTED, bold=True)
+    d.text(520, 0, 300, 18, "使うコンポーネント", S_LABEL, MUTED, bold=True)
+    rows = [("1 つを選ぶ", "選択肢が 2 つでも同じ", "Select", "select", False),
+            ("複数を選ぶ、同意する", "確認事項にも使う", "Checkbox", "checkbox", False),
+            ("ON/OFF を保存ボタンで反映する", "フォームの一部として送信する", "Checkbox", "checkbox", False),
+            ("ON/OFF を押した時点で反映する", "保存ボタンがない設定", "Switch", "switch", False),
+            ("既存の画面と表現をそろえる", "新しいフォームでは使わない", "Radio Group", "radio", True)]
+    for i, (q, sub, comp, kind, dashed) in enumerate(rows):
+        y = 32 + i * 88
+        d.text(0, y + 12, 440, 24, q, S_NAME, TEXT, bold=True)
+        d.text(0, y + 42, 440, 20, sub, S_SUB, MUTED)
+        d.line([(452, y + 36), (508, y + 36)])
+        d.rect(520, y, 380, 72, fill="none" if dashed else SURFACE, stroke=LINE if dashed else "none", dashed=dashed)
+        cx, cy = 548, y + 36
+        if kind == "select":
+            d.rect(cx - 8, cy - 14, 64, 28, fill="none", stroke=LINE, r=8, sw=1.5)
+            d.line([(cx + 40, cy - 3), (cx + 45, cy + 2), (cx + 50, cy - 3)], color=TEXT, arrow=False, sw=1.5)
+        elif kind == "checkbox":
+            d.rect(cx, cy - 10, 20, 20, fill=TEXT, r=4)
+            d.line([(cx + 5, cy), (cx + 9, cy + 4), (cx + 15, cy - 4)], color=BTN_FG, arrow=False, sw=2)
+        elif kind == "switch":
+            d.rect(cx, cy - 14, 44, 28, fill=TEXT, r=14)
+            d.dot(cx + 30, cy, d=20, fill=BTN_FG, stroke="none")
+        else:
+            d.dot(cx + 10, cy, d=20, fill="none", stroke=LINE)
+            d.dot(cx + 10, cy, d=9, fill=TEXT, stroke="none")
+        d.text(cx + 76, y, 260, 72, comp, S_NAME, TEXT, bold=True, valign="middle")
+    d.save("form-choice")
+
+
+# ---------------------------------------------------------------- 14 form validation
+def form_validation():
+    d = D()
+    steps = [("入力中", "エラーを出さない"), ("フォーカスが外れた", "その項目を検証する"),
+             ("エラーの表示中に入力", "入力ごとに再検証する"), ("送信", "すべて検証し、概要を出す")]
+    sp = 232
+    xs = [100 + i * sp for i in range(4)]
+    dy = 14
+    for i, (ja, sub) in enumerate(steps):
+        cx = xs[i]
+        d.dot(cx, dy, fill=ACCENT if i == 3 else "none", stroke=ACCENT if i in (1, 3) else LINE)
+        d.text(cx - 110, dy + 26, 220, 24, ja, S_NAME, TEXT, bold=True, align="center")
+        d.text(cx - 110, dy + 56, 220, 20, sub, S_SUB, MUTED, align="center")
+    for i in range(3):
+        d.line([(xs[i] + 9, dy), (xs[i + 1] - 9, dy)])
+    ey = 120
+    d.text(0, ey, 300, 18, "例外", S_LABEL, MUTED, bold=True)
+    for i, (name, sub) in enumerate((("文字数の上限", "入力中に知らせる"),
+                                      ("IME で変換中", "確定するまで検証しない"),
+                                      ("選択式（Select、Checkbox）", "送信時に検証し、選び直すと再検証"))):
+        x = i * 304
+        d.rect(x, ey + 28, 288, 84)
+        d.text(x + 22, ey + 46, 250, 24, name, S_NAME, TEXT, bold=True)
+        d.text(x + 22, ey + 76, 250, 20, sub, S_SUB, MUTED)
+    d.save("form-validation")
+
+
 for f in (journey, principles, wording, layout, visual, process, architecture, site, tokens,
-          button_anatomy, button_hierarchy):
+          button_anatomy, button_hierarchy, field_anatomy, form_choice, form_validation):
     f()
 print("ok")

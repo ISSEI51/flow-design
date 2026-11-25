@@ -5,6 +5,16 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | コンポーネント | 資料 | 状態 |
 | --- | --- | --- |
 | Button | [button.md](button.md) | v0.1 確定 |
+| Field | [field.md](field.md) | 初期実装 |
+| Label | [label.md](label.md) | 初期実装 |
+| Input | [input.md](input.md) | 初期実装 |
+| Textarea | [textarea.md](textarea.md) | 初期実装 |
+| Select | [select.md](select.md) | 初期実装 |
+| Checkbox | [checkbox.md](checkbox.md) | 初期実装 |
+| Radio Group | [radio-group.md](radio-group.md) | 初期実装 |
+| Switch | [switch.md](switch.md) | 初期実装 |
+
+入力系コンポーネントに共通する判断基準は [forms.md](forms.md) にまとめている。
 
 ## ファイルの配置
 
@@ -36,6 +46,7 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 - 値はトークンのクラスで指定する。色の値や px を直接書かない。
 - コンポーネント固有のトークンは、製品や画面ごとに値を変える必要がある場合だけ追加する（[tokens.md](../tokens.md#トークンの-3-層)）。
 - 依存パッケージは、shadcn/ui の同じコンポーネントが使うものに限る。
+- 開閉の動きは、Base UI の `data-starting-style` と `data-ending-style` による CSS の transition で作る。アニメーション用のパッケージ（tw-animate-css など）は使わない。
 
 ## 検品の基準
 
@@ -52,6 +63,10 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | レイアウト | 長い文字、モバイルの幅で崩れない |
 | 動きを減らす設定 | 位置や回転の動きが止まる |
 | ブランドの変更 | `--primary` の上書きが反映され、通常、ホバー、押下でコントラストを保つ |
+| 関連付け（入力系） | ラベルで入力欄にフォーカスが移る。説明とエラーが `aria-describedby` に入る |
+| エラー（入力系） | `aria-invalid`、枠の色、アイコンと文字で伝わる |
+| 押せる範囲（入力系） | Checkbox、Radio、Switch の行が 48px 以上 |
+| フォーム全体 | 検証のタイミング、エラーの概要、送信される値、IME の変換中の扱い |
 
 ## プレビュー
 

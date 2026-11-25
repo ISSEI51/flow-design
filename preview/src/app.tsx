@@ -30,7 +30,7 @@ export function App() {
   return (
     <div style={vars as CSSProperties} className="min-h-dvh bg-background text-foreground">
       <header className="mx-auto flex max-w-[960px] flex-wrap items-center justify-between gap-4 px-6 pt-8">
-        <nav aria-label="コンポーネント" className="flex items-center gap-6 text-ui">
+        <nav aria-label="コンポーネント" className="flex flex-wrap items-center gap-x-6 gap-y-2 text-ui">
           <span className="font-semibold">Flow Design</span>
           {catalog.map((c) => (
             <a
