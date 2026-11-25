@@ -66,7 +66,8 @@ const isMac = (page: Page) =>
   page.evaluate(() =>
     /mac|iphone|ipad/i.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform)
   )
-const narrow = (page: Page) => page.evaluate(() => window.matchMedia("(max-width: 767px)").matches)
+// useIsMobile（registry/hooks/use-mobile.ts）と同じ判定
+const narrow = (page: Page) => page.evaluate(() => window.matchMedia("not all and (min-width: 48rem)").matches)
 
 // ---------------------------------------------------------------- 共通
 

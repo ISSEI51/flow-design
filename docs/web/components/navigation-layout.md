@@ -57,6 +57,13 @@ Sidebar、Tabs、Breadcrumb、Card、Accordion、Separator に共通する、画
   <img alt="Sidebar の 3 つの表示。展開は幅 240px で初期状態。折りたたみは幅 64px で、アイコンだけを表示し、項目の名前は支援技術に伝える。モバイル（768px 未満）では常に表示せず、ボタンで Sheet として開く。Sheet は背景の操作を止め、Escape で閉じる。" src="../../diagrams/sidebar-states-light.svg">
 </picture>
 
+### 2 階層目へのアクセス
+
+- 展開時は、子の項目を Sidebar の中に 2 階層目として表示する。
+- 折りたたみ時は、親の項目から [Dropdown Menu](dropdown-menu.md) で子の項目を開く。親が自身のページを持つ場合は、メニューの最初に親のページを置き、親と子の両方へ移動できるようにする。
+- Tooltip は子を持たない項目の名前を示すだけに使い、操作できる要素を入れない。
+- Sidebar の本体はナビゲーションの構造を持たない。この組み合わせは Pattern として製品側に置く（[sidebar.md](sidebar.md#子の項目を持つ項目)）。
+
 ## 2. 内容の最大幅
 
 <picture>
@@ -108,7 +115,36 @@ Sidebar、Tabs、Breadcrumb、Card、Accordion、Separator に共通する、画
 - 横幅が足りない表は、表の領域だけを横にスクロールする。ページ全体を横にスクロールさせない。
 - 固定の Header や Footer で主要な内容を隠さない。[業務アプリの例](../../../preview/src/pages/navigation/app-page.tsx) では Header を固定せず、内容と一緒にスクロールする。
 
-## 6. 確認できる例
+## 6. 製品が担うこと
+
+コンポーネントは、表示、キー操作、アクセシビリティの属性を担う。次は製品が担う。
+
+| 担うこと | 内容 |
+| --- | --- |
+| ナビゲーションの構造 | 項目、グループ、2 階層目、現在位置（`isActive`）、ユーザーの情報を渡す |
+| ルーティング | リンクを `render` で渡す。モバイルで移動した後に `setOpenMobile(false)` を呼ぶ。ページの切り替えで見出しへフォーカスを移す場合は、ルーティングの処理で行う |
+| 開閉の状態の保存 | `open` と `onOpenChange` で受け取り、Cookie、`localStorage`、サーバーなど製品の方法で保存する |
+| ショートカット | 製品の他のショートカットと重なる場合は、`keyboardShortcut` で変えるか、`false` で無効にする |
+| 非表示の内容の処理 | `keepMounted` は DOM と入力欄の値を残すだけである。非表示の Tabs や閉じた Accordion の中のデータの取得、重い描画、状態の管理は製品が制御する |
+| 複数の領域に分かれたフォーム | 製品の処理で検証し、エラーの概要から、非表示の Tabs や閉じた Accordion の入力欄へ移動できるようにする |
+
+## 7. SSR と Hydration
+
+Flow Design のコンポーネントは、Vite だけでなく、Next.js などのサーバーで描画する環境でも使う。
+
+| コンポーネント | `"use client"` | 理由 |
+| --- | --- | --- |
+| Sidebar（`use-mobile` を含む） | 付ける | 状態とフックを持つ |
+| Tabs、Accordion | 付ける | フォーカスを移す処理にフックを使う |
+| Breadcrumb | 付ける | `useRender`（フック）を使う |
+| Card、Separator | 付けない | フックを使わない。Separator は Base UI の部品（`"use client"` 付き）を描画するだけである |
+
+- サーバーでの描画では `window` と `document` を参照しない。
+- サーバーとブラウザで異なる値（`Math.random()`、現在の時刻など）を初期値にしない。
+- `useIsMobile` のサーバーでの値は `false`（デスクトップ）。モバイルの幅では、Hydration の前も CSS で Sidebar が隠れる。判定の境界は CSS の `md` と同じ 48rem である。
+- 検品：`npm run test:ssr`。Node.js で HTML を描画し（`window` がない環境）、同じ HTML になることと、ブラウザでの Hydration で不一致がないことを確かめる。Next.js での導入の検品は、Registry & Gallery の段階で行う。
+
+## 8. 確認できる例
 
 [プレビュー](README.md#プレビュー) の「業務アプリの例」（`#/app`）は、顧客管理と契約管理を想定した画面である。6 つのコンポーネント、Button、Form Components、Sheet を組み合わせている。
 

@@ -26,12 +26,12 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Dropdown Menu | [dropdown-menu.md](dropdown-menu.md) | 初期実装 |
 | Sheet | [sheet.md](sheet.md) | 初期実装 |
 | Drawer | [drawer.md](drawer.md) | 初期実装 |
-| Sidebar | [sidebar.md](sidebar.md) | 初期実装 |
-| Tabs | [tabs.md](tabs.md) | 初期実装 |
-| Breadcrumb | [breadcrumb.md](breadcrumb.md) | 初期実装 |
-| Card | [card.md](card.md) | 初期実装 |
-| Accordion | [accordion.md](accordion.md) | 初期実装 |
-| Separator | [separator.md](separator.md) | 初期実装 |
+| Sidebar | [sidebar.md](sidebar.md) | v0.1 確定 |
+| Tabs | [tabs.md](tabs.md) | v0.1 確定 |
+| Breadcrumb | [breadcrumb.md](breadcrumb.md) | v0.1 確定 |
+| Card | [card.md](card.md) | v0.1 確定 |
+| Accordion | [accordion.md](accordion.md) | v0.1 確定 |
+| Separator | [separator.md](separator.md) | v0.1 確定 |
 | Combobox | [combobox.md](combobox.md) | 初期実装 |
 | Multi Select | [multi-select.md](multi-select.md) | 初期実装 |
 | Command | [command.md](command.md) | 初期実装 |
@@ -106,6 +106,7 @@ npm install
 npm run preview:dev        # http://localhost:5173/
 npm run test:components    # Playwright（初回は npx playwright install chromium）
 npm run typecheck
+npm run test:ssr           # SSR と Hydration（Node.js での描画と、ブラウザでの Hydration）
 ```
 
 ### ブラウザ
@@ -124,3 +125,5 @@ WebKit の project は、Playwright の WebKit による基本的な互換性の
 コンポーネントを追加するときは、`preview/src/pages/` にページを作り、`preview/src/catalog.ts` に 1 行追加する。`fullscreen: true` を付けたページ（業務アプリの例）は、プレビューの見出しを付けずに画面全体で表示する。
 
 WebKit は既定の設定では Tab でリンクへ移動しないため、検品ではリンクへの移動に Option + Tab を使う。
+
+Navigation & Layout の検品は、ページで発生した例外（`pageerror`）を、テスト名、ブラウザ、URL、スタックトレースとともに `preview/test-results/page-errors.jsonl` に記録する。例外があってもテストは失敗にしない。

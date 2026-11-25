@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/breadcrumb.tsx`](../../../registry/components/ui/breadcrumb.tsx) |
 | 元にした実装 | shadcn/ui の Breadcrumb（Base UI 版、base-nova スタイル） |
 | 依存 | `@base-ui/react`、`lucide-react`、[`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -67,6 +67,8 @@
 - モバイルでは、`max-sm:hidden` などで間の階層を隠し、`BreadcrumbEllipsis` を表示する。
 - `BreadcrumbEllipsis` を `render={<button type="button" />}` にすると、省略した階層を表示する操作になる。フォームの中で送信しないよう、`type="button"` を付ける。表示した後は、ボタンがなくなるため、表示した最初の階層へフォーカスを移す（[プレビュー](../../../preview/src/pages/navigation/breadcrumb-page.tsx)）。
 - ルーティングのライブラリに依存しない。
+- 省略した部分のボタンは、Tab で移り、Enter と Space で押せる。項目の高さは 32px 以上で、WCAG 2.5.8 の最小値（24px）を満たす。
+- `BreadcrumbLink` と `BreadcrumbEllipsis` は `useRender`（フック）を使うため、`breadcrumb.tsx` に `"use client"` を付けている。
 
 ```tsx
 <Breadcrumb>

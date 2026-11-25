@@ -7,7 +7,8 @@
     "preview:build": "vite build --config preview/vite.config.ts",
     "typecheck": "tsc -p preview/tsconfig.json",
     "test:components": "playwright test -c preview/playwright.config.ts",
-    "test:tokens": "node scripts/tokens/check-contrast.mjs && node scripts/tokens/verify-theme.mjs"
+    "test:tokens": "node scripts/tokens/check-contrast.mjs && node scripts/tokens/verify-theme.mjs",
+    "test:ssr": "playwright test -c preview/playwright.config.ts ssr"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

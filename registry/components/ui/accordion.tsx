@@ -1,3 +1,6 @@
+"use client"
+
+import * as React from "react"
 import { Accordion as AccordionPrimitive } from "@base-ui/react/accordion"
 import { ChevronDown } from "lucide-react"
 
@@ -13,6 +16,8 @@ import { cn } from "@/lib/utils"
 // - 開閉は 240ms（--duration-slow）の高さの transition。動きを減らす設定では 0ms になる。
 //   内容の高さは Base UI の --accordion-panel-height で決まり、開いた後に高さが変わっても追従する。
 // - AccordionTrigger の level で見出しのレベル（h2〜h6、既定は h3）を指定できる。
+// - 内容の中にフォーカスがある状態で項目が閉じた場合（製品が value を変えて閉じた場合など）は、
+//   フォーカスをその項目の見出しへ移す。閉じて非表示になった要素にフォーカスが残らないようにするため。
 // 定義は docs/web/components/accordion.md を参照。
 
 function Accordion({
@@ -32,9 +37,29 @@ function Accordion({
   )
 }
 
-function AccordionItem({ className, ...props }: AccordionPrimitive.Item.Props) {
+function AccordionItem({ className, ref, ...props }: AccordionPrimitive.Item.Props) {
+  const itemRef = React.useRef<HTMLDivElement | null>(null)
+  const wasOpen = React.useRef(false)
+  // 描画のたびに開閉の状態を確かめる。閉じた項目の内容にフォーカスが残っていたら、見出しへ移す。
+  React.useLayoutEffect(() => {
+    const el = itemRef.current
+    if (!el) return
+    const open = el.hasAttribute("data-open")
+    if (wasOpen.current && !open) {
+      const panel = el.querySelector("[data-slot=accordion-content]")
+      if (panel?.contains(document.activeElement)) {
+        el.querySelector<HTMLElement>("[data-slot=accordion-trigger]")?.focus()
+      }
+    }
+    wasOpen.current = open
+  })
   return (
     <AccordionPrimitive.Item
+      ref={(node: HTMLDivElement | null) => {
+        itemRef.current = node
+        if (typeof ref === "function") ref(node)
+        else if (ref) ref.current = node
+      }}
       data-slot="accordion-item"
       className={cn("border-b border-border last:border-b-0", className)}
       {...props}

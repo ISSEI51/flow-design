@@ -1,3 +1,5 @@
+"use client"
+
 import * as React from "react"
 import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
@@ -29,7 +31,12 @@ import { cn } from "@/lib/utils"
 // - 折りたたみ時は、項目の名前を視覚的に隠し、アクセシブルな名前として残す。tooltip を指定すると、
 //   折りたたみ時だけ項目の名前を Tooltip（Feedback Components、表示まで 700ms）で表示する。
 // - モバイル（768px 未満）では常に表示せず、SidebarTrigger で Sheet として開く。
-// - キーボードの Ctrl / ⌘ + B は、入力欄の中では使わない（太字などの操作と重ならないように）。
+// - キーボードの Ctrl / ⌘ + B で開閉する。keyboardShortcut で変更でき、false で無効にできる。
+//   入力欄の中、IME の変換中、キーの長押し、他の処理が preventDefault() した操作、Sidebar 以外の Overlay の中では反応しない。
+//   SidebarProvider が複数ある場合は、フォーカスのある Sidebar だけが反応する。フォーカスがどの Sidebar にもない場合は、
+//   ショートカットが有効な最初の Sidebar だけが反応する。
+// - サーバーでの描画では window と document を参照しない。useIsMobile のサーバーでの値は false（デスクトップ）で、
+//   ブラウザで描画し直したときにモバイルの表示に切り替わる。
 // 定義は docs/web/components/sidebar.md を参照。
 
 const SIDEBAR_WIDTH = "15rem"
@@ -38,6 +45,8 @@ const SIDEBAR_WIDTH_ICON = "4rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
 type SidebarContextProps = {
+  /** SidebarTrigger の aria-controls が指す、Sidebar の本体の id */
+  sidebarId: string
   state: "expanded" | "collapsed"
   open: boolean
   setOpen: (open: boolean) => void
@@ -60,8 +69,15 @@ function isEditable(target: EventTarget | null) {
   return (
     target.isContentEditable ||
     ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
-    target.closest("[role=textbox]") !== null
+    target.closest("[role=textbox],[role=combobox],[role=searchbox]") !== null
   )
+}
+
+// Sidebar 以外の Overlay（Dialog、メニューなど）の中の操作か。モバイルの Sidebar 自身の Sheet は除く。
+function isInOtherOverlay(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  const overlay = target.closest("[role=dialog],[role=alertdialog],[role=menu],[role=listbox]")
+  return overlay !== null && overlay.closest("[data-sidebar=sidebar]") === null
 }
 
 function SidebarProvider({
@@ -71,13 +87,18 @@ function SidebarProvider({
   className,
   style,
   children,
+  keyboardShortcut = SIDEBAR_KEYBOARD_SHORTCUT,
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** Ctrl / ⌘ と組み合わせて開閉するキー（KeyboardEvent.key、大文字と小文字は区別しない）。false で無効にする */
+  keyboardShortcut?: string | false
 }) {
   const isMobile = useIsMobile()
+  const sidebarId = React.useId()
+  const wrapperRef = React.useRef<HTMLDivElement>(null)
   const [openMobile, setOpenMobile] = React.useState(false)
 
   const [_open, _setOpen] = React.useState(defaultOpen)
@@ -95,40 +116,67 @@ function SidebarProvider({
     [setOpenProp]
   )
 
+  // デスクトップの幅になったら、モバイルの Sheet を閉じた状態に戻す。再びモバイルの幅になったときに、
+  // 操作していない Sheet が開かないようにするため。
+  React.useEffect(() => {
+    if (!isMobile) setOpenMobile(false)
+  }, [isMobile])
+
   const toggleSidebar = React.useCallback(() => {
     return isMobile ? setOpenMobile((o) => !o) : setOpen((o) => !o)
   }, [isMobile, setOpen])
 
   React.useEffect(() => {
+    if (keyboardShortcut === false) return
+    const key = keyboardShortcut.toLowerCase()
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        !event.repeat &&
-        !event.defaultPrevented &&
-        event.key.toLowerCase() === SIDEBAR_KEYBOARD_SHORTCUT &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        !isEditable(event.target)
-      ) {
-        event.preventDefault()
-        toggleSidebar()
-      }
+        event.repeat ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.key.toLowerCase() !== key ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        isEditable(event.target) ||
+        isInOtherOverlay(event.target)
+      )
+        return
+      // 複数の Sidebar があるときに、同時に開閉しないようにする。
+      const wrapper = wrapperRef.current
+      if (!wrapper) return
+      const target = event.target instanceof Element ? event.target : null
+      const owner =
+        target?.closest("[data-slot=sidebar-wrapper]") ??
+        // モバイルの Sheet はポータルで body の直下に描画されるため、id で持ち主をたどる。
+        (target?.closest("[data-sidebar=sidebar][data-sidebar-id]")
+          ? document.querySelector(
+              `[data-slot=sidebar-wrapper][data-sidebar-id="${target.closest("[data-sidebar-id]")!.getAttribute("data-sidebar-id")}"]`
+            )
+          : null) ??
+        document.querySelector("[data-slot=sidebar-wrapper][data-keyboard-shortcut]")
+      if (owner !== wrapper) return
+      event.preventDefault()
+      toggleSidebar()
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [toggleSidebar])
+  }, [toggleSidebar, keyboardShortcut])
 
   const state = open ? "expanded" : "collapsed"
 
   const contextValue = React.useMemo<SidebarContextProps>(
-    () => ({ state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar }),
-    [state, open, setOpen, isMobile, openMobile, toggleSidebar]
+    () => ({ sidebarId, state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar }),
+    [sidebarId, state, open, setOpen, isMobile, openMobile, toggleSidebar]
   )
 
   return (
     <SidebarContext.Provider value={contextValue}>
       <div
+        ref={wrapperRef}
         data-slot="sidebar-wrapper"
+        data-sidebar-id={sidebarId}
+        data-keyboard-shortcut={keyboardShortcut === false ? undefined : keyboardShortcut}
         style={
           {
             "--sidebar-width": SIDEBAR_WIDTH,
@@ -162,11 +210,12 @@ function Sidebar({
   /** モバイルで Sheet として開いたときの名前（支援技術に伝える） */
   mobileTitle?: string
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const { isMobile, state, openMobile, setOpenMobile, sidebarId } = useSidebar()
 
   if (collapsible === "none") {
     return (
       <div
+        id={sidebarId}
         data-slot="sidebar"
         className={cn("flex h-full w-(--sidebar-width) flex-col bg-sidebar text-sidebar-foreground", className)}
         {...props}
@@ -185,6 +234,8 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
+          data-sidebar-id={sidebarId}
+          id={sidebarId}
           closeLabel={`${mobileTitle}を閉じる`}
           {...(props as Omit<React.ComponentProps<typeof SheetContent>, "side" | "size">)}
           className={cn(
@@ -223,6 +274,7 @@ function Sidebar({
       data-slot="sidebar"
     >
       <div
+        id={sidebarId}
         data-slot="sidebar-container"
         data-side={side}
         className={cn(
@@ -254,8 +306,10 @@ function SidebarTrigger({
   "aria-label": ariaLabel,
   ...props
 }: Omit<ButtonProps, "size" | "aria-label" | "aria-labelledby" | "children"> & { "aria-label"?: string }) {
-  const { toggleSidebar, isMobile, open, openMobile } = useSidebar()
-  const label = ariaLabel ?? (isMobile ? "メニューを開く" : open ? "メニューを折りたたむ" : "メニューを展開する")
+  const { toggleSidebar, isMobile, open, openMobile, sidebarId } = useSidebar()
+  // 名前は状態で変えず、開閉の状態は aria-expanded で伝える。
+  const label = ariaLabel ?? "メニュー"
+  const expanded = isMobile ? openMobile : open
   return (
     <Button
       data-sidebar="trigger"
@@ -263,7 +317,9 @@ function SidebarTrigger({
       variant="ghost"
       size="icon-sm"
       aria-label={label}
-      aria-expanded={isMobile ? openMobile : undefined}
+      aria-expanded={expanded}
+      // モバイルの Sheet は開いている間だけ DOM にあるため、そのときだけ関連付ける。
+      aria-controls={!isMobile || openMobile ? sidebarId : undefined}
       aria-haspopup={isMobile ? "dialog" : undefined}
       className={cn("pointer-coarse:size-12", className)}
       onClick={(event) => {
@@ -427,6 +483,8 @@ function SidebarGroupAction({ className, render, ...props }: useRender.Component
           "outline-none focus-visible:focus-ring group-data-[collapsible=icon]/sidebar:hidden [&>svg]:size-4 [&>svg]:shrink-0",
           className
         ),
+        type: buttonType(render),
+        onClickCapture: isAriaDisabled(props, render) ? preventDisabled : undefined,
       },
       props
     ),
@@ -462,6 +520,22 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
     />
   )
 }
+
+// aria-disabled の項目は、フォーカスできるまま実行を止める。
+// render に渡した要素の onClick も止めるため、キャプチャの段階で止める。
+function isAriaDisabled(props: { "aria-disabled"?: unknown }, render: unknown) {
+  const own = props["aria-disabled"]
+  const fromRender = React.isValidElement<{ "aria-disabled"?: unknown }>(render) ? render.props["aria-disabled"] : undefined
+  return [own, fromRender].some((v) => v === true || v === "true")
+}
+
+function preventDisabled(event: React.MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+// 既定で <button> を描画する部品は type="button" にし、フォームの中で送信しないようにする。
+const buttonType = (render: unknown) => (render ? undefined : ("button" as const))
 
 // 項目の状態。ホバーは sidebar-accent を sidebar に半分混ぜた面、押下と現在位置は sidebar-accent の面。
 // 現在位置は、さらに文字とアイコンを foreground にし、太さを 600 にする。
@@ -525,6 +599,8 @@ function SidebarMenuButton({
       {
         className: cn(sidebarMenuButtonVariants({ variant, size }), className),
         "aria-current": isActive ? "page" : undefined,
+        type: buttonType(render),
+        onClickCapture: isAriaDisabled(props, render) ? preventDisabled : undefined,
       },
       props
     ),
@@ -559,11 +635,14 @@ function SidebarMenuAction({
           "transition-[color,background-color,opacity] duration-(--duration-fast) ease-standard",
           "hover:bg-sidebar-accent group-hover/menu-item:text-sidebar-accent-foreground peer-data-active/menu-button:text-sidebar-accent-foreground",
           "outline-none focus-visible:focus-ring group-data-[collapsible=icon]/sidebar:hidden",
-          "pointer-coarse:top-2 [&>svg]:size-4 [&>svg]:shrink-0",
+          // タッチ操作では 40px にする（項目の高さ 48px の中に収める）。
+          "pointer-coarse:top-1 pointer-coarse:right-0 pointer-coarse:size-10 [&>svg]:size-4 [&>svg]:shrink-0",
           showOnHover &&
             "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 aria-expanded:opacity-100 pointer-fine:opacity-0",
           className
         ),
+        type: buttonType(render),
+        onClickCapture: isAriaDisabled(props, render) ? preventDisabled : undefined,
       },
       props
     ),
@@ -593,8 +672,8 @@ function SidebarMenuSkeleton({
   showIcon = false,
   ...props
 }: React.ComponentProps<"div"> & { showIcon?: boolean }) {
-  // 50〜90% の幅。項目ごとに長さを変え、文字の並びに近づける。
-  const [width] = React.useState(() => `${Math.floor(Math.random() * 40) + 50}%`)
+  // 文字の幅は、項目の順番に応じて 3 つの固定値（70%、55%、85%）を繰り返す。
+  // shadcn/ui は Math.random() を使うが、サーバーとブラウザで値が変わり、Hydration の不一致になるため使わない。
   return (
     <div
       data-slot="sidebar-menu-skeleton"
@@ -604,9 +683,11 @@ function SidebarMenuSkeleton({
     >
       {showIcon && <Skeleton className="size-5 rounded-xs" data-sidebar="menu-skeleton-icon" />}
       <Skeleton
-        className="h-4 max-w-(--skeleton-width) flex-1 rounded-xs group-data-[collapsible=icon]/sidebar:hidden"
+        className={cn(
+          "h-4 max-w-[70%] flex-1 rounded-xs group-data-[collapsible=icon]/sidebar:hidden",
+          "[li:nth-child(3n+2)>*>&]:max-w-[55%] [li:nth-child(3n)>*>&]:max-w-[85%]"
+        )}
         data-sidebar="menu-skeleton-text"
-        style={{ "--skeleton-width": width } as React.CSSProperties}
       />
     </div>
   )
@@ -661,6 +742,7 @@ function SidebarMenuSubButton({
           className
         ),
         "aria-current": isActive ? "page" : undefined,
+        onClickCapture: isAriaDisabled(props, render) ? preventDisabled : undefined,
       },
       props
     ),

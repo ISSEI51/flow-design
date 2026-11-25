@@ -26,6 +26,7 @@ const faq = [
 
 export function AccordionPage() {
   const [lines, setLines] = useState(1)
+  const [memoOpen, setMemoOpen] = useState<string[]>([])
   return (
     <article>
       <PageHeader
@@ -89,8 +90,16 @@ export function AccordionPage() {
             </AccordionItem>
           </Accordion>
         </Row>
-        <Row label="入力内容を保つ" note="閉じても内容を DOM に残し、入力した値を失わない">
-          <Accordion data-testid="accordion-keep" className="max-w-xl">
+        <Row
+          label="入力内容を保つ"
+          note="閉じても内容を DOM に残し、入力した値を失わない。内容の中のボタンで閉じた場合は、フォーカスを見出しへ移す"
+        >
+          <Accordion
+            data-testid="accordion-keep"
+            value={memoOpen}
+            onValueChange={(v) => setMemoOpen(v as string[])}
+            className="max-w-xl"
+          >
             <AccordionItem value="memo">
               <AccordionTrigger>社内メモ</AccordionTrigger>
               <AccordionContent>
@@ -98,6 +107,15 @@ export function AccordionPage() {
                   <FieldLabel>メモ</FieldLabel>
                   <Textarea data-testid="accordion-keep-input" placeholder="次回の訪問で確認すること" />
                 </Field>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-4"
+                  data-testid="accordion-keep-close"
+                  onClick={() => setMemoOpen([])}
+                >
+                  メモを閉じる
+                </Button>
               </AccordionContent>
             </AccordionItem>
           </Accordion>
