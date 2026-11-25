@@ -1,4 +1,5 @@
 import type * as React from "react"
+import { createContext, useContext, useEffect, useState } from "react"
 import { Avatar as AvatarPrimitive } from "@base-ui/react/avatar"
 import { Building2, User } from "lucide-react"
 
@@ -12,38 +13,59 @@ import { cn } from "@/lib/utils"
 
 type AvatarSize = "xs" | "sm" | "default" | "lg" | "xl"
 
+// AvatarImage の alt を Avatar に伝え、画像の取得に失敗して Fallback に切り替わっても名前を保つ。
+const NameContext = createContext<((name: string) => void) | null>(null)
+
+// アクセシブルな名前の決め方（製品が指定する）：
+// 1. label を指定した場合：Avatar 全体を role="img" にし、label を名前にする。
+// 2. label がなく、AvatarImage に alt を指定した場合：alt を名前にする（shadcn/ui と同じ使い方）。
+//    画像の取得に失敗しても名前は残る。
+// 3. どちらもない場合：装飾として読み上げない（aria-hidden）。隣に名前を表示する場合に使う。
 function Avatar({
   className,
   size = "default",
   label,
+  children,
   ...props
 }: AvatarPrimitive.Root.Props & {
   size?: AvatarSize
-  /** 単独で表示するときの名前。隣に名前を表示する場合は指定せず、読み上げの重複を避ける。 */
+  /** Avatar の名前。隣に名前を表示する場合は指定せず、読み上げの重複を避ける。 */
   label?: string
 }) {
+  const [imageAlt, setImageAlt] = useState("")
+  const name = label || imageAlt || undefined
   return (
-    <AvatarPrimitive.Root
-      data-slot="avatar"
-      data-size={size}
-      role={label ? "img" : undefined}
-      aria-label={label}
-      aria-hidden={label ? undefined : true}
-      className={cn(
-        "group/avatar relative flex shrink-0 overflow-hidden rounded-full bg-muted select-none",
-        "data-[size=xs]:size-6 data-[size=sm]:size-8 data-[size=default]:size-10 data-[size=lg]:size-12 data-[size=xl]:size-16",
-        className
-      )}
-      {...props}
-    />
+    <NameContext.Provider value={setImageAlt}>
+      <AvatarPrimitive.Root
+        data-slot="avatar"
+        data-size={size}
+        role={name ? "img" : undefined}
+        aria-label={name}
+        aria-hidden={name ? undefined : true}
+        className={cn(
+          "group/avatar relative flex shrink-0 overflow-hidden rounded-full bg-muted select-none",
+          "data-[size=xs]:size-6 data-[size=sm]:size-8 data-[size=default]:size-10 data-[size=lg]:size-12 data-[size=xl]:size-16",
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </AvatarPrimitive.Root>
+    </NameContext.Provider>
   )
 }
 
 function AvatarImage({ className, alt = "", ...props }: AvatarPrimitive.Image.Props) {
+  const setName = useContext(NameContext)
+  useEffect(() => {
+    setName?.(alt)
+    return () => setName?.("")
+  }, [alt, setName])
   return (
     <AvatarPrimitive.Image
       data-slot="avatar-image"
-      alt={alt}
+      // 名前は Avatar（role="img"）が持つため、画像自体は読み上げない
+      alt=""
       className={cn("size-full object-cover", className)}
       {...props}
     />

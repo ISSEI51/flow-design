@@ -112,7 +112,10 @@ test.describe("Avatar", { tag: "@webkit" }, () => {
     // 名前と並べる場合は読み上げない
     await expect(page.getByTestId("avatar-with-name").locator("[data-slot=avatar]")).toHaveAttribute("aria-hidden", "true")
     // 単独の場合は名前を持つ
-    await expect(page.getByRole("img", { name: "佐藤 健", exact: true })).toBeVisible()
+    const labelled = page.getByTestId("avatar-labelled")
+    await expect(labelled).toHaveAttribute("role", "img")
+    await expect(labelled).toHaveAccessibleName("佐藤 健")
+    await expect(labelled).toBeVisible()
   })
 })
 

@@ -71,3 +71,34 @@ Badge、Avatar、Tooltip、Alert、Toast、Skeleton、Progress に共通する�
 | Toast | 180ms で表示・非表示 | 透明度だけで変化し、位置は動かない |
 | Skeleton | 1.8 秒周期の明滅 | 止まる |
 | Progress | 値の変化を 240ms で追う。不明は帯が流れる | 値は即時に変わり、不明の帯は中央で止まる |
+
+## 6. 標準の API と互換の API
+
+| コンポーネント | Flow Design の標準 | shadcn/ui との互換のために受け付けるもの |
+| --- | --- | --- |
+| Badge | `neutral`、`success`、`warning`、`destructive`、`info` | `default`、`secondary`、`outline`（Neutral と同じ見た目）。`ghost`、`link` は提供しない |
+| Avatar | `label` で名前を付ける。大きさは `xs`〜`xl` | `AvatarImage` の `alt` を名前にする。大きさの名前は同じだが値が異なる |
+| Tooltip | 既定の遅延 700ms | `TooltipProvider`、`TooltipTrigger` の `delay` |
+| Alert | `variant` から自動のアイコン、`icon` | 子要素のアイコン（直下の `svg`）。`variant="default"` |
+| Toast | `useToast()`、`ToastProvider`、`Toaster` | なし（Sonner の API とは異なる） |
+| Skeleton | そのまま | 同じ |
+| Progress | `status`、`ProgressCircle` | 同じ構成（`ProgressLabel`、`ProgressValue` など） |
+
+## 7. 製品が担うこと
+
+| 場面 | 製品が担うこと |
+| --- | --- |
+| 重大なエラー、必要な操作 | Toast だけに頼らず、画面の中に状態（Badge、Alert）と操作を示す |
+| 動的に表示する Alert | 重要なエラーは `role="alert"`、成功は `role="status"` を付ける |
+| 読み込み | 親要素の `aria-busy` と、`role="status"` の文字。失敗したら Skeleton を消す |
+| 進捗 | 実際の処理量から進捗率を出す。完了、失敗、中断を区別する |
+| Avatar の名前 | 隣に名前がない場合は `label` か `alt` で名前を付ける |
+
+## 8. 実際のスクリーンリーダーで未確認の事項
+
+自動の検品では、属性と、読み上げ用の領域に入る文までを確認した。次は VoiceOver、NVDA などで人が確認する必要がある。
+
+- Toast：失敗の通知の即時の読み上げ、操作のボタンの伝わり方、F6 で移動したときの読み上げ（[toast.md](toast.md#実際のスクリーンリーダーで未確認の事項)）
+- Alert：`role="alert"` を付けて表示したときの読み上げ
+- Progress：値が変わったときに、どの程度の頻度で読み上げられるか
+- Skeleton：`aria-busy` を外したときに、読み込み後の内容がどう伝わるか

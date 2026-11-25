@@ -98,6 +98,33 @@ export function AvatarPage() {
             <AvatarFallback>佐</AvatarFallback>
           </Avatar>
         </Row>
+        <Row label="画像の alt" note="label がなければ alt を名前にする（shadcn/ui と同じ）">
+          <Avatar data-testid="avatar-alt">
+            <AvatarImage src="/avatars/portrait.png" alt="佐藤 健" />
+            <AvatarFallback>佐</AvatarFallback>
+          </Avatar>
+        </Row>
+        <Row label="alt と取得の失敗" note="Fallback に切り替わっても名前は残る">
+          <Avatar data-testid="avatar-alt-failed">
+            <AvatarImage src="/avatars/missing.png" alt="山田 花子" />
+            <AvatarFallback>{getInitials("山田 花子")}</AvatarFallback>
+          </Avatar>
+        </Row>
+        <Row label="ボタンの中" note="名前はボタンの aria-label に付け、Avatar は装飾にする">
+          <Button data-testid="avatar-in-button" size="icon" variant="ghost" aria-label="佐藤 健のプロフィールを開く">
+            <Avatar size="sm">
+              <AvatarImage src="/avatars/portrait.png" />
+              <AvatarFallback>佐</AvatarFallback>
+            </Avatar>
+          </Button>
+        </Row>
+        <Row label="リンクの中" note="Avatar だけのリンクは label で名前を付ける">
+          <a data-testid="avatar-in-link" href="#/avatar?profile" className="rounded-full focus-visible:focus-ring">
+            <Avatar label="山田 花子のプロフィール">
+              <AvatarFallback>{getInitials("山田 花子")}</AvatarFallback>
+            </Avatar>
+          </a>
+        </Row>
         <Row label="グループ">
           <AvatarGroup role="img" aria-label="担当者 3 名：山田 花子、佐藤 健、Hanako Yamada">
             <Avatar size="sm">

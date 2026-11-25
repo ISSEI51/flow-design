@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useSyncExternalStore } from "react"
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress"
 
 import { cn } from "@/lib/utils"
@@ -11,30 +11,48 @@ import { cn } from "@/lib/utils"
 
 type ProgressStatus = "default" | "error" | "paused"
 
-const reduceMotion = () =>
-  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+// 動きを減らす設定。表示中に設定が変わっても追従する。
+function useReducedMotion() {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia("(prefers-reduced-motion: reduce)")
+      mq.addEventListener("change", onChange)
+      return () => mq.removeEventListener("change", onChange)
+    },
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    () => false
+  )
+}
 
-// 進捗不明のとき、要素を動かす。動きを減らす設定では動かさない。
+// 進捗不明のとき、要素を動かす。動きを減らす設定、失敗、一時停止では動かさない。
 function useIndeterminate<T extends Element>(active: boolean, frames: Keyframe[], duration: number) {
   const ref = useRef<T>(null)
+  const reduce = useReducedMotion()
   useEffect(() => {
     const el = ref.current
-    if (!active || !el || reduceMotion()) return
+    if (!active || !el || reduce) return
     const animation = el.animate(frames, { duration, iterations: Infinity, easing: "cubic-bezier(0.4, 0, 0.2, 1)" })
     return () => animation.cancel()
     // frames は固定の値を渡す
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, duration])
+  }, [active, duration, reduce])
   return ref
+}
+
+// 範囲外の値は min〜max に収める。数値でない値（NaN、Infinity）は進捗不明として扱う。
+function normalize(value: number | null | undefined, min = 0, max = 100) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null
+  return Math.min(max, Math.max(min, value))
 }
 
 function Progress({
   className,
   children,
-  value,
+  value: rawValue,
   status = "default",
   ...props
 }: ProgressPrimitive.Root.Props & { status?: ProgressStatus }) {
+  const value = normalize(rawValue, props.min, props.max)
   return (
     <ProgressPrimitive.Root
       value={value}
@@ -45,7 +63,7 @@ function Progress({
     >
       {children}
       <ProgressTrack>
-        <ProgressIndicator indeterminate={value === null} />
+        <ProgressIndicator indeterminate={value === null && status === "default"} />
       </ProgressTrack>
     </ProgressPrimitive.Root>
   )
@@ -111,7 +129,7 @@ const circleSizes = {
 // 見えるラベルがない場合は aria-label を付ける。
 function ProgressCircle({
   className,
-  value,
+  value: rawValue,
   size = "default",
   status = "default",
   showValue = true,
@@ -121,6 +139,7 @@ function ProgressCircle({
   status?: ProgressStatus
   showValue?: boolean
 }) {
+  const value = normalize(rawValue, props.min, props.max)
   const { box, stroke, text } = circleSizes[size]
   const r = (box - stroke) / 2
   const c = 2 * Math.PI * r
@@ -128,7 +147,7 @@ function ProgressCircle({
   const min = props.min ?? 0
   const ratio = value === null ? 0.25 : Math.min(1, Math.max(0, (value - min) / (max - min)))
   const ref = useIndeterminate<SVGSVGElement>(
-    value === null,
+    value === null && status === "default",
     [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
     1200
   )
@@ -151,7 +170,9 @@ function ProgressCircle({
           r={r}
           fill="none"
           strokeWidth={stroke}
-          strokeLinecap="round"
+          // 0% のとき、丸い線端だけが点として残らないようにする
+          strokeLinecap={ratio > 0 ? "round" : "butt"}
+          opacity={ratio > 0 ? 1 : 0}
           strokeDasharray={c}
           strokeDashoffset={c * (1 - ratio)}
           className={cn(

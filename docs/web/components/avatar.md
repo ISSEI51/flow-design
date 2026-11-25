@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/avatar.tsx`](../../../registry/components/ui/avatar.tsx) |
 | 元にした実装 | shadcn/ui の Avatar（Base UI 版） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -50,8 +50,16 @@ shadcn/ui の大きさは `sm` 24px、`default` 32px、`lg` 40px である。Flo
 
 - 画像の取得に失敗した場合も、Base UI が `AvatarFallback` を表示する。
 - 大きさは固定のため、画像の読み込み前後でレイアウトは変わらない。
-- 既定では読み上げない（`aria-hidden`）。隣に名前を表示したとき、同じ名前を 2 回読み上げないため。
-- 単独で表示する場合は `label` で名前を付ける（`role="img"`、`aria-label`）。
+- アクセシブルな名前は、製品が次のどれかで指定する。コンポーネントは表示の文脈を推測しない。
+
+| 指定 | 読み上げ | 使う場面 |
+| --- | --- | --- |
+| `label="佐藤 健"` | Avatar 全体を `role="img"` にし、label を読む | 単独で表示する、リンクの中に Avatar だけを置く |
+| `AvatarImage` の `alt="佐藤 健"`（label なし） | alt を Avatar の名前にする。画像の取得に失敗して Fallback に切り替わっても、名前は残る | shadcn/ui から移したコード |
+| どちらもない | 読み上げない（`aria-hidden`） | 隣に名前を表示する。名前を持つボタンの中に置く |
+
+- ボタンの中に Avatar だけを置く場合は、ボタンに `aria-label` を付け、Avatar には名前を付けない。
+- shadcn/ui の Avatar は、alt がない場合に Fallback の文字（頭文字）を読み上げる。Flow Design は、名前の重複を避けるため読み上げない。頭文字だけでは誰かわからないためでもある。
 - `AvatarGroup` で重ねて並べる場合は、グループに `role="img"` と、全員の名前を含む `aria-label` を付ける。
 
 ## 6. Anti-patterns

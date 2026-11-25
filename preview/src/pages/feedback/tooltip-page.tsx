@@ -1,7 +1,7 @@
 import { Download, Info, Pencil, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 import { Compare, Row, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
@@ -59,6 +59,40 @@ export function TooltipPage() {
               </Button>
             </Tip>
           </div>
+        </Row>
+      </Section>
+
+      <Section title="表示の遅延" lead="優先順位は TooltipTrigger の delay、TooltipProvider の delay、既定の 700ms の順。">
+        <Row label="既定" note="700ms">
+          <Tip testid="tooltip-default-delay" label="既定の遅延">
+            <Button data-testid="tooltip-default-trigger" size="icon-sm" variant="ghost" aria-label="既定の遅延">
+              <Info />
+            </Button>
+          </Tip>
+        </Row>
+        <Row label="Provider で変更" note="TooltipProvider delay={200}">
+          <TooltipProvider delay={200}>
+            <Tip testid="tooltip-provider-delay" label="Provider の遅延">
+              <Button data-testid="tooltip-provider-trigger" size="icon-sm" variant="ghost" aria-label="Provider の遅延">
+                <Info />
+              </Button>
+            </Tip>
+          </TooltipProvider>
+        </Row>
+        <Row label="Trigger で変更" note="TooltipTrigger delay={1500}（Provider より優先）">
+          <TooltipProvider delay={200}>
+            <Tooltip>
+              <TooltipTrigger
+                delay={1500}
+                render={
+                  <Button data-testid="tooltip-trigger-delay-trigger" size="icon-sm" variant="ghost" aria-label="Trigger の遅延">
+                    <Info />
+                  </Button>
+                }
+              />
+              <TooltipContent data-testid="tooltip-trigger-delay">Trigger の遅延</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </Row>
       </Section>
 

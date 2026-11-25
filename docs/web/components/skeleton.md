@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/skeleton.tsx`](../../../registry/components/ui/skeleton.tsx) |
 | 元にした実装 | shadcn/ui の Skeleton |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 

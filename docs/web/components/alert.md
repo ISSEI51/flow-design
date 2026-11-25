@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/alert.tsx`](../../../registry/components/ui/alert.tsx) |
 | 元にした実装 | shadcn/ui の Alert |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -42,7 +42,16 @@
 | Info | `info` | Info（`info`） |
 
 - 重大なエラーでも、強い背景色や左側の線で装飾しない。
-- アイコンは種類から自動で表示する。別のアイコンは `icon` に渡し、表示しない場合は `icon={false}` にする。shadcn/ui はアイコンを子要素として渡すため、移すときは `icon` に置き換える。
+アイコンの指定は次のとおり。どの方法でもアイコンは 1 つだけ表示される。
+
+| 指定 | 表示 | 位置づけ |
+| --- | --- | --- |
+| `variant` だけ | 種類に対応するアイコン | Flow Design の標準 |
+| `icon={<BellRing />}` | 渡したアイコン（色は種類の色） | Flow Design の標準 |
+| 子要素の先頭に `<CircleAlert />` | 子要素のアイコン。自動のアイコンは隠れる | shadcn/ui との互換 |
+| `icon={false}` | アイコンなし。タイトルは左端から始まる | Flow Design の標準 |
+
+子要素のアイコンは、Alert の直下の `svg` を CSS で判定する。アイコンを別の要素で囲んで渡した場合は判定できないため、`icon` に渡す。
 - shadcn/ui の `variant="default"` は Neutral と同じ見た目になる。
 
 ## 5. Behavior

@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/tooltip.tsx`](../../../registry/components/ui/tooltip.tsx) |
 | 元にした実装 | shadcn/ui の Tooltip（Base UI 版） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -52,7 +52,15 @@
 - 時間の経過では閉じない。読み終える前に消えない。
 - 画面の端では、はみ出さないように位置と向きを変える（`collisionPadding` 8px）。
 - 動きを減らす設定では、大きさの変化をやめ、透明度だけで表示する。
-- 遅延の 700ms は `TooltipProvider` と `TooltipTrigger` の既定値である。shadcn/ui の `TooltipProvider` の既定は 0ms で、Flow Design では変えている。
+- 表示の遅延は、次の優先順位で決まる。
+
+| 優先 | 指定 | 例 |
+| --- | --- | --- |
+| 1 | `TooltipTrigger` の `delay` | `<TooltipTrigger delay={1500}>` |
+| 2 | 最も近い `TooltipProvider` の `delay` | `<TooltipProvider delay={200}>` |
+| 3 | 既定値 | 700ms |
+
+- shadcn/ui の `TooltipProvider` の既定は 0ms、Base UI の `TooltipTrigger` の既定は 600ms である。Flow Design は、`TooltipProvider` がなくても 700ms になるようにしている。
 
 ## 6. Anti-patterns
 

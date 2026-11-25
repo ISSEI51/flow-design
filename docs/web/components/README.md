@@ -13,13 +13,13 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Checkbox | [checkbox.md](checkbox.md) | v0.1 確定 |
 | Radio Group | [radio-group.md](radio-group.md) | v0.1 確定 |
 | Switch | [switch.md](switch.md) | v0.1 確定 |
-| Badge | [badge.md](badge.md) | 初期実装 |
-| Avatar | [avatar.md](avatar.md) | 初期実装 |
-| Tooltip | [tooltip.md](tooltip.md) | 初期実装 |
-| Alert | [alert.md](alert.md) | 初期実装 |
-| Toast | [toast.md](toast.md) | 初期実装 |
-| Skeleton | [skeleton.md](skeleton.md) | 初期実装 |
-| Progress | [progress.md](progress.md) | 初期実装 |
+| Badge | [badge.md](badge.md) | v0.1 確定 |
+| Avatar | [avatar.md](avatar.md) | v0.1 確定 |
+| Tooltip | [tooltip.md](tooltip.md) | v0.1 確定 |
+| Alert | [alert.md](alert.md) | v0.1 確定 |
+| Toast | [toast.md](toast.md) | v0.1 確定 |
+| Skeleton | [skeleton.md](skeleton.md) | v0.1 確定 |
+| Progress | [progress.md](progress.md) | v0.1 確定 |
 
 入力系コンポーネントに共通する判断基準は [forms.md](forms.md)、Feedback コンポーネントの判断基準は [feedback.md](feedback.md) にまとめている。
 

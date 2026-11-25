@@ -1,4 +1,5 @@
 import type * as React from "react"
+import { createContext, useContext } from "react"
 import { Toast as ToastPrimitive } from "@base-ui/react/toast"
 import { CircleAlert, CircleCheck, Info, TriangleAlert, X } from "lucide-react"
 
@@ -30,9 +31,17 @@ const icons = {
   destructive: { Icon: CircleAlert, className: "text-destructive" },
 } as const
 
-// アプリ全体を囲む。limit を超えた古い通知は隠れる。
-function ToastProvider({ limit = 3, ...props }: ToastPrimitive.Provider.Props) {
-  return <ToastPrimitive.Provider limit={limit} {...props} />
+const TOAST_LIMIT = 3
+const LimitContext = createContext(TOAST_LIMIT)
+
+// アプリ全体を囲む。同時に表示する通知は limit 件まで。
+// Base UI は limit を超えた古い通知を隠す（data-limited、inert）。隠れた通知は、表示中の通知が閉じると再び表示される。
+function ToastProvider({ limit = TOAST_LIMIT, ...props }: ToastPrimitive.Provider.Props) {
+  return (
+    <LimitContext.Provider value={limit}>
+      <ToastPrimitive.Provider limit={limit} {...props} />
+    </LimitContext.Provider>
+  )
 }
 
 // 通知を表示する場所。デスクトップは右下、モバイルは下中央。
@@ -114,22 +123,53 @@ type ToastOptions = {
   action?: { label: string; onClick: () => void }
 }
 
+// 自動で消えない通知（失敗、操作つき）。表示上限によって隠さないように扱う。
+const isPersistent = (t: ToastPrimitive.Root.ToastObject) => t.timeout === 0
+
+let sequence = 0
+
 // 通知を出す。shadcn/ui の toast() に相当する。
+// 表示上限（3 件）に達しているときは、次の順で扱う。
+// - 自動で消える通知（成功など）があれば、そのうち最も古いものを閉じて、新しい通知を表示する。
+// - すべてが自動で消えない通知で、新しい通知が自動で消える通知なら、新しい通知は表示しない（undefined を返す）。
+//   失敗や操作つきの通知を、成功の通知で隠さないため。結果は画面にも示す（docs/web/components/toast.md）。
+// - 新しい通知も自動で消えない通知なら、Base UI が最も古い通知を一時的に隠す。表示中の通知が閉じると再び表示される。
 function useToast() {
   const manager = ToastPrimitive.useToastManager()
-  const toast = ({ variant = "neutral", title, description, id, timeout, action }: ToastOptions) =>
-    manager.add({
-      id,
+  const limit = useContext(LimitContext)
+  const toast = ({ variant = "neutral", title, description, id, timeout, action }: ToastOptions) => {
+    const effectiveTimeout = timeout ?? (action ? 0 : TOAST_TIMEOUT[variant])
+    const visible = manager.toasts.filter((t) => t.transitionStatus !== "ending" && !t.limited)
+    const updating = id !== undefined && visible.some((t) => t.id === id)
+    if (!updating && visible.length >= limit) {
+      // toasts は新しい順。最も古い自動で消える通知を探す
+      const oldestTransient = [...visible].reverse().find((t) => !isPersistent(t))
+      if (oldestTransient) manager.close(oldestTransient.id)
+      else if (effectiveTimeout !== 0) return undefined
+    }
+    const toastId = id ?? `flow-toast-${++sequence}`
+    return manager.add({
+      id: toastId,
       title,
       description,
       type: variant,
-      timeout: timeout ?? (action ? 0 : TOAST_TIMEOUT[variant]),
+      timeout: effectiveTimeout,
       // 失敗は即時に読み上げ、それ以外は他の読み上げを妨げない。
       priority: variant === "destructive" ? "high" : "low",
-      actionProps: action ? { children: action.label, onClick: action.onClick } : undefined,
+      // 操作をしたら、その通知を閉じる。
+      actionProps: action
+        ? {
+            children: action.label,
+            onClick: () => {
+              action.onClick()
+              manager.close(toastId)
+            },
+          }
+        : undefined,
     })
+  }
   return { toast, dismiss: manager.close, toasts: manager.toasts }
 }
 
-export { TOAST_TIMEOUT, ToastProvider, Toaster, useToast }
+export { TOAST_LIMIT, TOAST_TIMEOUT, ToastProvider, Toaster, useToast }
 export type { ToastOptions, ToastVariant }

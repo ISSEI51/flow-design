@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { BellRing, CircleAlert } from "lucide-react"
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -46,6 +47,31 @@ export function AlertPage() {
         <Row label="説明だけ">
           <Alert>
             <AlertDescription>請求書の控えは 7 年間保存されます。</AlertDescription>
+          </Alert>
+        </Row>
+      </Section>
+
+      <Section title="アイコンの指定" lead="既定では種類のアイコンを自動で表示する。shadcn/ui のように子要素でアイコンを渡しても重複しない。">
+        <Row label="種類だけ" note='variant="destructive"'>
+          <Alert data-testid="alert-icon-auto" variant="destructive">
+            <AlertTitle>請求書を送信できませんでした</AlertTitle>
+          </Alert>
+        </Row>
+        <Row label="icon で指定" note="icon={<BellRing />}">
+          <Alert data-testid="alert-icon-prop" variant="info" icon={<BellRing />}>
+            <AlertTitle>締め日の 3 日前です</AlertTitle>
+          </Alert>
+        </Row>
+        <Row label="子要素で指定" note="shadcn/ui と同じ書き方">
+          <Alert data-testid="alert-icon-child" variant="destructive">
+            <CircleAlert />
+            <AlertTitle>請求書を送信できませんでした</AlertTitle>
+            <AlertDescription>メールサーバーに接続できません。</AlertDescription>
+          </Alert>
+        </Row>
+        <Row label="アイコンなし" note="icon={false}">
+          <Alert data-testid="alert-icon-none" icon={false}>
+            <AlertTitle>請求書の控えは 7 年間保存されます</AlertTitle>
           </Alert>
         </Row>
       </Section>

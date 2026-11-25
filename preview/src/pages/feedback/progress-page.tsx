@@ -77,6 +77,11 @@ export function ProgressPage() {
             </p>
           </div>
         </Row>
+        <Row label="失敗（進捗が不明だった場合）" note="失敗と中断では動かさない">
+          <Progress data-testid="progress-error-indeterminate" value={null} status="error" className="max-w-md">
+            <ProgressLabel>送信の準備を中止しました</ProgressLabel>
+          </Progress>
+        </Row>
         <Row label="中断">
           <div className="w-full max-w-md">
             <Progress data-testid="progress-paused" value={30} status="paused">
@@ -84,6 +89,30 @@ export function ProgressPage() {
               <ProgressValue />
             </Progress>
           </div>
+        </Row>
+      </Section>
+
+      <Section title="範囲と値" lead="min と max を変えられる。範囲外の値は範囲の端に収め、数値でない値は進捗不明として扱う。">
+        <Row label="min 0、max 40" note="value=10 → 25%">
+          <Progress data-testid="progress-range" min={0} max={40} value={10} className="max-w-md">
+            <ProgressLabel>請求書を送信しています</ProgressLabel>
+            <ProgressValue />
+          </Progress>
+        </Row>
+        <Row label="範囲外" note="value=-20 → 0%">
+          <Progress data-testid="progress-under" value={-20} className="max-w-md">
+            <ProgressLabel>請求書を送信しています</ProgressLabel>
+            <ProgressValue />
+          </Progress>
+        </Row>
+        <Row label="数値でない" note="value=NaN → 進捗不明">
+          <Progress data-testid="progress-nan" value={Number.NaN} className="max-w-md">
+            <ProgressLabel>送信の準備をしています</ProgressLabel>
+          </Progress>
+        </Row>
+        <Row label="円形の 0%">
+          <ProgressCircle data-testid="circle-zero" value={0} aria-label="送信の進み具合" />
+          <ProgressCircle data-testid="circle-range" min={0} max={40} value={30} aria-label="送信の進み具合（件数）" />
         </Row>
       </Section>
 

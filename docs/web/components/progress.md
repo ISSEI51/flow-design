@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/progress.tsx`](../../../registry/components/ui/progress.tsx) |
 | 元にした実装 | shadcn/ui の Progress（Base UI 版）。円形は Base UI の Progress で作った |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -56,7 +56,11 @@
 - `role="progressbar"`、`aria-valuenow`、`aria-valuemin`、`aria-valuemax` は Base UI が付ける。名前は `ProgressLabel`、ラベルがない円形は `aria-label` で付ける。
 - 円形の中央の進捗率は、`aria-valuenow` と重複するため読み上げない。
 - 値の変化は 240ms で追う。動きを減らす設定では即時に変わる。
-- 不明の帯の動きは Web Animations API で作る。CSS のキーフレームをテーマに追加しないため。動きを減らす設定では動かさず、中央に表示する。
+- 不明の帯の動きは Web Animations API で作る。CSS のキーフレームをテーマに追加しないため。動きを減らす設定では動かさず、中央に表示する。表示中に設定を変えた場合も追従する。
+- 失敗と一時停止では、進捗が不明でも動かさない。処理が続いているように見せないため。
+- `min` と `max` で範囲を変えられる（例：`max={40}` で件数をそのまま渡す）。
+- 範囲外の値は `min`〜`max` に収める。数値でない値（`NaN`、`Infinity`）は進捗不明として扱う。範囲外の値を渡さないことは製品の責務であり、収めるのは表示が崩れないための処理である。
+- 円形の 0% では、線の端の丸い点を表示しない。
 
 ```tsx
 <Progress value={Math.floor((done / total) * 100)}>

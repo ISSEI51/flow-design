@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react"
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 
 import { cn } from "@/lib/utils"
@@ -10,16 +11,25 @@ import { cn } from "@/lib/utils"
 
 const TOOLTIP_DELAY = 700
 
+// 表示の遅延の優先順位：TooltipTrigger の delay > TooltipProvider の delay > 700ms。
+// Trigger に既定値を書くと Provider の設定を上書きしてしまうため、Provider の値を文脈で受け渡す。
+const DelayContext = createContext<number | undefined>(undefined)
+
 function TooltipProvider({ delay = TOOLTIP_DELAY, ...props }: TooltipPrimitive.Provider.Props) {
-  return <TooltipPrimitive.Provider data-slot="tooltip-provider" delay={delay} {...props} />
+  return (
+    <DelayContext.Provider value={delay}>
+      <TooltipPrimitive.Provider data-slot="tooltip-provider" delay={delay} {...props} />
+    </DelayContext.Provider>
+  )
 }
 
 function Tooltip(props: TooltipPrimitive.Root.Props) {
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 
-function TooltipTrigger({ delay = TOOLTIP_DELAY, ...props }: TooltipPrimitive.Trigger.Props) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" delay={delay} {...props} />
+function TooltipTrigger({ delay, ...props }: TooltipPrimitive.Trigger.Props) {
+  const providerDelay = useContext(DelayContext)
+  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" delay={delay ?? providerDelay ?? TOOLTIP_DELAY} {...props} />
 }
 
 function TooltipContent({
@@ -61,4 +71,4 @@ function TooltipContent({
   )
 }
 
-export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
+export { TOOLTIP_DELAY, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }

@@ -16,7 +16,7 @@ import { PageHeader } from "../../layout/page-header"
 
 // 7 種類の Feedback を組み合わせた業務画面の例：11 月分の請求書の一括送信。
 // - 読み込み中は Skeleton（一覧の aria-busy と状態の文字で伝える）
-// - 送付先が未設定の顧客は Alert（継続して示す注意）と Badge
+// - 送付先が未設定の顧客は Alert（継続して示す注意）と Badge。Alert は一覧の中に置き、操作の欄を動かさない
 // - 送信中は Progress（実際に処理した件数から進捗率を出す）
 // - 送信の結果は Toast。失敗は Toast だけに頼らず、一覧の Badge と件数で残す
 // - アイコンだけの操作は Tooltip で補足する
@@ -149,19 +149,8 @@ export function BillingPage() {
         </AvatarGroup>
       </div>
 
-      {!loading && noAddress > 0 && (
-        <Alert variant="warning" className="mt-8" data-testid="billing-alert">
-          <AlertTitle>送付先が未設定の顧客が {noAddress} 件あります</AlertTitle>
-          <AlertDescription>送付先を設定するまで、これらの請求書は送信できません。</AlertDescription>
-          <AlertAction>
-            <Button size="sm" variant="secondary" onClick={() => setFilter("no-address")}>
-              未設定の請求書を表示
-            </Button>
-          </AlertAction>
-        </Alert>
-      )}
 
-      <div className="mt-8 flex flex-wrap items-end justify-between gap-4">
+      <div className="mt-8 flex flex-wrap items-end justify-between gap-4" data-testid="billing-toolbar">
         <Field className="w-56">
           <FieldLabel>表示</FieldLabel>
           <Select items={filters} value={filter} onValueChange={(v) => setFilter(v as string)}>
@@ -194,6 +183,19 @@ export function BillingPage() {
         <p role="status" className="sr-only">
           {loading ? "請求書の一覧を読み込んでいます" : ""}
         </p>
+        {/* 読み込みの結果として出る注意は、操作の欄（表示の切り替え、送信）より下に置く。
+            読み込みが終わっても、操作の欄の位置は動かない。 */}
+        {!loading && noAddress > 0 && (
+        <Alert variant="warning" className="mb-6" data-testid="billing-alert">
+          <AlertTitle>送付先が未設定の顧客が {noAddress} 件あります</AlertTitle>
+          <AlertDescription>送付先を設定するまで、これらの請求書は送信できません。</AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="secondary" onClick={() => setFilter("no-address")}>
+              未設定の請求書を表示
+            </Button>
+          </AlertAction>
+        </Alert>
+      )}
         <ul>
           {(loading ? initial : shown).map((inv) => (
             <li key={inv.id} className="flex h-16 items-center gap-3 border-b border-border">
