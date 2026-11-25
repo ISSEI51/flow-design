@@ -168,6 +168,8 @@ Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn
 | `muted-foreground` / `muted`、`accent` | 4.68 | 4.5 以上 |
 | `primary-foreground` / `primary` | 15.13 | 4.5 以上 |
 | `primary-foreground` / `primary/90`（ホバー） | 11.08 | 4.5 以上 |
+| `primary-foreground` / `primary/80`（押下） | 7.89 | 4.5 以上 |
+| `primary-foreground` / `muted` の上の `primary/90`、`primary/80` | 11.25、8.14 | 4.5 以上 |
 | `secondary-foreground` / `secondary` | 13.88 | 4.5 以上 |
 | `destructive` / `background` | 5.19 | 4.5 以上 |
 | `destructive` / `muted` | 4.76 | 4.5 以上 |
@@ -186,7 +188,7 @@ Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn
 | `ring/50` / `background`（shadcn/ui の標準の部品） | 3.09 | 3 以上（非テキスト） |
 | `ring/50` / `muted`（shadcn/ui の標準の部品） | 3.02 | 3 以上（非テキスト） |
 
-半透明の色（`primary/90`、`ring/50`）は、実際に下にある色と合成してから比を計算している。
+半透明の色（`primary/90`、`primary/80`、`ring/50`）は、実際に下にある色（`background` か `muted`）と合成してから比を計算している。
 
 `ring/50` は、`muted` の上で基準との差が 0.02 しかない。`ring` を明るくしたり、`muted` を暗くしたりすると、基準を下回る。Flow Design のコンポーネントは不透明な 2px の `focus-ring` を使うため、この差の影響を受けない。shadcn/ui の標準の部品で余裕を持たせる場合は、色を変えずに次のどちらかを選ぶ。
 
@@ -277,7 +279,7 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 | フォント | `--fd-font-sans` |
 | 角丸の大きさ | `--fd-radius-xs`〜`--fd-radius-2xl`。ボタンの角丸だけを変える場合は、shadcn/ui と同じく `--radius` でもよい |
 
-上書きした後は、「検証の方法」の 2 つのスクリプトで確認する。
+上書きした後は、「検証の方法」の 2 つのスクリプトで確認する。`primary` は、Button のホバー（`primary/90`）と押下（`primary/80`）でも 4.5:1 以上になる色を選ぶ。たとえば #1d4ed8 は、押下が白の上で 4.42:1 になるため使えない。
 
 角丸は shadcn/ui の既定のように `--radius` からの倍率で計算していない。Flow Design の段階（4、8、12、14、20、24px）が倍率では表せないためである。
 
@@ -311,7 +313,7 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 | 削除ボタンのホバー | `verify-theme.mjs`（Playwright の Chromium 159） | 面が rgb(190, 32, 32)（`destructive` を 10% 暗くした色）になった |
 | CSS 変数の上書き | `verify-theme.mjs`（Playwright の Chromium 159） | `--fd-radius-md`、`--fd-radius-xl`、`--fd-radius-lg`、`--radius`、`--primary`、`--fd-neutral-500`、`--control-height`、`--table-row-height`、`--focus-ring-width`、`--icon-stroke-width` の上書きが、計算後のスタイルに反映された。`--fd-radius-md` の上書きで、他の角丸は変わらなかった |
 | 参照関係 | `check-contrast.mjs` | 63 の変数で、未定義と循環はない |
-| コントラスト | `check-contrast.mjs` | 32 の組み合わせがすべて基準を満たした |
+| コントラスト | `check-contrast.mjs` | 35 の組み合わせがすべて基準を満たした |
 | 動きを減らす設定 | `verify-theme.mjs` | `--duration-slow` と `--duration-layout` が 0ms になり、`--duration-fast` は 120ms のまま |
 | 表示 | ボタン、入力欄、メニュー、ダイアログ、テーブルを並べたページを Chromium で表示（v0.1 の作成時） | 余白、文字、角丸、高さの段階が意図どおりに表示された |
 
@@ -325,7 +327,25 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 
 shadcn/ui の `cn()` は tailwind-merge で重複するクラスを取り除く。tailwind-merge は、テーマが追加したクラス名を知らないため、`text-ui text-primary-foreground` の `text-ui` を文字色のクラスとみなして削除する。Button の実装で確認した。
 
-[`registry/lib/utils.ts`](../../registry/lib/utils.ts) の `cn()` は、`text-*`（文字の 8 段階）、`shadow-*`（影の 3 段階）、`h-control` などの高さ、`ease-*` を tailwind-merge に登録している。製品は、shadcn/ui の `lib/utils.ts` をこのファイルに置き換える。テーマにクラス名を追加したときは、このファイルにも追加する。
+[`registry/lib/tailwind-merge.ts`](../../registry/lib/tailwind-merge.ts) に、テーマが追加したクラス名（文字の 8 段階、影の 3 段階、`control` と `table-row` の高さ、`ease-*`）を登録する設定をまとめている。製品の状況に応じて、次のどちらかで使う。
+
+| 製品の状況 | 方法 |
+| --- | --- |
+| `lib/utils.ts` を変更していない | [`registry/lib/utils.ts`](../../registry/lib/utils.ts) をそのまま使う |
+| `lib/utils.ts` に独自の tailwind-merge の設定や関数がある | ファイルを置き換えず、`extendTailwindMerge` の引数に `withFlowDesign` を追加する |
+
+```ts
+// 製品の lib/utils.ts
+import { extendTailwindMerge } from "tailwind-merge"
+import { withFlowDesign } from "./tailwind-merge"
+
+const twMerge = extendTailwindMerge(
+  { extend: { classGroups: { /* 製品の設定 */ } } },
+  withFlowDesign
+)
+```
+
+`withFlowDesign` は tailwind-merge の `mergeConfigs` で設定を追加するため、製品の設定は残る。テーマにクラス名を追加したときは `tailwind-merge.ts` にも追加する。両者が一致していることは `preview/tests/cn.spec.ts` で確認している。
 
 ## 未定のこと
 

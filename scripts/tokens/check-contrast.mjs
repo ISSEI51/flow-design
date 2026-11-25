@@ -17,6 +17,7 @@
 //   underneath: the pair's background for a foreground, the page background
 //   (--background) for a background. This matches Tailwind's /NN modifier.
 // - "mix(token,black,NN)" is color-mix(in srgb, var(--token) NN%, black).
+// - "token/NN@surface" composites the background over --surface instead of --background.
 // - Compositing uses unrounded channel values. Pass/fail uses the unrounded ratio;
 //   the ratio is rounded to 2 decimals only in the output.
 // - Only the listed pairs are checked. Add a pair when a component uses a new
@@ -58,6 +59,8 @@ const token = (name) => hex(resolveVar(`--${name}`), `--${name}`);
 const blend = (a, b, t) => a.map((v, i) => v * t + b[i] * (1 - t));
 
 function color(spec, under) {
+  const at = spec.match(/^(.+)@([\w-]+)$/);
+  if (at) return color(at[1], token(at[2]));
   const mix = spec.match(/^mix\(([\w-]+),black,(\d+)\)$/);
   if (mix) return blend(token(mix[1]), BLACK, Number(mix[2]) / 100);
   const [name, alpha] = spec.split("/");
@@ -88,6 +91,9 @@ const pairs = [
   ["popover-foreground", "popover", 4.5, "text", "menu, popover"],
   ["primary-foreground", "primary", 4.5, "text", "primary button"],
   ["primary-foreground", "primary/90", 4.5, "text", "primary button hover"],
+  ["primary-foreground", "primary/80", 4.5, "text", "primary button active"],
+  ["primary-foreground", "primary/90@muted", 4.5, "text", "primary button hover on muted"],
+  ["primary-foreground", "primary/80@muted", 4.5, "text", "primary button active on muted"],
   ["secondary-foreground", "secondary", 4.5, "text", "secondary button"],
   ["accent-foreground", "accent", 4.5, "text", "hovered menu item"],
   ["muted-foreground", "accent", 4.5, "text", "secondary text in hovered item"],

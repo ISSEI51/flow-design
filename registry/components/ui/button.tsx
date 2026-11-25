@@ -39,7 +39,7 @@ const buttonCva = cva(
         xs: "min-h-8 gap-2 rounded-sm px-3 py-1 [&_svg:not([class*='size-'])]:size-4",
         sm: "min-h-10 gap-2 rounded-md px-4 py-2",
         default: "min-h-control gap-2 rounded-lg px-5 py-2",
-        lg: "min-h-14 gap-2 rounded-lg px-6 py-3",
+        lg: "min-h-14 gap-2 rounded-lg px-6 py-3 text-body",
         "icon-xs": "size-8 rounded-sm [&_svg:not([class*='size-'])]:size-4",
         "icon-sm": "size-10 rounded-md",
         icon: "size-control rounded-lg",

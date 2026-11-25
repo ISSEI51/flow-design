@@ -4,7 +4,7 @@ import { catalog } from "./catalog"
 
 const brands = [
   { id: "neutral", name: "標準", vars: {} },
-  { id: "blue", name: "青", vars: { "--primary": "#1d4ed8", "--primary-foreground": "#ffffff" } },
+  { id: "blue", name: "青", vars: { "--primary": "#1e40af", "--primary-foreground": "#ffffff" } },
   { id: "violet", name: "紫", vars: { "--primary": "#6d28d9", "--primary-foreground": "#ffffff" } },
 ] as const
 

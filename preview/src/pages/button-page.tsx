@@ -6,19 +6,19 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Compare, Row, Section } from "../layout/section"
 
 const variants = [
-  { variant: "default", name: "Primary", note: "画面で最も重要な操作。1 つの操作グループに原則 1 つ", label: "変更を保存" },
-  { variant: "secondary", name: "Secondary", note: "Primary を補助する操作", label: "下書きを保存" },
-  { variant: "outline", name: "Outline", note: "並べた操作の区切りを線で示す補助操作", label: "書き出す" },
-  { variant: "ghost", name: "Ghost", note: "ツールバーや行の中の、主張を抑えた操作", label: "編集" },
-  { variant: "destructive", name: "Destructive", note: "削除など、取り消せない操作", label: "削除する" },
-  { variant: "link", name: "Link", note: "文章の中で、リンクのように見せる操作", label: "詳細を表示" },
+  { variant: "default", name: "Primary", note: "最も重要な操作。1 つの操作グループに原則 1 つ", label: "変更を保存" },
+  { variant: "secondary", name: "Secondary", note: "次に重要な操作。補助操作の標準", label: "下書きを保存" },
+  { variant: "outline", name: "Outline", note: "操作できる範囲を線で示す必要がある補助操作", label: "書き出す" },
+  { variant: "ghost", name: "Ghost", note: "控えめな操作、繰り返し並ぶ操作", label: "編集" },
+  { variant: "destructive", name: "Destructive", note: "削除など、危険な操作", label: "削除する" },
+  { variant: "link", name: "Link", note: "文章の中の操作", label: "詳細を表示" },
 ] as const
 
 const sizes = [
   { size: "xs", icon: "icon-xs", name: "Compact", px: "32px", note: "高密度の表、行の中の操作" },
   { size: "sm", icon: "icon-sm", name: "Small", px: "40px", note: "フィルターなど、画面の補助的な操作" },
   { size: "default", icon: "icon", name: "Default", px: "48px", note: "標準。フォームとダイアログ" },
-  { size: "lg", icon: "icon-lg", name: "Large", px: "56px", note: "画面の目的そのものになる操作" },
+  { size: "lg", icon: "icon-lg", name: "Large", px: "56px", note: "画面の目的そのものになる操作。文字は 16px" },
 ] as const
 
 function useLoadingDemo() {
@@ -36,6 +36,7 @@ function useLoadingDemo() {
 
 export function ButtonPage() {
   const demo = useLoadingDemo()
+  const form = useLoadingDemo()
   const [clicks, setClicks] = useState(0)
 
   return (
@@ -46,7 +47,7 @@ export function ButtonPage() {
         処理を実行する操作。ページの移動にはリンクを使う。
       </p>
 
-      <Section title="種類" lead="重要度の高い順に並べている。">
+      <Section title="種類" lead="重要度の高い順に並べている。補助操作に迷ったら Secondary を使う。">
         {variants.map((v) => (
           <Row key={v.variant} label={v.name} note={`variant="${v.variant}"　${v.note}`}>
             <Button data-testid={`variant-${v.variant}`} variant={v.variant}>
@@ -59,7 +60,7 @@ export function ButtonPage() {
         ))}
       </Section>
 
-      <Section title="大きさ" lead="文字の大きさは 14px のまま、高さと左右の余白だけを変える。">
+      <Section title="大きさ" lead="Compact から Default までは文字を 14px、Large だけ 16px にする。">
         {sizes.map((s) => (
           <Row key={s.size} label={`${s.name}　${s.px}`} note={`size="${s.size}"　${s.note}`}>
             <Button data-testid={`size-${s.size}`} size={s.size}>
@@ -86,8 +87,8 @@ export function ButtonPage() {
           </span>
         </Row>
         <Row label="フォーカス" note="Tab キーで移動する">
-          <Button variant="outline">前へ</Button>
-          <Button variant="outline">次へ</Button>
+          <Button variant="secondary">前へ</Button>
+          <Button variant="secondary">次へ</Button>
         </Row>
         <Row label="無効" note="押せない理由を、近くの文字で示す">
           <Button data-testid="state-disabled" disabled onClick={() => setClicks((c) => c + 1)}>
@@ -103,6 +104,32 @@ export function ButtonPage() {
             送信した回数：{demo.count}
           </span>
         </Row>
+        <Row label="フォームの送信" note="Enter キーでも送信できる。処理中は二重に送信しない">
+          <form
+            data-testid="form"
+            className="flex w-full flex-wrap items-end gap-4"
+            onSubmit={(e) => {
+              e.preventDefault()
+              form.run()
+            }}
+          >
+            <label className="block w-64">
+              <span className="text-ui font-medium">メールアドレス</span>
+              <input
+                data-testid="form-input"
+                type="email"
+                defaultValue="yamada@example.com"
+                className="mt-2 h-control w-full rounded-md border border-input px-4 text-body focus-visible:focus-ring"
+              />
+            </label>
+            <Button data-testid="form-submit" type="submit" loading={form.loading}>
+              招待を送信
+            </Button>
+          </form>
+          <p role="status" data-testid="form-status" className="w-full text-ui text-muted-foreground">
+            {form.loading ? "招待を送信しています" : form.count > 0 ? `招待を送信しました（${form.count} 回）` : ""}
+          </p>
+        </Row>
         <Row label="処理中（固定）" note="表示の確認用">
           <Button data-testid="state-loading-fixed" loading>
             請求書を送信
@@ -115,10 +142,10 @@ export function ButtonPage() {
 
       <Section title="アイコン" lead="アイコンは 20px、線の太さは 1.75。文字との間隔は 8px。">
         <Row label="文字だけ">
-          <Button variant="outline">書き出す</Button>
+          <Button variant="secondary">書き出す</Button>
         </Row>
         <Row label="前にアイコン" note="操作の種類を補足する">
-          <Button data-testid="icon-start" variant="outline">
+          <Button data-testid="icon-start" variant="secondary">
             <Download />
             書き出す
           </Button>
@@ -166,7 +193,7 @@ export function ButtonPage() {
       <Section title="使用例">
         <Row label="フォームの操作" note="Primary は 1 つ。右端に置く">
           <div className="flex w-full justify-end gap-2">
-            <Button variant="ghost">キャンセル</Button>
+            <Button variant="secondary">キャンセル</Button>
             <Button>変更を保存</Button>
           </div>
         </Row>
@@ -174,7 +201,7 @@ export function ButtonPage() {
           <div className="w-full">
             <p className="text-body">「山田商事」を削除すると、契約の履歴も削除されます。</p>
             <div className="mt-6 flex justify-end gap-2">
-              <Button variant="outline">キャンセル</Button>
+              <Button variant="secondary">キャンセル</Button>
               <Button variant="destructive">
                 <Trash2 />
                 山田商事を削除
@@ -190,16 +217,36 @@ export function ButtonPage() {
             <Button size="icon-sm" variant="ghost" aria-label="絞り込み">
               <Filter />
             </Button>
-            <Button size="sm" variant="outline">
+            <Button size="sm" variant="secondary">
               <Plus />
               顧客を追加
             </Button>
           </div>
         </Row>
-        <Row label="ページの移動" note="見た目をそろえる場合も <a> を使う">
-          <a href="#/button" className={buttonVariants({ variant: "outline" })}>
+        <Row label="面の上の補助操作" note="Secondary は面と同じ色になるため、Outline で範囲を示す">
+          <div className="flex w-full flex-wrap items-center justify-between gap-4 rounded-xl bg-muted p-6">
+            <p className="text-ui">CSV ファイルから顧客を読み込めます。</p>
+            <Button data-testid="outline-on-muted" variant="outline">
+              ファイルを選ぶ
+            </Button>
+          </div>
+        </Row>
+        <Row label="ページの移動" note="見た目をそろえる場合も <a> を使う。Button ではない">
+          <a data-testid="link-outline" href="#/button?from=link" className={buttonVariants({ variant: "outline" })}>
             顧客一覧へ
           </a>
+          <a data-testid="link-ghost" href="#/button?from=link" className={buttonVariants({ variant: "ghost" })}>
+            請求書一覧へ
+          </a>
+          <div className="w-64" data-testid="link-long-container">
+            <a
+              data-testid="link-long"
+              href="#/button?from=link"
+              className={buttonVariants({ variant: "secondary", className: "w-full" })}
+            >
+              今月の請求書と入金の状況をまとめて確認する
+            </a>
+          </div>
         </Row>
       </Section>
 
@@ -214,11 +261,43 @@ export function ButtonPage() {
           badNote="Primary が 2 つあり、どちらが主要な操作かわからない。"
           good={
             <>
-              <Button variant="ghost">キャンセル</Button>
+              <Button variant="secondary">キャンセル</Button>
               <Button>変更を保存</Button>
             </>
           }
           goodNote="主要な操作だけを Primary にする。"
+        />
+        <Compare
+          bad={
+            <>
+              <Button variant="outline">キャンセル</Button>
+              <Button variant="outline">下書きを保存</Button>
+              <Button>公開する</Button>
+            </>
+          }
+          badNote="意味のない境界線が並び、画面の静けさを損なう。"
+          good={
+            <>
+              <Button variant="secondary">キャンセル</Button>
+              <Button variant="secondary">下書きを保存</Button>
+              <Button>公開する</Button>
+            </>
+          }
+          goodNote="補助操作は Secondary を標準にする。"
+        />
+        <Compare
+          bad={
+            <div className="rounded-xl bg-muted p-4">
+              <Button variant="secondary">ファイルを選ぶ</Button>
+            </div>
+          }
+          badNote="面と同じ色になり、押せる範囲がわからない。"
+          good={
+            <div className="rounded-xl bg-muted p-4">
+              <Button variant="outline">ファイルを選ぶ</Button>
+            </div>
+          }
+          goodNote="範囲を示す必要がある場所では Outline を使う。"
         />
         <Compare
           bad={<Button>実行</Button>}
@@ -228,13 +307,13 @@ export function ButtonPage() {
         />
         <Compare
           bad={
-            <Button size="icon" variant="outline" aria-label="要約を作成">
+            <Button size="icon" variant="secondary" aria-label="要約を作成">
               <Sparkles />
             </Button>
           }
           badNote="アイコンの意味が広く共有されていない。"
           good={
-            <Button variant="outline">
+            <Button variant="secondary">
               <Sparkles />
               要約を作成
             </Button>

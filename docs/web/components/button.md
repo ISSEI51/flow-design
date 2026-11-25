@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/button.tsx`](../../../registry/components/ui/button.tsx) |
 | 元にした実装 | shadcn/ui の Button（Base UI 版、base-nova スタイル） |
 | 依存 | `@base-ui/react`、`class-variance-authority`、`lucide-react`、[`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装。人間による表示の確認を経て確定する |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -31,26 +31,30 @@ Base UI の Button はボタンとしての役割（`role="button"`、キー操�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/button-hierarchy-dark.svg">
-  <img alt="ボタンの種類を、目立つものから控えめなものの順に並べた図。Primary は主要な操作、Secondary は補助の操作、Outline は並べる補助操作、Ghost は控えめな操作、Link は文中の操作。Destructive は重要度とは別の軸で、取り消せない操作に使う。" src="../../diagrams/button-hierarchy-light.svg">
+  <img alt="ボタンの種類を、目立つものから控えめなものの順に並べた図。Primary は最も重要な操作、Secondary は次に重要な操作、Outline は範囲を示す補助操作、Ghost は控えめな操作や繰り返す操作、Link は文章中の操作。Destructive は重要度とは別の軸で、危険な操作に使う。" src="../../diagrams/button-hierarchy-light.svg">
 </picture>
 
-1. 取り消せない操作か。そうであれば Destructive。
-2. 操作グループの中で最も重要な操作か。そうであれば Primary。Primary は 1 つの操作グループに原則 1 つ。
-3. それ以外の操作は、周りの要素との関係で選ぶ。
-   - Primary と並べる補助操作：Secondary か Outline
-   - ツールバーや表の行の中で繰り返す操作：Ghost
-   - 文章の中の操作：Link
+| 種類 | 判断の基準 |
+| --- | --- |
+| Primary | 最も重要な操作。1 つの操作グループに原則 1 つ |
+| Secondary | 次に重要な操作。補助操作の標準 |
+| Outline | 操作できる範囲を、線で明確に示す必要がある補助操作 |
+| Ghost | 控えめな操作。ツールバーや表の行のように、繰り返し並ぶ操作 |
+| Link | 文章の中の操作 |
+| Destructive | 削除など、取り消せない危険な操作 |
 
-Secondary と Outline はどちらも補助操作に使う。背景のある場所や、同じ高さの面が並ぶ場所では、面の色で区切る Secondary を使う。白い背景の上で他の操作と並べる場合は、線で形を示す Outline を使う。同じ操作グループの中では、どちらか一方にそろえる。
+補助操作に迷った場合は Secondary を使う。Outline を使うのは、境界線に意味がある場合だけにする。たとえば、`muted` の面の上では Secondary の面が背景と同じ色になり、押せる範囲がわからなくなるため、Outline を使う。必要のない境界線は増やさない（美的基準 03）。
 
 ### 大きさの選び方
 
-| 大きさ | `size` | 高さ | 使う場面 |
-| --- | --- | ---: | --- |
-| Compact | `xs` / `icon-xs` | 32px | 高密度の表、行の中の操作 |
-| Small | `sm` / `icon-sm` | 40px | フィルター、ツールバーなど画面の補助的な操作 |
-| Default | `default` / `icon` | 48px | 標準。フォーム、ダイアログ |
-| Large | `lg` / `icon-lg` | 56px | 画面の目的そのものになる操作（申し込みなど） |
+| 大きさ | `size` | 高さ | 文字 | 角丸 | 使う場面 |
+| --- | --- | ---: | ---: | ---: | --- |
+| Compact | `xs` / `icon-xs` | 32px | 14px | 8px | 高密度の表、行の中の操作 |
+| Small | `sm` / `icon-sm` | 40px | 14px | 12px | フィルター、ツールバーなど画面の補助的な操作 |
+| Default | `default` / `icon` | 48px | 14px | 14px | 標準。フォーム、ダイアログ |
+| Large | `lg` / `icon-lg` | 56px | 16px | 14px | 画面の目的そのものになる操作（申し込みなど） |
+
+文字の太さは、すべての大きさで 500 である。Large の文字は `text-body`（16px）を使う。アイコンだけの `icon-lg` は文字を持たないため、文字の指定を変えていない。
 
 同じ操作グループの中では、大きさをそろえる。タッチ操作が主な画面では Default 以上を使う。
 
@@ -64,14 +68,16 @@ Secondary と Outline はどちらも補助操作に使う。背景のある場�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/button-anatomy-dark.svg">
-  <img alt="ボタンの構造。1 コンテナは高さ 48px、角丸 14px、左右の余白 20px、影なし。2 アイコンは任意で、20px、線の太さ 1.75、文字との間隔 8px。3 ラベルは 14px、太さ 500 で、押した結果がわかる言葉にする。4 フォーカスの枠は 2px で、2px 離し、キーボード操作のときだけ表示する。アイコンだけのボタンは 48 × 48px で、aria-label が必須。" src="../../diagrams/button-anatomy-light.svg">
+  <img alt="Default の大きさのボタンの構造。1 コンテナは高さ 48px、角丸 14px、左右の余白 20px、影なし。2 アイコンは任意で、20px、線の太さ 1.75、文字との間隔 8px。3 ラベルは 14px、太さ 500 で、押した結果がわかる言葉にする。4 フォーカスの枠は 2px で、2px 離し、キーボード操作のときだけ表示する。アイコンだけのボタンは 48 × 48px で、aria-label が必須。" src="../../diagrams/button-anatomy-light.svg">
 </picture>
+
+図は Default の大きさを示している。
 
 | 部分 | トークン |
 | --- | --- |
 | 高さ | `h-control`（`--control-height`）など、Sizing の段階 |
 | 角丸 | `rounded-lg`（`--radius`）。Compact は `rounded-sm`、Small は `rounded-md` |
-| 文字 | `text-ui` と `font-medium` |
+| 文字 | `text-ui` と `font-medium`。Large は `text-body` |
 | アイコン | `size-5`、線の太さは `--icon-stroke-width` |
 | 間隔 | `gap-2` |
 | フォーカス | `focus-visible:focus-ring` |
@@ -83,16 +89,27 @@ DOM は、Base UI の `<button>` の中に、ラベルとアイコンを入れ�
 
 ### 種類
 
-| 種類 | `variant` | 面 | 文字 | ホバー |
-| --- | --- | --- | --- | --- |
-| Primary | `default` | `primary` | `primary-foreground` | 面を 10% 明るくする（`bg-primary/90`） |
-| Secondary | `secondary` | `secondary` | `secondary-foreground` | 面に文字色を 6% 混ぜる |
-| Outline | `outline` | `background`、枠は `input` | `foreground` | 面を `accent` にする |
-| Ghost | `ghost` | なし | `foreground` | 面を `accent` にする |
-| Destructive | `destructive` | `destructive` | `destructive-foreground` | 面を 10% 暗くする |
-| Link | `link` | なし。常に下線 | `primary` | 下線を 2px にする |
+| 種類 | `variant` | 面 | 文字 | ホバー | 押下 |
+| --- | --- | --- | --- | --- | --- |
+| Primary | `default` | `primary` | `primary-foreground` | `bg-primary/90` | `bg-primary/80` |
+| Secondary | `secondary` | `secondary` | `secondary-foreground` | 面に文字色を 6% 混ぜる | 12% 混ぜる |
+| Outline | `outline` | `background`、枠は `input` | `foreground` | 面を `accent` にする | `accent` に文字色を 6% 混ぜる |
+| Ghost | `ghost` | なし | `foreground` | 面を `accent` にする | `accent` に文字色を 6% 混ぜる |
+| Destructive | `destructive` | `destructive` | `destructive-foreground` | 面を 10% 暗くする | 20% 暗くする |
+| Link | `link` | なし。常に下線 | `primary` | 下線を 2px にする | なし |
 
 `variant` の名前は shadcn/ui と同じである。Primary は `variant="default"` で指定する。
+
+Primary のホバーと押下は、`primary` の透明度を下げて表す。標準のライトテーマでは、面が明るくなる。透明度で表すため、実際の色は下にある面によって変わる。`primary` を変える製品は、置く面の上で、通常、ホバー（90%）、押下（80%）の 3 つの状態の文字のコントラストを確認する（[tokens.md](../tokens.md#ブランドと書体の変更)）。
+
+| `primary` の例 | 通常 | ホバー | 押下 | 判定 |
+| --- | ---: | ---: | ---: | --- |
+| #262626（標準） | 15.13 | 11.08 | 7.89 | 使える |
+| #1e40af | 8.72 | 6.83 | 5.30 | 使える |
+| #6d28d9 | 7.10 | 5.88 | 4.77 | 使える |
+| #1d4ed8 | 6.70 | 5.47 | 4.42 | 押下が 4.5 に届かないため、使えない |
+
+数値は白い背景の上で、`primary-foreground` が #ffffff の場合である。
 
 Link は、周りの文章と色だけで区別しないように、常に下線を付ける（WCAG 1.4.1）。
 
@@ -111,21 +128,58 @@ Link は、周りの文章と色だけで区別しないように、常に下線
 
 ## 5. Behavior
 
-- **キー操作**：Tab で移動し、Enter と Space で実行する。Base UI の Button が担う。
-- **処理中**：`loading` を指定すると、`disabled` と `focusableWhenDisabled` を内部で指定する。クリックとキー操作を受け付けないため、同じ処理を二重に実行しない。フォーカスはボタンに残る。`aria-busy="true"` を付ける。
-- **処理中の幅**：ラベルを `opacity: 0` で残すため、ボタンの幅と高さは変わらない。アクセシブルな名前もラベルのまま変わらない。
-- **動きを減らす設定**：スピナーは `motion-safe:animate-spin` で回転する。動きを減らす設定では回転しない。
+### キー操作
+
+Tab で移動し、Enter と Space で実行する。Base UI の Button が担う。
+
+### 処理中（`loading`）
+
+`loading` を指定すると、Button は内部で `disabled` と `focusableWhenDisabled` を指定する。Base UI は、ネイティブの `disabled` ではなく `aria-disabled="true"` を付け、フォーカスできる状態を保ったままクリックを取り消す。
+
+| 確認したこと | 結果 |
+| --- | --- |
+| クリック、Enter、Space での再実行 | 実行されない |
+| フォームの送信（ボタンのクリック、入力欄での Enter） | 二重に送信されない |
+| フォーカス | ボタンに残る。入力欄で Enter を押した場合は入力欄に残る |
+| アクセシブルな名前 | ラベルのまま変わらない |
+| 見た目 | ラベルを透明にし、スピナーを表示する。幅と高さは変わらない |
+| 動きを減らす設定 | スピナーは回転しないが、表示は残る |
+| 完了後 | `aria-busy` が外れ、もう一度実行できる |
+
+Button が担うのは、処理中の再実行を防ぐことと、`aria-busy="true"` を付けることまでである。多くのスクリーンリーダーは、フォーカスしたボタンの `aria-busy` の変化を読み上げない。製品は次を担う。
+
+- 処理の開始、完了、失敗を、`role="status"` などのライブリージョンの文字で知らせる（例：「招待を送信しています」「招待を送信しました」）。
+- 失敗した場合は、原因と次の操作を文字で示す。
+- `onSubmit` などの処理の側でも、処理中に同じ処理を始めない。`form.requestSubmit()` のように、ボタンを経由しない送信は Button では防げないためである。
+
+### その他
+
 - **長いラベル**：省略せずに折り返す。高さは `min-height` で指定しているため、折り返した分だけ高くなる。日本語は `word-break: auto-phrase` で文節の区切りで折り返す（対応するブラウザのみ）。
 - **アイコンだけのボタン**：`size` が `icon-*` のとき、`aria-label` か `aria-labelledby` を TypeScript の型で必須にしている。
 - **確認の手順**：取り消せる操作には確認のダイアログを出さない。取り消せない操作だけ、結果を文章で示して確認する（原則 07）。
+
+### リンクに Button の見た目を付ける
+
+`buttonVariants()` は、Button と同じクラスを返す。ページを移動する `<a>` に付ける。
+
+| 確認したこと | 結果 |
+| --- | --- |
+| 役割 | `link` のまま。`href` を持ち、新しいタブで開ける |
+| 移動 | クリックと Enter で移動する |
+| Outline の境界線 | `input` の色、1px で表示される |
+| Ghost のホバー | 面が `accent` になる |
+| キーボードのフォーカス | `focus-ring` が表示される |
+| 長いラベル | 折り返す |
+
+`<a>` には、`loading` と `disabled` がない。処理を実行する操作には、見た目が同じでも Button を使う。
 
 ```tsx
 import { Button, buttonVariants } from "@/components/ui/button"
 
 <Button>変更を保存</Button>
-<Button variant="outline"><Download />書き出す</Button>
+<Button variant="secondary"><Download />書き出す</Button>
 <Button size="icon" variant="ghost" aria-label="検索"><Search /></Button>
-<Button loading={saving} onClick={save}>変更を保存</Button>
+<Button type="submit" loading={saving}>変更を保存</Button>
 <a href="/customers" className={buttonVariants({ variant: "outline" })}>顧客一覧へ</a>
 ```
 
@@ -133,7 +187,9 @@ import { Button, buttonVariants } from "@/components/ui/button"
 
 | 避ける | 理由 | 代わりに |
 | --- | --- | --- |
-| 1 つの操作グループに Primary を 2 つ以上置く | どれが主要な操作かわからない（原則 03） | 主要な操作だけ Primary にし、他は Secondary、Outline、Ghost にする |
+| 1 つの操作グループに Primary を 2 つ以上置く | どれが主要な操作かわからない（原則 03） | 主要な操作だけ Primary にし、他は Secondary にする |
+| 理由なく Outline を並べる | 意味のない境界線が増える（美的基準 03） | Secondary にする |
+| `muted` の面の上に Secondary を置く | 面と同じ色になり、押せる範囲がわからない | Outline にする |
 | 「OK」「実行」「はい」などのラベル | 押した結果がわからない（原則 05） | 「請求書を送信」のように結果を示す |
 | 意味が共有されていないアイコンだけのボタン | アイコンの意味を推測させる（原則 06） | 文字を添える |
 | 取り消せない操作を Primary にする | 通常の操作と区別できない | Destructive にする |

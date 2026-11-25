@@ -55,6 +55,13 @@ test.describe("tokens", () => {
       expect((await svg.boundingBox())!.width, `${icon[size]} icon`).toBe(iconPx)
       expect(await css(svg, "stroke-width")).toBe("1.75px")
     }
+    for (const [size, font] of [["xs", "14px"], ["sm", "14px"], ["default", "14px"], ["lg", "16px"]] as const) {
+      const b = page.getByTestId(`size-${size}`)
+      expect(await css(b, "font-size"), `${size} font-size`).toBe(font)
+      expect(await css(b, "font-weight"), `${size} font-weight`).toBe("500")
+    }
+    // アイコンだけの Large は、文字の大きさを変えない
+    expect(await css(page.getByTestId("size-icon-lg"), "font-size")).toBe("14px")
     const content = page.getByTestId("icon-start").locator("[data-slot=button-content]")
     expect(await css(content, "column-gap")).toBe("8px")
   })
@@ -135,11 +142,57 @@ test.describe("loading", () => {
     expect(await css(b, "opacity")).toBe("1")
   })
 
+  test("keys do not re-run while loading, state returns after completion", async ({ page }) => {
+    const b = page.getByTestId("state-loading")
+    await b.focus()
+    await page.keyboard.press("Enter")
+    await expect(b).toHaveAttribute("aria-busy", "true")
+    // 処理中であることが見てわかる：ラベルは透明、スピナーが表示される
+    await expect(b.locator("[data-slot=button-spinner] svg")).toBeVisible()
+    expect(await css(b.locator("[data-slot=button-content]"), "opacity")).toBe("0")
+    await page.keyboard.press("Space")
+    await page.keyboard.press("Enter")
+    await expect(page.getByTestId("submit-count")).toHaveText("送信した回数：1")
+    await expect(b).toBeFocused()
+    await expect(b).toHaveAccessibleName("請求書を送信")
+    // 完了後：通常の状態に戻り、もう一度実行できる
+    await expect(b).not.toHaveAttribute("aria-busy", "true", { timeout: 4000 })
+    await expect(b.locator("[data-slot=button-spinner]")).toHaveCount(0)
+    await expect(b).toBeEnabled()
+    await expect(b).toBeFocused()
+    await page.keyboard.press("Enter")
+    await expect(page.getByTestId("submit-count")).toHaveText("送信した回数：2")
+  })
+
+  test("form submission is not repeated while loading", async ({ page }) => {
+    const input = page.getByTestId("form-input")
+    const submit = page.getByTestId("form-submit")
+    const status = page.getByTestId("form-status")
+    await input.focus()
+    await page.keyboard.press("Enter")
+    await expect(submit).toHaveAttribute("aria-busy", "true")
+    await expect(status).toHaveText("招待を送信しています")
+    await expect(input).toBeFocused()
+    await page.keyboard.press("Enter")
+    await submit.click({ force: true })
+    await submit.focus()
+    await page.keyboard.press("Enter")
+    await page.keyboard.press("Space")
+    await expect(submit).not.toHaveAttribute("aria-busy", "true", { timeout: 4000 })
+    await expect(status).toHaveText("招待を送信しました（1 回）")
+    await submit.click()
+    await expect(status).toHaveText("招待を送信しています")
+    await expect(submit).toBeFocused()
+    await expect(status).toHaveText("招待を送信しました（2 回）", { timeout: 4000 })
+  })
+
   test("spinner stops under reduced motion", async ({ page }) => {
     const spinner = page.getByTestId("state-loading-fixed").locator("[data-slot=button-spinner] svg")
     expect(await css(spinner, "animation-name")).toBe("spin")
     await page.emulateMedia({ reducedMotion: "reduce" })
     expect(await css(spinner, "animation-name")).toBe("none")
+    // 回転しなくても、スピナーは表示され、処理中であることがわかる
+    await expect(spinner).toBeVisible()
   })
 })
 
@@ -167,16 +220,97 @@ test.describe("content", () => {
   })
 })
 
-test.describe("brand", () => {
-  test("changing --primary changes Primary only and keeps contrast", async ({ page }) => {
-    const secondaryBefore = await css(page.getByTestId("variant-secondary"), "background-color")
-    await page.getByRole("radio", { name: "青" }).check()
-    const b = page.getByTestId("variant-default")
-    // 色の変化には 120ms の transition があるため、終わるまで待つ。
-    await expect.poll(() => css(b, "background-color")).toBe("rgb(29, 78, 216)")
-    expect(await buttonContrast(b)).toBeGreaterThanOrEqual(4.5)
-    expect(await css(page.getByTestId("variant-secondary"), "background-color")).toBe(secondaryBefore)
+test.describe("buttonVariants on <a>", () => {
+  test("keeps link semantics and the button styles", async ({ page, isMobile }) => {
+    const outline = page.getByTestId("link-outline")
+    await expect(outline).toHaveRole("link")
+    await expect(page.getByRole("link", { name: "顧客一覧へ" })).toHaveAttribute("href", "#/button?from=link")
+    expect(sameColor(await css(outline, "border-top-color"), await token(page, "--input"))).toBe(true)
+    expect(await css(outline, "border-top-width")).toBe("1px")
+    expect((await outline.boundingBox())!.height).toBe(48)
+    if (!isMobile) {
+      const ghost = page.getByTestId("link-ghost")
+      await ghost.hover()
+      await page.waitForTimeout(250)
+      expect(sameColor(await css(ghost, "background-color"), await token(page, "--accent"))).toBe(true)
+      expect(await buttonContrast(ghost)).toBeGreaterThanOrEqual(4.5)
+    }
   })
+
+  test("keyboard focus and navigation", async ({ page }) => {
+    const outline = page.getByTestId("link-outline")
+    for (let i = 0; i < 120; i++) {
+      await page.keyboard.press("Tab")
+      if (await outline.evaluate((el) => el === document.activeElement)) break
+    }
+    await expect(outline).toBeFocused()
+    expect(await css(outline, "outline-width")).toBe("2px")
+    expect(sameColor(await css(outline, "outline-color"), await token(page, "--ring"))).toBe(true)
+    await page.keyboard.press("Enter")
+    await expect(page).toHaveURL(/#\/button\?from=link$/)
+  })
+
+  test("long link label wraps inside the container", async ({ page }) => {
+    const container = (await page.getByTestId("link-long-container").boundingBox())!
+    const a = page.getByTestId("link-long")
+    const box = (await a.boundingBox())!
+    expect(box.width).toBeLessThanOrEqual(container.width)
+    expect(box.height).toBeGreaterThan(48)
+    expect(await a.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+  })
+})
+
+test.describe("outline on a muted surface", () => {
+  test("border is distinguishable from the surface (3:1)", async ({ page }) => {
+    const b = page.getByTestId("outline-on-muted")
+    const ratio = await b.evaluate((el) => {
+      const canvas = document.createElement("canvas")
+      canvas.width = canvas.height = 1
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })!
+      const paint = (c: string) => {
+        ctx.fillStyle = c
+        ctx.fillRect(0, 0, 1, 1)
+        return Array.from(ctx.getImageData(0, 0, 1, 1).data.slice(0, 3))
+      }
+      const lum = (rgb: number[]) => {
+        const [r, g, b] = rgb.map((v) => {
+          const s = v / 255
+          return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+        })
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+      }
+      const border = lum(paint(getComputedStyle(el).borderTopColor))
+      const surface = lum(paint(getComputedStyle(el.parentElement!).backgroundColor))
+      const [hi, lo] = [border, surface].sort((x, y) => y - x)
+      return (hi + 0.05) / (lo + 0.05)
+    })
+    expect(ratio).toBeGreaterThanOrEqual(3)
+  })
+})
+
+test.describe("brand", () => {
+  for (const [name, hex, rgb] of [
+    ["青", "#1e40af", "rgb(30, 64, 175)"],
+    ["紫", "#6d28d9", "rgb(109, 40, 217)"],
+  ] as const) {
+    test(`${name} (${hex}): Primary only changes, contrast in default, hover and active`, async ({ page, isMobile }) => {
+      const secondaryBefore = await css(page.getByTestId("variant-secondary"), "background-color")
+      await page.getByRole("radio", { name }).check()
+      const b = page.getByTestId("variant-default")
+      // 色の変化には 120ms の transition があるため、終わるまで待つ。
+      await expect.poll(() => css(b, "background-color")).toBe(rgb)
+      expect(await buttonContrast(b), "default").toBeGreaterThanOrEqual(4.5)
+      expect(await css(page.getByTestId("variant-secondary"), "background-color")).toBe(secondaryBefore)
+      if (isMobile) return
+      await b.hover()
+      await page.waitForTimeout(250)
+      expect(await buttonContrast(b), "hover").toBeGreaterThanOrEqual(4.5)
+      await page.mouse.down()
+      await page.waitForTimeout(250)
+      expect(await buttonContrast(b), "active").toBeGreaterThanOrEqual(4.5)
+      await page.mouse.up()
+    })
+  }
 })
 
 test.describe("screenshots", () => {
@@ -193,6 +327,10 @@ test.describe("screenshots", () => {
       await page.getByTestId("variant-default").hover()
       await page.waitForTimeout(250)
       await page.locator("section", { hasText: "種類" }).first().screenshot({ path: `${dir}/button-variants-hover.png` })
+      await page.mouse.move(0, 0)
+      for (const [title, file] of [["大きさ", "sizes"], ["使用例", "usage"], ["良い例と悪い例", "good-bad"]] as const)
+        await page.locator("section").filter({ has: page.getByRole("heading", { level: 2, name: title }) })
+          .screenshot({ path: `${dir}/button-${file}.png` })
     }
   })
 })

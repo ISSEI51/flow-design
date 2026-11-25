@@ -529,9 +529,9 @@ def button_anatomy():
 def button_hierarchy():
     d = D()
     cw, bw, bh = 146, 124, 56
-    items = [("Primary", "主要な操作", "保存"), ("Secondary", "補助の操作", "下書き"),
-             ("Outline", "並べる補助操作", "書き出す"), ("Ghost", "控えめな操作", "編集"),
-             ("Link", "文中の操作", "詳細")]
+    items = [("Primary", "最も重要な操作", "保存"), ("Secondary", "次に重要な操作", "下書き"),
+             ("Outline", "範囲を示す補助操作", "書き出す"), ("Ghost", "控えめ・繰り返す", "編集"),
+             ("Link", "文章中の操作", "詳細")]
     right = 4 * cw + bw
     d.text(0, 0, 200, 18, "目立つ", S_LABEL, MUTED, bold=True)
     d.text(right - 200, 0, 200, 18, "控えめ", S_LABEL, MUTED, bold=True, align="right")
@@ -559,7 +559,7 @@ def button_hierarchy():
     d.rect(x, by, bw, bh, fill=DANGER, r=14)
     d.text(x, by, bw, bh, "削除", 17, "#FFFFFF", bold=True, align="center", valign="middle")
     d.text(x - 10, by + bh + 20, bw + 20, 24, "Destructive", S_NAME, TEXT, bold=True, align="center")
-    d.text(x - 20, by + bh + 48, bw + 40, 20, "取り消せない操作", S_SUB, MUTED, align="center")
+    d.text(x - 20, by + bh + 48, bw + 40, 20, "危険な操作", S_SUB, MUTED, align="center")
     d.save("button-hierarchy")
 
 

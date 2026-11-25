@@ -4,14 +4,15 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 
 | コンポーネント | 資料 | 状態 |
 | --- | --- | --- |
-| Button | [button.md](button.md) | 初期実装 |
+| Button | [button.md](button.md) | v0.1 確定 |
 
 ## ファイルの配置
 
 | ファイル | 内容 |
 | --- | --- |
 | `registry/components/ui/<name>.tsx` | 実装。shadcn/ui と同じ場所と名前にする |
-| `registry/lib/utils.ts` | `cn()`。テーマが追加したクラス名を tailwind-merge に登録している |
+| `registry/lib/utils.ts` | `cn()`。Flow Design の設定を追加した tailwind-merge を使う |
+| `registry/lib/tailwind-merge.ts` | テーマが追加したクラス名の登録。既存の `cn()` に追加する方法は [tokens.md](../tokens.md#cn-の設定) |
 | `docs/web/components/<name>.md` | 資料 |
 | `preview/src/pages/<name>-page.tsx` | プレビューのページ。実装は `@/components/ui/<name>` から読み込み、複製しない |
 | `preview/tests/<name>.spec.ts` | Playwright の検品 |
@@ -50,7 +51,7 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | 名前 | すべての操作にアクセシブルな名前がある |
 | レイアウト | 長い文字、モバイルの幅で崩れない |
 | 動きを減らす設定 | 位置や回転の動きが止まる |
-| ブランドの変更 | `--primary` の上書きが反映され、コントラストを保つ |
+| ブランドの変更 | `--primary` の上書きが反映され、通常、ホバー、押下でコントラストを保つ |
 
 ## プレビュー
 
