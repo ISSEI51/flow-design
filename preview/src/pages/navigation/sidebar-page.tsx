@@ -70,11 +70,13 @@ function Demo({
   groups,
   open,
   onOpenChange,
+  keyboardShortcut,
 }: {
   testId: string
   groups?: NavGroup[]
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  keyboardShortcut?: string | false
 }) {
   const [current, setCurrent] = useState("customers")
   return (
@@ -82,6 +84,7 @@ function Demo({
       <SidebarProvider
         open={open}
         onOpenChange={onOpenChange}
+        keyboardShortcut={keyboardShortcut}
         className="h-[36rem] min-h-0 overflow-hidden rounded-xl border border-border"
       >
         <AppSidebar
@@ -113,15 +116,57 @@ function ControlledDemo() {
           製品が持つ状態：open = {String(open)}
         </p>
       </div>
-      <Demo testId="sidebar-controlled" open={open} onOpenChange={setOpen} />
+      <Demo testId="sidebar-controlled" open={open} onOpenChange={setOpen} keyboardShortcut={false} />
     </div>
+  )
+}
+
+function FormDemo() {
+  const [log, setLog] = useState<string[]>([])
+  const add = (t: string) => setLog((l) => [...l, t])
+  return (
+    <form
+      data-testid="sidebar-form"
+      className="flex flex-wrap items-start gap-6"
+      onSubmit={(e) => {
+        e.preventDefault()
+        add("フォームを送信した")
+      }}
+    >
+      <Static>
+        <SidebarGroup>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton data-testid="sidebar-form-button" onClick={() => add("下書きを保存した")}>
+                <FileText />
+                <span>下書きを保存</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="sidebar-form-disabled"
+                aria-disabled="true"
+                render={<a href="#/sidebar?page=invoices" />}
+                onClick={() => add("請求書へ移動した")}
+              >
+                <Receipt />
+                <span>請求書（権限がありません）</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+      </Static>
+      <p data-testid="sidebar-form-log" role="status" className="text-ui text-muted-foreground">
+        {log.length ? log.join("、") : "まだ操作していません"}
+      </p>
+    </form>
   )
 }
 
 // 良い例と悪い例のための、開閉しない Sidebar。
 function Static({ children }: { children: ReactNode }) {
   return (
-    <SidebarProvider className="min-h-0 w-auto">
+    <SidebarProvider keyboardShortcut={false} className="min-h-0 w-auto">
       <Sidebar collapsible="none" className="h-auto rounded-xl py-2">
         <SidebarContent>{children}</SidebarContent>
       </Sidebar>
@@ -154,7 +199,7 @@ export function SidebarPage() {
       >
         <Row
           label="ページの切り替え"
-          note="項目を押すと、現在位置が移る。左上のボタン、または Ctrl / ⌘ + B で開閉する。折りたたむと、項目の名前を Tooltip で表示する"
+          note="項目を押すと、現在位置が移る。左上のボタン、または Ctrl / ⌘ + B で開閉する。折りたたむと、項目の名前を Tooltip で表示し、子の項目を持つ「契約」「レポート」はメニューで子の項目を開く"
         >
           <Demo testId="sidebar-basic" />
         </Row>
@@ -194,9 +239,27 @@ export function SidebarPage() {
         </Row>
       </Section>
 
+      <Section
+        title="キーボードのショートカット"
+        lead='既定は Ctrl / ⌘ + B。keyboardShortcut でキーを変え、false で無効にする。Sidebar が複数ある場合は、フォーカスのある Sidebar だけが開閉する。このページの「状態の制御」と「長いラベル」の例は無効にしている。'
+      >
+        <Row label="キーを変える" note='keyboardShortcut="m"。この枠の中にフォーカスがあるときに Ctrl / ⌘ + M で開閉する'>
+          <Demo testId="sidebar-shortcut" keyboardShortcut="m" />
+        </Row>
+      </Section>
+
+      <Section
+        title="ボタンとリンク、無効な項目"
+        lead='SidebarMenuButton は既定で type="button" の button を描画し、フォームの中で送信しない。aria-disabled の項目はフォーカスできるが、押しても実行しない。'
+      >
+        <Row label="フォームの中">
+          <FormDemo />
+        </Row>
+      </Section>
+
       <Section title="長いラベル" lead="省略せずに折り返す。折りたたんだときは名前を視覚的に隠し、アクセシブルな名前として残す。">
         <Row label="日本語・英語">
-          <Demo testId="sidebar-long" groups={longGroups} />
+          <Demo testId="sidebar-long" groups={longGroups} keyboardShortcut={false} />
         </Row>
       </Section>
 

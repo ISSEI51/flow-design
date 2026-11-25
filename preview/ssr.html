@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flow Design SSR check</title>
+    <link rel="stylesheet" href="/src/app.css" />
+  </head>
+  <body>
+    <!-- サーバーで描画した HTML を、検品（preview/tests/ssr.spec.ts）が #root の中に入れてから Hydration する。 -->
+    <div id="root"><!--ssr-outlet--></div>
+    <script type="module" src="/src/ssr/client.tsx"></script>
+  </body>
+</html>

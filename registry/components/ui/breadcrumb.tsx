@@ -1,3 +1,5 @@
+"use client"
+
 import type * as React from "react"
 import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
@@ -15,6 +17,7 @@ import { cn } from "@/lib/utils"
 // - BreadcrumbEllipsis は省略した階層があることを支援技術にも伝える。render で button にすると、
 //   省略した階層を表示する操作になる。
 // - nav の名前の既定は「パンくずリスト」。
+// BreadcrumbLink と BreadcrumbEllipsis は useRender（フック）を使うため、"use client" を付けている。
 // ルーティングのライブラリには依存しない。BreadcrumbLink の render に製品のリンクを渡す。
 // 定義は docs/web/components/breadcrumb.md を参照。
 

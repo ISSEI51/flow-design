@@ -116,13 +116,23 @@ export function CardPage() {
         </div>
       </Section>
 
-      <Section title="長い内容" lead="タイトルと内容は省略せずに折り返す。">
+      <Section
+        title="長い内容"
+        lead="タイトルと内容は省略せずに折り返し、CardAction と重ならない。ページの見出しの構造に入れる場合は、CardTitle の中に見出しの要素（h2〜h6）を置く。"
+      >
         <Row label="日本語・英語">
           <div className="grid w-full gap-4 sm:grid-cols-2">
             <Card data-testid="card-long">
               <CardHeader>
-                <CardTitle>北日本精密機械工業株式会社 札幌第二工場 生産管理部</CardTitle>
+                <CardTitle>
+                  <h3>北日本精密機械工業株式会社 札幌第二工場 生産管理部</h3>
+                </CardTitle>
                 <CardDescription>契約の更新日の 30 日前に、担当者と経理部の両方へ通知します</CardDescription>
+                <CardAction>
+                  <Button variant="ghost" size="icon-sm" aria-label="北日本精密機械工業の操作" data-testid="card-long-action">
+                    <MoreHorizontal />
+                  </Button>
+                </CardAction>
               </CardHeader>
             </Card>
             <Card>

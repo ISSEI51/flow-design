@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/separator.tsx`](../../../registry/components/ui/separator.tsx) |
 | 元にした実装 | shadcn/ui の Separator（Base UI 版、base-nova スタイル） |
 | 依存 | `@base-ui/react`、[`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -56,7 +56,8 @@
 
 ## 5. Behavior
 
-- 状態と操作を持たない。
+- 状態と操作を持たない。フックを使わないため、サーバーコンポーネントとして描画できる。
+- 既定の Separator はアクセシビリティツリーに `separator` として現れ、`decorative` の Separator は現れない。
 - 縦の Separator は、親の高さに合わせて伸びる（`self-stretch`）。高さを指定する場合は `className` の `h-6` と `self-center` などで上書きできる。
 
 ```tsx

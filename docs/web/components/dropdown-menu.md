@@ -40,7 +40,8 @@
 | メニュー（`DropdownMenuContent`） | 角丸 12px、余白 8px、1px の `border`、`popover`、影。幅 192px 以上 | `rounded-md`、`p-2`、`border-border`、`shadow-menu`、`min-w-48` |
 | 項目（`DropdownMenuItem`） | 高さ 40px 以上、角丸 8px、左右の余白 12px、文字 14px | `min-h-10`、`rounded-sm`、`px-3`、`text-ui` |
 | アイコン | 20px、文字との間隔 8px | `size-5`、`gap-2` |
-| ハイライト（ホバー、キー操作） | `accent` | `data-highlighted:bg-accent` |
+| ハイライト（ホバー） | `accent` の面 | `data-highlighted:bg-accent` |
+| フォーカス（キー操作） | `accent` の面と、項目の内側の 2px の枠 | `focus-visible:focus-ring`、offset −2px |
 | 危険な操作 | 文字とアイコンを `destructive`。ハイライトの面は `accent` | `text-destructive` |
 | 区切り線 | 1px の `border`、上下 8px | `h-px`、`my-2` |
 | まとまりの名前（`DropdownMenuLabel`） | 12px、`muted-foreground` | `text-caption` |
@@ -49,6 +50,7 @@
 
 - 危険な操作の文字は、ハイライトした `accent` の上で 4.76:1 になる（[tokens.md](../tokens.md#コントラスト)）。
 - `inset` は、アイコンの幅と間隔の分（12 + 20 + 8 = 40px）だけ左の余白を広げる。
+- 角丸は、メニュー 12px、項目 8px である。[tokens.md](../tokens.md#3-radius角丸) の「外側の角丸 − 内側の余白」は、内側の要素が外側の輪郭に沿う同心円状のコンテナに使う判断基準であり、余白を空けて並ぶ操作の単位（項目）には機械的に当てはめない（計算では 12 − 8 = 4px になる）。項目の大きさと役割に合う 8px を使う。
 
 ```tsx
 <DropdownMenu>
@@ -92,6 +94,8 @@
 | Escape、外側のクリック | 閉じる |
 
 - 開いている間は、背景のスクロールと背景の操作を止める（Base UI の Menu の既定 `modal`）。
+- ポインターを重ねた項目は `accent` の面だけで示し、キーで移った項目には加えて内側の枠を出す。キー操作の後にポインターを動かすと枠を消し、キーを押すと戻す。規則と理由は [overlays.md](overlays.md#6-キー操作のハイライト)。
+- 選択中の CheckboxItem と RadioItem は Check で示す。フォーカスの枠とは別に示すため、両者を区別できる。
 - `DropdownMenuCheckboxItem` で続けて切り替えさせたい場合は、`closeOnClick={false}` を指定する。
 - 画面の端では、はみ出さないように位置と向きを変える。長い項目は省略せずに折り返す。
 - 動きを減らす設定では、大きさを変えず、透明度だけで開閉する。

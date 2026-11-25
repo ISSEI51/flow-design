@@ -7,7 +7,7 @@
 | 実装 | [`registry/components/ui/card.tsx`](../../../registry/components/ui/card.tsx) |
 | 元にした実装 | shadcn/ui の Card（Base UI 版、base-nova スタイル） |
 | 依存 | [`cn()`](../../../registry/lib/utils.ts) |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 ## 1. Purpose
 
@@ -64,7 +64,10 @@ Card 全体を押せる場合は、タイトルをリンクにし、疑似要素
 
 ## 5. Behavior
 
-- タイトルと内容は省略せずに折り返す。
+- タイトルと内容は省略せずに折り返す。`CardAction` があるときも、タイトルは操作の左で折り返し、重ならない。
+- `CardTitle` は `<div>` で、視覚的なタイトルである。ページの見出しの構造に入れる場合は、`CardTitle` の中に見出しの要素を置く（`<CardTitle><h3>北海物産株式会社</h3></CardTitle>`）。見た目は `CardTitle` の文字の指定のまま変わらない。
+- 余白と角丸は `size` で決まり、`className` で上書きできる（例：`<Card size="sm" className="p-0">`）。
+- 状態とフックを持たないため、サーバーコンポーネントとして描画できる。
 - 並べる場合は、画面の幅に合わせて列の数を変える（例：`grid sm:grid-cols-2 xl:grid-cols-4`）。同じ行の Card は高さがそろう。
 - Card は状態を持たない。
 

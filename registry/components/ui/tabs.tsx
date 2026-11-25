@@ -1,3 +1,6 @@
+"use client"
+
+import * as React from "react"
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs"
 import { cva, type VariantProps } from "class-variance-authority"
 
@@ -16,6 +19,9 @@ import { cn } from "@/lib/utils"
 // - TabsList の activateOnFocus の既定は true（矢印キーで移動した時点で表示を切り替える）。
 //   表示に時間がかかる内容では、製品が false を指定し、Enter と Space で切り替える。
 // - TabsContent の keepMounted の既定は true。非表示のタブの入力内容を保つ。
+//   非表示の内容は hidden 属性で、表示、キーボードのフォーカス、支援技術から外れる。
+//   内容の中にフォーカスがある状態で別のタブが選ばれた場合（製品が value を変えた場合など）は、
+//   フォーカスを選ばれたタブへ移す。
 // 定義は docs/web/components/tabs.md を参照。
 
 function Tabs({ className, orientation = "horizontal", ...props }: TabsPrimitive.Root.Props) {
@@ -100,9 +106,24 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
   )
 }
 
-function TabsContent({ className, keepMounted = true, ...props }: TabsPrimitive.Panel.Props) {
+function TabsContent({ className, keepMounted = true, ref, ...props }: TabsPrimitive.Panel.Props) {
+  const panelRef = React.useRef<HTMLDivElement | null>(null)
+  React.useLayoutEffect(() => {
+    const el = panelRef.current
+    if (!el || !el.contains(document.activeElement)) return
+    const root = el.closest("[data-slot=tabs]")
+    const selected = Array.from(root?.querySelectorAll<HTMLElement>("[role=tab][aria-selected=true]") ?? []).find(
+      (tab) => tab.closest("[data-slot=tabs]") === root
+    )
+    if (selected && selected.getAttribute("aria-controls") !== el.id) selected.focus()
+  })
   return (
     <TabsPrimitive.Panel
+      ref={(node: HTMLDivElement | null) => {
+        panelRef.current = node
+        if (typeof ref === "function") ref(node)
+        else if (ref) ref.current = node
+      }}
       data-slot="tabs-content"
       keepMounted={keepMounted}
       className={cn("min-w-0 flex-1 rounded-sm outline-none focus-visible:focus-ring", className)}

@@ -27,6 +27,10 @@ const popupClassName = cn(
   "motion-safe:data-starting-style:scale-95 motion-safe:data-ending-style:scale-95"
 )
 
+// キーボードとポインターの切り分け。Base UI は、キー操作でもホバーでも、項目に DOM のフォーカスを移し、
+// data-highlighted を付ける（aria-activedescendant は使わない）。:focus-visible はキー操作の後に一致するが、
+// キー操作の後にポインターを動かした場合も一致したままになる。そのため、ポインターを動かしている間は
+// Popup に data-pointer を付けてフォーカスの枠を消し、キーを押したら外す。
 function DropdownMenuContent({
   align = "start",
   alignOffset = 0,
@@ -34,6 +38,8 @@ function DropdownMenuContent({
   sideOffset = 4,
   collisionPadding = 8,
   className,
+  onPointerMove,
+  onKeyDown,
   ...props
 }: MenuPrimitive.Popup.Props &
   Pick<MenuPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset" | "collisionPadding">) {
@@ -47,7 +53,19 @@ function DropdownMenuContent({
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
       >
-        <MenuPrimitive.Popup data-slot="dropdown-menu-content" className={cn(popupClassName, className)} {...props} />
+        <MenuPrimitive.Popup
+          data-slot="dropdown-menu-content"
+          className={cn(popupClassName, className)}
+          onPointerMove={(event) => {
+            event.currentTarget.setAttribute("data-pointer", "")
+            onPointerMove?.(event)
+          }}
+          onKeyDown={(event) => {
+            event.currentTarget.removeAttribute("data-pointer")
+            onKeyDown?.(event)
+          }}
+          {...props}
+        />
       </MenuPrimitive.Positioner>
     </MenuPrimitive.Portal>
   )
@@ -70,10 +88,15 @@ function DropdownMenuLabel({ className, inset, ...props }: MenuPrimitive.GroupLa
 
 // 項目。高さ 40px 以上、角丸 8px、文字 14px、アイコン 20px、アイコンと文字の間隔 8px。
 // アイコンのない項目を、アイコンのある項目と文字の位置でそろえる場合は inset を付ける（12 + 20 + 8 = 40px）。
+// ハイライト：ホバーとキー操作のどちらも accent の面。キー操作のときは、加えて focus-ring を項目の内側に描く。
+// 内側に描くため、スクロールする領域の端や隣の項目で枠が欠けない。
 const itemClassName = cn(
   "group/dropdown-menu-item relative flex min-h-10 w-full cursor-default items-center gap-2 rounded-sm px-3 py-2",
   "text-left text-ui text-foreground outline-none select-none [word-break:auto-phrase]",
   "data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+  "focus-visible:focus-ring [--focus-ring-offset:calc(var(--focus-ring-width)*-1)] [[data-pointer]_&]:focus-visible:outline-none",
+  // キー操作で項目を表示範囲に入れるとき、メニューの余白（8px）を残す。
+  "scroll-my-2",
   "data-disabled:pointer-events-none data-disabled:opacity-50 data-inset:pl-10",
   "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-5"
 )

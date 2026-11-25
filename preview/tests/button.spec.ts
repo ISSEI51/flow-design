@@ -237,10 +237,13 @@ test.describe("buttonVariants on <a>", () => {
     }
   })
 
-  test("keyboard focus and navigation", async ({ page }) => {
+  // WebKit は Safari の既定の設定と同じく、Tab でリンクに移動しない（Option+Tab で移動する）。
+  // 実機の Safari の「Tab キーで Web ページ上の各項目を強調表示」を有効にした状態に当たる Option+Tab で確かめる。
+  test("keyboard focus and navigation", { tag: "@webkit" }, async ({ page, browserName }) => {
     const outline = page.getByTestId("link-outline")
+    const key = browserName === "webkit" ? "Alt+Tab" : "Tab"
     for (let i = 0; i < 120; i++) {
-      await page.keyboard.press("Tab")
+      await page.keyboard.press(key)
       if (await outline.evaluate((el) => el === document.activeElement)) break
     }
     await expect(outline).toBeFocused()

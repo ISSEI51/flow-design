@@ -26,12 +26,12 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Dropdown Menu | [dropdown-menu.md](dropdown-menu.md) | 初期実装 |
 | Sheet | [sheet.md](sheet.md) | 初期実装 |
 | Drawer | [drawer.md](drawer.md) | 初期実装 |
-| Sidebar | [sidebar.md](sidebar.md) | 初期実装 |
-| Tabs | [tabs.md](tabs.md) | 初期実装 |
-| Breadcrumb | [breadcrumb.md](breadcrumb.md) | 初期実装 |
-| Card | [card.md](card.md) | 初期実装 |
-| Accordion | [accordion.md](accordion.md) | 初期実装 |
-| Separator | [separator.md](separator.md) | 初期実装 |
+| Sidebar | [sidebar.md](sidebar.md) | v0.1 確定 |
+| Tabs | [tabs.md](tabs.md) | v0.1 確定 |
+| Breadcrumb | [breadcrumb.md](breadcrumb.md) | v0.1 確定 |
+| Card | [card.md](card.md) | v0.1 確定 |
+| Accordion | [accordion.md](accordion.md) | v0.1 確定 |
+| Separator | [separator.md](separator.md) | v0.1 確定 |
 | Table | [table.md](table.md) | 初期実装 |
 | Data Table | [data-table.md](data-table.md) | 初期実装 |
 | Pagination | [pagination.md](pagination.md) | 初期実装 |
@@ -105,6 +105,7 @@ npm install
 npm run preview:dev        # http://localhost:5173/
 npm run test:components    # Playwright（初回は npx playwright install chromium）
 npm run typecheck
+npm run test:ssr           # SSR と Hydration（Node.js での描画と、ブラウザでの Hydration）
 ```
 
 ### ブラウザ
@@ -116,10 +117,12 @@ npm run typecheck
 | `webkit` | WebKit（Desktop Safari、1280×900） | `@webkit` を付けたテスト |
 | `webkit-mobile` | WebKit（iPhone 15） | `@webkit` を付けたテスト |
 
-WebKit の project は、Playwright の WebKit による基本的な互換性の検品である。実機の iOS Safari での確認ではない。初回は `npx playwright install webkit` で WebKit を入れる。Chromium の CDP を使う IME のテストは、WebKit では実行できないため `desktop` と `mobile` だけで実行する。
+WebKit の project は、Playwright の WebKit による基本的な互換性の検品である。実機の iOS Safari での確認ではない。初回は `npx playwright install webkit` で WebKit を入れる。Chromium の CDP を使う IME のテストは、WebKit では実行できないため `desktop` と `mobile` だけで実行する。WebKit は Safari の既定の設定と同じく Tab でリンクに移動しないため、リンクへのキー操作は Option+Tab（`Alt+Tab`）で確かめる。
 
 ポートは `PREVIEW_PORT`（開発サーバー）と `PREVIEW_TEST_PORT`（検品、既定 5174）で変えられる。検品のスクリーンショットは `preview/screenshots/` に保存される（Git の管理外）。
 
 コンポーネントを追加するときは、`preview/src/pages/` にページを作り、`preview/src/catalog.ts` に 1 行追加する。`fullscreen: true` を付けたページ（業務アプリの例）は、プレビューの見出しを付けずに画面全体で表示する。
 
 WebKit は既定の設定では Tab でリンクへ移動しないため、検品ではリンクへの移動に Option + Tab を使う。
+
+Navigation & Layout の検品は、ページで発生した例外（`pageerror`）を、テスト名、ブラウザ、URL、スタックトレースとともに `preview/test-results/page-errors.jsonl` に記録する。例外があってもテストは失敗にしない。
