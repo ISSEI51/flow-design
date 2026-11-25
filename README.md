@@ -187,9 +187,9 @@ Natural Motion
 
 ## このリポジトリについて
 
-現在は、思想と原則を定義する段階にある。今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。コンポーネントはまだ定めていない。
+現在は、思想、原則、デザイントークンを定め、コンポーネントを Button から順に作る段階にある。今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
 
-Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md) にまとめている。
+Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md) にまとめている。
 
 図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py` で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
 

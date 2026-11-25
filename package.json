@@ -1,0 +1,33 @@
+{
+  "name": "flow-design",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preview:dev": "vite --config preview/vite.config.ts",
+    "preview:build": "vite build --config preview/vite.config.ts",
+    "typecheck": "tsc -p preview/tsconfig.json",
+    "test:components": "playwright test -c preview/playwright.config.ts",
+    "test:tokens": "node scripts/tokens/check-contrast.mjs && node scripts/tokens/verify-theme.mjs"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.9.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.80.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^26.6.10",
+    "@types/react": "^19.3.1",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "shadcn": "^4.23.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

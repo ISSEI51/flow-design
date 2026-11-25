@@ -468,6 +468,102 @@ def tokens():
     d.save("tokens")
 
 
-for f in (journey, principles, wording, layout, visual, process, architecture, site, tokens):
+# ---------------------------------------------------------------- 10 button anatomy
+BTN_FG = "light-dark(#FFFFFF,#0D1117)"
+DANGER = "light-dark(#D32424,#DA3633)"
+
+
+def plus_icon(d, cx, cy, half, color, sw):
+    d.line([(cx - half, cy), (cx + half, cy)], color=color, arrow=False, sw=sw)
+    d.line([(cx, cy - half), (cx, cy + half)], color=color, arrow=False, sw=sw)
+
+
+def callout(d, n, x, y, tx, ty):
+    d.line([(x, y), (tx, ty)], color=ACCENT, arrow=False, sw=1)
+    d.dot(x, y, d=24, fill=ACCENT_SURFACE, stroke=ACCENT)
+    d.text(x - 12, y - 12, 24, 24, n, 14, ACCENT, bold=True, align="center", valign="middle")
+
+
+def button_anatomy():
+    d = D()
+    S = 2  # drawn at 2x
+    bx, by, bh = 40, 70, 48 * S
+    pad, icon, gap = 20 * S, 20 * S, 8 * S
+    label = "顧客を追加"
+    lw = 14 * S * len(label)
+    bw = pad + icon + gap + lw + pad
+    d.rect(bx - 4 * S, by - 4 * S, bw + 8 * S, bh + 8 * S, fill="none", stroke=ACCENT, r=18 * S, dashed=True, sw=1.5)
+    d.rect(bx, by, bw, bh, fill=TEXT, r=14 * S)
+    ix = bx + pad
+    plus_icon(d, ix + icon / 2, by + bh / 2, 14, BTN_FG, 1.75 * S)
+    d.text(ix + icon + gap, by, lw + 20, bh, label, 14 * S, BTN_FG, bold=True, valign="middle")
+    ty = by - 4 * S - 2
+    callout(d, "1", bx + bw - 24, 20, bx + bw - 24, ty)
+    callout(d, "2", ix + icon / 2, 20, ix + icon / 2, ty)
+    callout(d, "3", ix + icon + gap + lw / 2, 20, ix + icon + gap + lw / 2, ty)
+    callout(d, "4", bx + bw + 56, by + bh / 2, bx + bw + 8, by + bh / 2)
+    # icon only
+    qy = by + bh + 64
+    d.rect(bx, qy, bh, bh, fill="none", stroke=LINE, r=14 * S, sw=1.5)
+    cx, cy = bx + bh / 2, qy + bh / 2
+    d.dot(cx - 4, cy - 4, d=22, fill="none", stroke=TEXT)
+    d.line([(cx + 5, cy + 5), (cx + 14, cy + 14)], color=TEXT, arrow=False, sw=3.5)
+    d.text(bx + bh + 28, qy + 22, 340, 24, "アイコンだけのボタン", S_NAME, TEXT, bold=True)
+    d.text(bx + bh + 28, qy + 54, 340, 20, "48 × 48px。aria-label が必須", S_SUB, MUTED)
+    # legend
+    LX = 580
+    rows = [("1", "コンテナ", "高さ 48px、角丸 14px\n左右の余白 20px、影なし"),
+            ("2", "アイコン（任意）", "20px、線の太さ 1.75\n文字との間隔 8px"),
+            ("3", "ラベル", "14px、太さ 500\n押した結果がわかる言葉"),
+            ("4", "フォーカスの枠", "2px、2px 離す\nキーボード操作のときだけ")]
+    for i, (n, name, sub) in enumerate(rows):
+        y = 8 + i * 92
+        d.text(LX, y + 2, 24, 20, n, S_NUM, ACCENT, bold=True)
+        d.text(LX + 30, y, 300, 24, name, S_NAME, TEXT, bold=True)
+        for k, ln in enumerate(sub.split("\n")):
+            d.text(LX + 30, y + 30 + k * 24, 300, 20, ln, S_SUB, MUTED)
+    d.save("button-anatomy")
+
+
+# ---------------------------------------------------------------- 11 button hierarchy
+def button_hierarchy():
+    d = D()
+    cw, bw, bh = 146, 124, 56
+    items = [("Primary", "主要な操作", "保存"), ("Secondary", "補助の操作", "下書き"),
+             ("Outline", "並べる補助操作", "書き出す"), ("Ghost", "控えめな操作", "編集"),
+             ("Link", "文中の操作", "詳細")]
+    right = 4 * cw + bw
+    d.text(0, 0, 200, 18, "目立つ", S_LABEL, MUTED, bold=True)
+    d.text(right - 200, 0, 200, 18, "控えめ", S_LABEL, MUTED, bold=True, align="right")
+    d.line([(64, 9), (right - 64, 9)])
+    by = 44
+    for i, (name, use, label) in enumerate(items):
+        x = i * cw
+        fg = TEXT
+        if name == "Primary":
+            d.rect(x, by, bw, bh, fill=TEXT, r=14)
+            fg = BTN_FG
+        elif name == "Secondary":
+            d.rect(x, by, bw, bh, fill=SURFACE, r=14)
+        elif name == "Outline":
+            d.rect(x, by, bw, bh, fill="none", stroke=LINE, r=14, sw=1.5)
+        st = (f"text;html=0;align=center;verticalAlign=middle;spacing=0;{FONT}fontSize=17;"
+              f"fontColor={fg};fontStyle={4 if name == 'Link' else 1};")
+        d.cells.append(f'<mxCell id="{d.id()}" value="{label}" style="{st}" vertex="1" parent="1">'
+                       f'<mxGeometry x="{x}" y="{by}" width="{bw}" height="{bh}" as="geometry"/></mxCell>')
+        d.text(x, by + bh + 20, bw, 24, name, S_NAME, TEXT, bold=True, align="center")
+        d.text(x - 10, by + bh + 48, bw + 20, 20, use, S_SUB, MUTED, align="center")
+    x = 5 * cw + 40
+    d.line([(x - 22, 0), (x - 22, by + bh + 68)], color=BAR, arrow=False, sw=1)
+    d.text(x, 0, 160, 18, "重要度とは別", S_LABEL, MUTED, bold=True)
+    d.rect(x, by, bw, bh, fill=DANGER, r=14)
+    d.text(x, by, bw, bh, "削除", 17, "#FFFFFF", bold=True, align="center", valign="middle")
+    d.text(x - 10, by + bh + 20, bw + 20, 24, "Destructive", S_NAME, TEXT, bold=True, align="center")
+    d.text(x - 20, by + bh + 48, bw + 40, 20, "取り消せない操作", S_SUB, MUTED, align="center")
+    d.save("button-hierarchy")
+
+
+for f in (journey, principles, wording, layout, visual, process, architecture, site, tokens,
+          button_anatomy, button_hierarchy):
     f()
 print("ok")

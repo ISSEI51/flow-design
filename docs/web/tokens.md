@@ -321,6 +321,12 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 - 入力欄の枠が #8a8a8a になる。
 - Lucide のアイコンの線の太さが 1.75 になる。
 
+### cn() の設定
+
+shadcn/ui の `cn()` は tailwind-merge で重複するクラスを取り除く。tailwind-merge は、テーマが追加したクラス名を知らないため、`text-ui text-primary-foreground` の `text-ui` を文字色のクラスとみなして削除する。Button の実装で確認した。
+
+[`registry/lib/utils.ts`](../../registry/lib/utils.ts) の `cn()` は、`text-*`（文字の 8 段階）、`shadow-*`（影の 3 段階）、`h-control` などの高さ、`ease-*` を tailwind-merge に登録している。製品は、shadcn/ui の `lib/utils.ts` をこのファイルに置き換える。テーマにクラス名を追加したときは、このファイルにも追加する。
+
 ## 未定のこと
 
 - ダークモードの値

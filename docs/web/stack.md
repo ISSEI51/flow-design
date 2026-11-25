@@ -149,7 +149,7 @@ Registry の項目は、`shadcn build` が書き出す静的な JSON ファイ�
 - GitHub Pages の公開元を「GitHub Actions」にし、`actions/upload-pages-artifact` と `actions/deploy-pages` でデプロイする。
 - GitHub Pages は、存在しないパスへのアクセスを `index.html` に転送しない。クライアント側のルーティングを使う場合は、ハッシュ形式の URL にするか、ページごとに HTML を書き出す。
 
-Storybook は、必要になった段階で導入を検討する。
+Storybook は、必要になった段階で導入を検討する。現在は、コンポーネントを確認するための最小限のプレビュー（`preview/`、React + Vite）を置いている。使い方は [コンポーネント](components/README.md#プレビュー) にまとめている。
 
 ## 未定のこと
 
