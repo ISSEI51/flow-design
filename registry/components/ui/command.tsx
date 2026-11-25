@@ -1,5 +1,6 @@
 import * as React from "react"
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete"
+import type { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { Search } from "lucide-react"
 
 import { comboboxKeyHighlight, comboboxPointerHandlers, ComboboxStatus } from "@/components/ui/combobox"
@@ -66,7 +67,7 @@ function Command<Item extends CommandItemData = CommandItemData>({
 }
 
 /**
- * Dialog の中に Command を置く。Dialog の size="lg"（最大幅 640px）を使い、余白は Command の各部分が持つ。
+ * Dialog の中に Command を置く。入力の途中の内容を持たないため、未保存の変更の保護（unsavedChanges）は使わない。Dialog の size="lg"（最大幅 640px）を使い、余白は Command の各部分が持つ。
  * タイトルと説明は、画面には表示せず支援技術に伝える。
  */
 function CommandDialog({
@@ -76,7 +77,7 @@ function CommandDialog({
   className,
   showCloseButton = false,
   ...props
-}: Omit<React.ComponentProps<typeof Dialog>, "children"> & {
+}: Omit<DialogPrimitive.Root.Props, "children"> & {
   children?: React.ReactNode
   title?: string
   description?: string
