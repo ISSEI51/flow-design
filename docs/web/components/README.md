@@ -117,7 +117,7 @@ npm run typecheck
 | `webkit` | WebKit（Desktop Safari、1280×900） | `@webkit` を付けたテスト |
 | `webkit-mobile` | WebKit（iPhone 15） | `@webkit` を付けたテスト |
 
-WebKit の project は、Playwright の WebKit による基本的な互換性の検品である。実機の iOS Safari での確認ではない。初回は `npx playwright install webkit` で WebKit を入れる。Chromium の CDP を使う IME のテストは、WebKit では実行できないため `desktop` と `mobile` だけで実行する。
+WebKit の project は、Playwright の WebKit による基本的な互換性の検品である。実機の iOS Safari での確認ではない。初回は `npx playwright install webkit` で WebKit を入れる。Chromium の CDP を使う IME のテストは、WebKit では実行できないため `desktop` と `mobile` だけで実行する。WebKit は Safari の既定の設定と同じく Tab でリンクに移動しないため、リンクへのキー操作は Option+Tab（`Alt+Tab`）で確かめる。
 
 ポートは `PREVIEW_PORT`（開発サーバー）と `PREVIEW_TEST_PORT`（検品、既定 5174）で変えられる。検品のスクリーンショットは `preview/screenshots/` に保存される（Git の管理外）。
 

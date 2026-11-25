@@ -36,11 +36,15 @@ function Dialog({
       disablePointerDismissal={disablePointerDismissal ?? unsavedChanges}
       onOpenChange={(open, details) => {
         if (!open && unsavedChanges && details.reason !== "imperative-action" && details.reason !== "none") {
-          details.cancel()
-          // 取り消せない閉じる要求（ブラウザの戻る操作が続いた場合など）は、そのまま閉じる。
-          if (details.isCanceled) {
-            if (details.reason !== "outside-press" && details.reason !== "focus-out") onDiscardRequest?.()
-            return
+          const pointer = details.reason === "outside-press" || details.reason === "focus-out"
+          // onDiscardRequest がない場合は、閉じる手段がなくならないよう、明示的な閉じる操作は止めない。
+          if (pointer || onDiscardRequest) {
+            details.cancel()
+            // 取り消せない閉じる要求（Android で戻る操作が続いた場合など）は、そのまま閉じる。
+            if (details.isCanceled) {
+              if (!pointer) onDiscardRequest?.()
+              return
+            }
           }
         }
         onOpenChange?.(open, details)
@@ -62,6 +66,8 @@ function DialogClose(props: DialogPrimitive.Close.Props) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />
 }
 
+// 重なり順：モーダルの面（Dialog、Alert Dialog、Sheet、Drawer）は z-40。アンカーに付いて浮かぶ要素
+// （Popover、Dropdown Menu、Select、Tooltip）と Toast は z-50。同じ層の中では、開いた順に前面になる。
 // 背景。黒 40%、ぼかしなし。Alert Dialog、Sheet（編集）、Drawer も同じ値を使う。
 // iOS の Safari では、アドレスバーの伸縮で fixed の背景が欠けるため absolute にする（Base UI の推奨）。
 function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) {
@@ -69,7 +75,7 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
+        "fixed inset-0 z-40 min-h-dvh bg-black/40 supports-[-webkit-touch-callout:none]:absolute",
         "transition-opacity duration-(--duration-slow) ease-standard",
         "data-starting-style:opacity-0 data-ending-style:opacity-0",
         className
@@ -105,7 +111,7 @@ function DialogContent({
       {/* 画面の端との間に、モバイルで 16px、それ以外で 24px を確保する。高さが足りないときは DialogBody がスクロールする。 */}
       <DialogPrimitive.Viewport
         data-slot="dialog-viewport"
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+        className="fixed inset-0 z-40 flex items-center justify-center p-4 sm:p-6"
       >
         <DialogPrimitive.Popup
           data-slot="dialog-content"

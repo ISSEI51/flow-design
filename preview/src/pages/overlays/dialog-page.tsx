@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Copy } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -14,8 +15,19 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/components/ui/toast"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 import { Compare, Row, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
@@ -101,6 +113,7 @@ function EditCompanyDialog() {
   const [values, setValues] = useState(saved)
   const [current, setCurrent] = useState(saved)
   const [confirm, setConfirm] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState("")
   const dirty = values.name !== current.name || values.phone !== current.phone
 
@@ -113,14 +126,20 @@ function EditCompanyDialog() {
           if (next) setValues(current)
         }}
         unsavedChanges={dirty}
-        onDiscardRequest={() => setConfirm(true)}
+        // 保存中は閉じる操作を受け付けない。保存が終わると、この画面が open を false にして閉じる。
+        onDiscardRequest={() => !saving && setConfirm(true)}
       >
         <DialogTrigger render={<Button variant="secondary" data-testid="dialog-dirty-trigger" />}>会社情報を編集</DialogTrigger>
         <DialogContent data-testid="dialog-dirty">
           <form
             className="contents"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault()
+              if (saving) return
+              setSaving(true)
+              setStatus("会社情報を保存しています")
+              await new Promise((r) => setTimeout(r, 800))
+              setSaving(false)
               setCurrent(values)
               setOpen(false)
               setStatus("会社情報を保存しました")
@@ -151,8 +170,10 @@ function EditCompanyDialog() {
               </FieldGroup>
             </DialogBody>
             <DialogFooter>
-              <DialogClose render={<Button variant="secondary" />}>キャンセル</DialogClose>
-              <Button type="submit">変更を保存</Button>
+              <DialogClose render={<Button variant="secondary" disabled={saving} />}>キャンセル</DialogClose>
+              <Button type="submit" loading={saving} data-testid="dialog-dirty-save">
+                変更を保存
+              </Button>
             </DialogFooter>
           </form>
           <DiscardAlert
@@ -171,6 +192,91 @@ function EditCompanyDialog() {
         {status || `現在の会社名：${current.name}`}
       </p>
     </div>
+  )
+}
+
+// onDiscardRequest を渡さない場合。外側のクリックだけを止め、明示的な閉じる操作では閉じる。
+function GuardWithoutConfirm() {
+  const [note, setNote] = useState("")
+  return (
+    <Dialog unsavedChanges={note !== ""} onOpenChange={(open) => !open && setNote("")}>
+      <DialogTrigger render={<Button variant="secondary" data-testid="dialog-noconfirm-trigger" />}>メモを書く</DialogTrigger>
+      <DialogContent size="sm" data-testid="dialog-noconfirm">
+        <DialogHeader>
+          <DialogTitle>メモを書く</DialogTitle>
+          <DialogDescription>入力中は、外側のクリックでは閉じない。</DialogDescription>
+        </DialogHeader>
+        <Field>
+          <FieldLabel>メモ</FieldLabel>
+          <Textarea data-testid="dialog-noconfirm-field" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+        <DialogFooter>
+          <DialogClose render={<Button variant="secondary" />}>閉じる</DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// 操作できる要素が閉じるボタンだけの Dialog。フォーカスの閉じ込めの確認用。
+function SingleActionDialog() {
+  return (
+    <Dialog>
+      <DialogTrigger render={<Button variant="secondary" data-testid="dialog-single-trigger" />}>請求書の送付先を見る</DialogTrigger>
+      <DialogContent size="sm" data-testid="dialog-single">
+        <DialogHeader>
+          <DialogTitle>請求書の送付先</DialogTitle>
+          <DialogDescription>山田商事 経理部（yamada@example.com）</DialogDescription>
+        </DialogHeader>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Dialog の中の Popover、Tooltip、Toast。
+function CombinedDialog() {
+  const { toast } = useToast()
+  return (
+    <Dialog>
+      <DialogTrigger render={<Button variant="secondary" data-testid="dialog-combo-trigger" />}>担当者を確認</DialogTrigger>
+      <DialogContent data-testid="dialog-combo">
+        <DialogHeader>
+          <DialogTitle>担当者を確認</DialogTitle>
+          <DialogDescription>山田商事の担当者と連絡先。</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <Popover>
+            <PopoverTrigger render={<Button variant="link" data-testid="dialog-combo-popover-trigger" />}>山田 太郎</PopoverTrigger>
+            <PopoverContent align="start" data-testid="dialog-combo-popover">
+              <PopoverHeader>
+                <PopoverTitle>山田 太郎</PopoverTitle>
+                <PopoverDescription>yamada@example.com</PopoverDescription>
+              </PopoverHeader>
+              <PopoverClose render={<Button variant="secondary" size="sm" className="self-start" />}>閉じる</PopoverClose>
+            </PopoverContent>
+          </Popover>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="メールアドレスをコピー"
+                  data-testid="dialog-combo-copy"
+                  onClick={() => toast({ variant: "success", title: "メールアドレスをコピーしました", id: "dialog-copy" })}
+                />
+              }
+            >
+              <Copy />
+            </TooltipTrigger>
+            <TooltipContent data-testid="dialog-combo-tooltip">メールアドレスをコピー</TooltipContent>
+          </Tooltip>
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="secondary" />}>閉じる</DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -257,6 +363,18 @@ export function DialogPage() {
       <Section title="入れ子" lead="Dialog の中で Select を開ける。Escape は最前面の Select だけを閉じ、フォーカスを Select の欄に戻す。">
         <Row label="Select">
           <SelectInDialog />
+        </Row>
+        <Row label="Popover、Tooltip、Toast" note="Toast は Dialog の上に表示し、閉じるボタンを押せる">
+          <CombinedDialog />
+        </Row>
+      </Section>
+
+      <Section title="閉じる操作" lead="onDiscardRequest を渡さない場合は、外側のクリックだけを止め、Escape と閉じるボタンでは閉じる。閉じる手段がなくならないようにするため。">
+        <Row label="確認を出さない" note="unsavedChanges だけを渡す">
+          <GuardWithoutConfirm />
+        </Row>
+        <Row label="操作が 1 つ" note="Tab を押しても閉じるボタンから移らない">
+          <SingleActionDialog />
         </Row>
       </Section>
 

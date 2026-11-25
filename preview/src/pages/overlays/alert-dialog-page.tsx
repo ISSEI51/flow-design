@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
+import { Trash } from "lucide-react"
 
 import {
   AlertDialog,
@@ -8,6 +9,7 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
@@ -25,6 +27,9 @@ function DeleteCustomer() {
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [status, setStatus] = useState("")
+  // 製品が AlertDialogContent に ref を渡しても、キャンセルへの初期フォーカスは保たれる。
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [refTag, setRefTag] = useState("")
   return (
     <div className="flex flex-col items-start gap-2">
       <AlertDialog
@@ -33,11 +38,12 @@ function DeleteCustomer() {
           if (pending) return
           setOpen(next)
         }}
+        onOpenChangeComplete={(next) => setRefTag(next ? (contentRef.current?.getAttribute("data-slot") ?? "") : "")}
       >
         <AlertDialogTrigger render={<Button variant="destructive" data-testid="alert-delete-trigger" />}>
           山田商事を削除
         </AlertDialogTrigger>
-        <AlertDialogContent data-testid="alert-delete">
+        <AlertDialogContent ref={contentRef} data-testid="alert-delete">
           <AlertDialogHeader>
             <AlertDialogTitle>山田商事を削除しますか？</AlertDialogTitle>
             <AlertDialogDescription>
@@ -67,6 +73,9 @@ function DeleteCustomer() {
       <p role="status" data-testid="alert-delete-status" className="text-ui text-muted-foreground">
         {status}
       </p>
+      <span hidden data-testid="alert-delete-ref">
+        {refTag}
+      </span>
     </div>
   )
 }
@@ -185,6 +194,15 @@ export function AlertDialogPage() {
         </Row>
       </Section>
 
+      <Section
+        title="shadcn/ui との互換"
+        lead="AlertDialogMedia は、shadcn/ui から移行するコードのために提供する。Flow Design の標準では使わず、意味はタイトル、説明、ボタンで伝える。"
+      >
+        <Row label="AlertDialogMedia" note="互換のためだけに使う">
+          <MediaExample />
+        </Row>
+      </Section>
+
       <Section title="長い文字">
         <Row label="English">
           <ConfirmExample
@@ -239,6 +257,31 @@ export function AlertDialogPage() {
         />
       </Section>
     </article>
+  )
+}
+
+// shadcn/ui との互換の例。標準では AlertDialogMedia を使わない。
+function MediaExample() {
+  const [open, setOpen] = useState(false)
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger render={<Button variant="secondary" data-testid="alert-media-trigger" />}>互換の例を開く</AlertDialogTrigger>
+      <AlertDialogContent data-testid="alert-media">
+        <AlertDialogHeader>
+          <AlertDialogMedia data-testid="alert-media-icon">
+            <Trash aria-hidden="true" />
+          </AlertDialogMedia>
+          <AlertDialogTitle>山田商事を削除しますか？</AlertDialogTitle>
+          <AlertDialogDescription>この操作は取り消せません。</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>キャンセル</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => setOpen(false)}>
+            削除する
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 

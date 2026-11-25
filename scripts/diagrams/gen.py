@@ -1277,7 +1277,8 @@ def overlay_nesting():
                            "編集中の変更の破棄を確かめる Alert Dialog")):
         d.dot(rx + 6, oy + 38 + k * 30, d=6, fill=BAR_STRONG, stroke="none")
         d.text(rx + 22, oy + 28 + k * 30, 440, 20, t, S_SUB, TEXT)
-    d.text(0, 324, 400, 20, "z-index は共通の 1 つ。開いた順に前面に重なる", S_SUB, MUTED)
+    d.text(0, 324, 420, 20, "モーダルの面は z-40、浮かぶ要素と通知は z-50", S_SUB, MUTED)
+    d.text(0, 350, 420, 20, "同じ層の中では、開いた順に前面に重なる", S_SUB, MUTED)
     d.save("overlay-nesting")
 
 

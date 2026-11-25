@@ -68,6 +68,8 @@ function SelectContent({
   align = "start",
   alignOffset = 0,
   alignItemWithTrigger = false,
+  onPointerMove,
+  onKeyDown,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<SelectPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger">) {
@@ -91,6 +93,15 @@ function SelectContent({
             "motion-safe:data-starting-style:scale-95 motion-safe:data-ending-style:scale-95",
             className
           )}
+          // ポインターを動かしている間はフォーカスの枠を消し、キーを押したら戻す（Dropdown Menu と同じ）。
+          onPointerMove={(event) => {
+            event.currentTarget.setAttribute("data-pointer", "")
+            onPointerMove?.(event)
+          }}
+          onKeyDown={(event) => {
+            event.currentTarget.removeAttribute("data-pointer")
+            onKeyDown?.(event)
+          }}
           {...props}
         >
           <SelectScrollUpButton />
@@ -119,6 +130,10 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
       className={cn(
         "relative flex min-h-10 w-full cursor-default items-center rounded-md py-2 pr-10 pl-3 text-body outline-none select-none",
         "data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+        // キー操作のときは、項目の内側に focus-ring を描く。選択中（Check と太さ 500）とは別に示す。
+        "focus-visible:focus-ring [--focus-ring-offset:calc(var(--focus-ring-width)*-1)] [[data-pointer]_&]:focus-visible:outline-none",
+        // キー操作で項目を表示範囲に入れるとき、上下のスクロールボタン（24px）に隠れないよう余白を残す。
+        "scroll-my-6",
         "data-selected:font-medium",
         "data-disabled:pointer-events-none data-disabled:opacity-50",
         className
