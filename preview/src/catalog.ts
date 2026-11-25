@@ -18,6 +18,12 @@ import { RadioGroupPage } from "./pages/forms/radio-group-page"
 import { SelectPage } from "./pages/forms/select-page"
 import { SwitchPage } from "./pages/forms/switch-page"
 import { TextareaPage } from "./pages/forms/textarea-page"
+import { AlertDialogPage } from "./pages/overlays/alert-dialog-page"
+import { DialogPage } from "./pages/overlays/dialog-page"
+import { DrawerPage } from "./pages/overlays/drawer-page"
+import { DropdownMenuPage } from "./pages/overlays/dropdown-menu-page"
+import { PopoverPage } from "./pages/overlays/popover-page"
+import { SheetPage } from "./pages/overlays/sheet-page"
 
 // コンポーネントを追加するときは、ページを作ってここに 1 行足す。
 export const catalog: { id: string; name: string; page: ComponentType }[] = [
@@ -39,4 +45,10 @@ export const catalog: { id: string; name: string; page: ComponentType }[] = [
   { id: "skeleton", name: "Skeleton", page: SkeletonPage },
   { id: "progress", name: "Progress", page: ProgressPage },
   { id: "billing", name: "請求書の例", page: BillingPage },
+  { id: "dialog", name: "Dialog", page: DialogPage },
+  { id: "alert-dialog", name: "Alert Dialog", page: AlertDialogPage },
+  { id: "popover", name: "Popover", page: PopoverPage },
+  { id: "dropdown-menu", name: "Dropdown Menu", page: DropdownMenuPage },
+  { id: "sheet", name: "Sheet", page: SheetPage },
+  { id: "drawer", name: "Drawer", page: DrawerPage },
 ]

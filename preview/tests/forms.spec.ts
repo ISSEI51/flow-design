@@ -244,6 +244,8 @@ test.describe("Checkbox", { tag: "@webkit" }, () => {
   test("tokens, states, hit area", async ({ page, isMobile }) => {
     await open(page, "checkbox")
     const c = page.getByTestId("checkbox-basic")
+    // 座標で押すため、画面の中に入れてから位置を測る（ナビゲーションの項目が増えても画面の外に出ないように）
+    await c.scrollIntoViewIfNeeded()
     const b = await box(c)
     expect([b.width, b.height]).toEqual([20, 20])
     expect(await css(c, "border-top-left-radius")).toBe("4px")
@@ -315,6 +317,8 @@ test.describe("Switch", { tag: "@webkit" }, () => {
   test("tokens, position, colors, hit area", async ({ page, isMobile }) => {
     await open(page, "switch")
     const s = page.getByTestId("switch-basic")
+    // 座標で押すため、画面の中に入れてから位置を測る（ナビゲーションの項目が増えても画面の外に出ないように）
+    await s.scrollIntoViewIfNeeded()
     const b = await box(s)
     expect([b.width, b.height]).toEqual([44, 28])
     expect(await css(s, "transition-duration")).toBe("0.12s")
