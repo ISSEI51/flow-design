@@ -229,6 +229,12 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
   }, [])
 
   const clearAll = () => updateFilters(noFilters)
+  // 「すべて解除」と「条件をすべて解除」のボタンは、解除すると表示が消える（適用中の条件、0 件の表示）。
+  // フォーカスが <body> に落ちないよう、条件を入力し直す起点の検索欄へ移す。
+  const clearAllAndFocusSearch = () => {
+    clearAll()
+    searchRef.current?.focus()
+  }
   const anyFilter = Boolean(filters.search || filters.status || filters.owner || filters.regions.length)
 
   // Popover の中の条件だけを、解除できる形で一覧の上に示す。
@@ -380,7 +386,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
         </div>
 
         {(applied.length > 0 || anyFilter) && (
-          <DataTableAppliedFilters filters={applied} onClearAll={anyFilter ? clearAll : undefined} />
+          <DataTableAppliedFilters filters={applied} onClearAll={anyFilter ? clearAllAndFocusSearch : undefined} />
         )}
 
         {/* 件数と一括操作は同じ行に置き、選択しても表の位置を動かさない。 */}
@@ -472,7 +478,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
                 title="条件に一致する顧客はいません"
                 description="検索語や絞り込みの条件を変えてください。"
                 action={
-                  <Button variant="outline" size="sm" onClick={clearAll}>
+                  <Button variant="outline" size="sm" onClick={clearAllAndFocusSearch}>
                     条件をすべて解除
                   </Button>
                 }

@@ -1,9 +1,12 @@
-import { appendFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
-import { colorContrast, css, sameColor, token } from "./helpers"
+import { animationsDone, colorContrast, css, sameColor, token } from "./helpers"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 const pages = ["sidebar", "tabs", "breadcrumb", "card", "accordion", "separator"]
 
@@ -33,24 +36,6 @@ async function expectFocusRing(page: Page, target: Locator) {
 }
 
 const noOverflow = (l: Locator) => l.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
-
-// ページで発生した例外を記録する（テストは失敗にしない）。WebKit で報告されている
-// 「TypeError: The provided value is non-finite」を、Overlay 側の調査と照合できるようにするため。
-// 記録先：preview/test-results/page-errors.jsonl（テスト名、ブラウザ、URL、スタックトレース）
-test.beforeEach(async ({ page }, info) => {
-  page.on("pageerror", (error) => {
-    const entry = {
-      test: info.titlePath.join(" › "),
-      project: info.project.name,
-      url: page.url(),
-      message: error.message,
-      stack: error.stack,
-      time: new Date().toISOString(),
-    }
-    mkdirSync(join(info.project.testDir, "..", "test-results"), { recursive: true })
-    appendFileSync(join(info.project.testDir, "..", "test-results", "page-errors.jsonl"), JSON.stringify(entry) + "\n")
-  })
-})
 
 // ------------------------------------------------------------------ 共通
 
@@ -222,7 +207,7 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     await expect(menu.getByText("契約", { exact: true })).toBeVisible()
     // メニューは項目の右に表示する
     // 開く動き（拡大）が終わってから位置を測る
-    await page.waitForTimeout(300)
+    await animationsDone(menu)
     expect((await box(menu)).x).toBeGreaterThanOrEqual((await box(container(f))).x + 64)
     await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
     await menu.getByRole("menuitem", { name: "更新が近い契約" }).click()
@@ -290,8 +275,11 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
     await f.getByRole("button", { name: "メニュー", exact: true }).click()
     await expect.poll(async () => (await box(container(f))).width).toBe(64)
+    // 折りたたみの動き（項目の名前の非表示など）が終わってから、項目の上にポインターを置く
+    await animationsDone(container(f))
     await page.mouse.move(0, 0)
     await item.hover()
+    // 700ms より前には表示しない（表示しないことの確認のため、時間を指定して待つ）
     await page.waitForTimeout(300)
     await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
     const tip = page.locator("[data-slot=tooltip-content]")

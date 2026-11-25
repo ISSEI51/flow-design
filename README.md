@@ -187,7 +187,16 @@ Natural Motion
 
 ## このリポジトリについて
 
-現在は、思想、原則、デザイントークンを定め、コンポーネントを Button から順に作る段階にある。今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
+思想、原則、デザイントークンを定め、コンポーネント（39 種、v0.1）を作った。Components の段階は、全体統合検品（[integration-review.md](docs/web/components/integration-review.md)）を終えて完了した。実機（iOS Safari、Android）とスクリーンリーダー（VoiceOver、NVDA）による検品は、まだ行っていない。
+
+| 段階 | 状態 |
+| --- | --- |
+| 思想、原則、デザイントークン v0.1 | 完了 |
+| Components v0.1（39 種） | 完了 |
+| Patterns（複数のコンポーネントを組み合わせた画面の型） | 次の段階 |
+| Registry & Gallery、Agent Skills | 予定 |
+
+今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
 
 Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md) にまとめている。
 

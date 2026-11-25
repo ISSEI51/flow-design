@@ -189,7 +189,14 @@ function EditCompanyDialog() {
                 type="button"
                 variant="ghost"
                 data-testid="dialog-dirty-draft"
-                onClick={() => toast({ variant: "info", title: "下書きを保存しました", id: "dialog-draft" })}
+                onClick={() =>
+                  toast({
+                    variant: "info",
+                    title: "下書きを保存しました",
+                    id: "dialog-draft",
+                    action: { label: "元に戻す", onClick: () => toast({ variant: "info", title: "下書きの保存を取り消しました", id: "dialog-draft-undo" }) },
+                  })
+                }
               >
                 下書きを保存
               </Button>

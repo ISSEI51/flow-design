@@ -1,3 +1,5 @@
+"use client"
+
 import type * as React from "react"
 import { createContext, useContext } from "react"
 import { Toast as ToastPrimitive } from "@base-ui/react/toast"
@@ -71,6 +73,17 @@ function Toaster({ className, "aria-label": label = "通知", ...props }: ToastP
   )
 }
 
+// ポインターで押しても、通知（本体、閉じるボタン、操作のボタン）にフォーカスを移さない。
+// モーダル（Dialog、Alert Dialog など）の表示中に通知を押すと、フォーカスがモーダルの外の通知に移り、
+// 通知が消えると <body> に落ちる。次の Tab で、背後の支援技術から隠れた要素（入れ子の Dialog など）へ移っていた。
+// mousedown の既定の動作（フォーカスの移動）だけを止めるため、click、Base UI のスワイプ（pointer イベント）、
+// キーボードでの操作（F6 で通知の領域へ移り、Tab と Enter で押す）は変わらない。
+// 説明（description）に置いた入力欄などは、押してフォーカスを移せるように除く。
+const keepFocus = (event: React.MouseEvent) => {
+  if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return
+  event.preventDefault()
+}
+
 function ToastItem({ toast }: { toast: ToastPrimitive.Root.ToastObject }) {
   const variant = (toast.type as ToastVariant) ?? "neutral"
   const { Icon, className } = icons[variant] ?? icons.neutral
@@ -79,6 +92,7 @@ function ToastItem({ toast }: { toast: ToastPrimitive.Root.ToastObject }) {
       toast={toast}
       data-slot="toast"
       data-variant={variant}
+      onMouseDown={keepFocus}
       className={cn(
         "absolute inset-x-0 bottom-0 rounded-md border border-border bg-background text-ui text-foreground shadow-popover select-none",
         // 通知を縦に重ねずに並べる。新しい通知が下に来る。

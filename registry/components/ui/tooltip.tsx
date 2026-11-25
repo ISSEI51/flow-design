@@ -1,3 +1,5 @@
+"use client"
+
 import { createContext, useContext, useEffect, useRef, useState } from "react"
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 

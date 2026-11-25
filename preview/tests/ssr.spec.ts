@@ -4,6 +4,10 @@ import { expect, test, type Page } from "@playwright/test"
 import { createElement } from "react"
 import { renderToString } from "react-dom/server"
 import { createServer, type ViteDevServer } from "vite"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 // SSR と Hydration の検品。
 // 1. Node.js（window と document がない環境）で、Vite の SSR の読み込みを使って preview/src/ssr/fixture.tsx を
@@ -97,5 +101,14 @@ test.describe("SSR", { tag: "@webkit" }, () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible()
     const main = (await page.getByTestId("ssr-main").boundingBox())!
     expect(main.x).toBe(isMobile ? 0 : 240)
+    // 非表示の領域（選んでいない Tabs のパネル、閉じた Accordion）は、Hydration の前から見えない
+    await expect(page.getByText("北海物産株式会社")).toBeVisible()
+    // 要素が存在すること（toHaveCount）を先に確かめ、存在しないことで見えない判定にならないようにする
+    const hiddenPanel = page.getByRole("tabpanel", { includeHidden: true }).filter({ hasText: /^予定$/ })
+    await expect(hiddenPanel).toHaveCount(1)
+    await expect(hiddenPanel).toBeHidden()
+    const closedContent = page.getByText("更新の前に担当者へ連絡する")
+    await expect(closedContent).toHaveCount(1)
+    await expect(closedContent).toBeHidden()
   })
 })

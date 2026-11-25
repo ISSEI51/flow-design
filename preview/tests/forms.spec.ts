@@ -2,7 +2,11 @@ import { join } from "node:path"
 
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
-import { colorContrast, css, sameColor, token } from "./helpers"
+import { animationsDone, colorContrast, css, sameColor, settledBox, token } from "./helpers"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 const pages = ["input", "textarea", "label", "select", "checkbox", "radio-group", "switch", "field", "customer-form"]
 
@@ -170,6 +174,8 @@ test.describe("Select", { tag: "@webkit" }, () => {
     await t.click()
     const popup = page.locator("[data-slot=select-content]")
     await expect(popup).toBeVisible()
+    // Base UI は開く動きの最初のフレーム（data-starting-style）の間、transition をインラインで無効にする。その後に測る
+    await expect(popup).not.toHaveAttribute("data-starting-style")
     expect(await css(popup, "box-shadow")).toContain("0px 2px 8px")
     expect(await css(popup, "transition-duration")).toBe("0.18s")
   })
@@ -507,6 +513,8 @@ test.describe("hit areas", { tag: "@webkit" }, () => {
       await open(page, "checkbox")
       const list = page.getByTestId(id)
       await list.scrollIntoViewIfNeeded()
+      // スクロールが終わり、位置が定まってから座標を測る
+      await settledBox(list)
       const rows = list.locator("[data-slot=field-item]")
       const n = await rows.count()
       const expected = Array(n).fill("false")
@@ -537,6 +545,7 @@ test.describe("hit areas", { tag: "@webkit" }, () => {
     await open(page, "checkbox")
     const list = page.getByTestId("checkbox-inline")
     await list.scrollIntoViewIfNeeded()
+    await settledBox(list)
     const rows = list.locator("[data-slot=field-item]")
     const a = await box(rows.nth(0))
     const b = await box(rows.nth(1))
@@ -556,6 +565,7 @@ test.describe("hit areas", { tag: "@webkit" }, () => {
     await open(page, "radio-group")
     const group = page.getByTestId("radio-basic")
     await group.scrollIntoViewIfNeeded()
+    await settledBox(group)
     const rows = group.locator("[data-slot=field-item]")
     const r2 = await box(rows.nth(2))
     await press(page, isMobile, r2.x + r2.width - 4, r2.y + r2.height / 2)
@@ -566,6 +576,7 @@ test.describe("hit areas", { tag: "@webkit" }, () => {
     await open(page, "switch")
     const s = page.getByTestId("switch-basic")
     await s.scrollIntoViewIfNeeded()
+    await settledBox(s)
     const row = await box(page.locator("[data-slot=field]").filter({ has: s }))
     await press(page, isMobile, row.x + 4, row.y + 2) // 行の左上（ラベルの側）
     await expect(s).toHaveAttribute("aria-checked", "true")
@@ -575,6 +586,7 @@ test.describe("hit areas", { tag: "@webkit" }, () => {
     await open(page, "checkbox")
     const d = page.getByTestId("checkbox-disabled")
     await d.scrollIntoViewIfNeeded()
+    await settledBox(d)
     const row = await box(page.locator("[data-slot=field]").filter({ has: d }))
     const b = await box(d)
     for (const [x, y] of [
@@ -592,7 +604,7 @@ test.describe("hit areas", { tag: "@webkit" }, () => {
     await open(page, "switch")
     const s = page.getByTestId("switch-sm")
     await s.scrollIntoViewIfNeeded()
-    const b = await box(s)
+    const b = await settledBox(s)
     expect([b.width, b.height]).toEqual([36, 20])
     const thumb = s.locator("[data-slot=switch-thumb]")
     expect((await box(thumb)).width).toBe(16)
@@ -601,7 +613,8 @@ test.describe("hit areas", { tag: "@webkit" }, () => {
     expect(row.height).toBeGreaterThanOrEqual(48)
     await press(page, isMobile, b.x + b.width / 2, row.y + 2)
     await expect(s).toHaveAttribute("aria-checked", "true")
-    await page.waitForTimeout(200)
+    // つまみの移動（トランジション）が終わってから位置を測る
+    await animationsDone(s)
     expect((await box(thumb)).x - x).toBe(16)
   })
 })

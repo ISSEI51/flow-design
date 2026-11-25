@@ -2,6 +2,7 @@ import { StrictMode } from "react"
 import { hydrateRoot } from "react-dom/client"
 
 import { DataDisplaySsrFixture } from "./data-display-fixture"
+import { Hydrated } from "./hydrated"
 
 // Data Display の SSR の検品用。サーバーで描画した HTML を Hydration し、回復可能なエラーを window.__ssrErrors に記録する。
 // window.__ssrErrors と window.__ssrHydrated の型は client.tsx で宣言している。
@@ -9,7 +10,9 @@ window.__ssrErrors = []
 hydrateRoot(
   document.getElementById("root")!,
   <StrictMode>
-    <DataDisplaySsrFixture />
+    <Hydrated>
+      <DataDisplaySsrFixture />
+    </Hydrated>
   </StrictMode>,
   {
     onRecoverableError: (error) => window.__ssrErrors.push(String(error)),
@@ -17,4 +20,3 @@ hydrateRoot(
     onUncaughtError: (error) => window.__ssrErrors.push(String(error)),
   }
 )
-window.__ssrHydrated = true

@@ -104,6 +104,9 @@ Data Display（Table、Data Table、Pagination、Chart）に共通する判断�
 | 開閉（Overlay） | 初期フォーカス、フォーカスの閉じ込めと復帰、Escape、外側のクリック、背景の操作とスクロール、未保存の変更、入れ子、重なり順、画面の端 |
 | 現在位置（ナビゲーション） | `aria-current="page"` と、色だけに頼らない見た目の区別 |
 | 開閉（ナビゲーション） | 幅、`aria-expanded`、非表示の内容が支援技術から隠れること、入力内容が残ること |
+| ページの例外 | 捕捉されなかった例外、処理されなかった Promise の拒否、製品のコードから出たコンソールのエラーがない（下記） |
+| 部品の組み合わせ | 複数の部品を組み合わせた操作（`preview/tests/integration.spec.ts`）。対象と結果は [integration-review.md](integration-review.md) |
+| `"use client"` の境界 | フック、Context、イベントの関数（`on*` の props）を使うファイルに `"use client"` があり、使わないファイルにはない（`preview/tests/ssr-core.spec.ts`） |
 
 ## プレビュー
 
@@ -112,7 +115,7 @@ npm install
 npm run preview:dev        # http://localhost:5173/
 npm run test:components    # Playwright（初回は npx playwright install chromium）
 npm run typecheck
-npm run test:ssr           # SSR と Hydration（Navigation & Layout と Data Display。ファイル名に ssr を含むテスト）
+npm run test:ssr           # SSR と Hydration（Navigation & Layout、Forms・Feedback・Overlays、Advanced、Data Display。ファイル名に ssr を含むテスト）
 ```
 
 ### ブラウザ
@@ -132,4 +135,4 @@ WebKit の project は、Playwright の WebKit による基本的な互換性の
 
 WebKit は既定の設定では Tab でリンクへ移動しないため、検品ではリンクへの移動に Option + Tab を使う。
 
-Navigation & Layout の検品は、ページで発生した例外（`pageerror`）を、テスト名、ブラウザ、URL、スタックトレースとともに `preview/test-results/page-errors.jsonl` に記録する。例外があってもテストは失敗にしない。
+ブラウザを使うすべての検品は、`preview/tests/page-errors.ts` の `collectPageErrors(test)` で、捕捉されなかった例外、処理されなかった Promise の拒否、コンソールのエラーを記録する。記録は、テスト名、project、ブラウザとバージョン、URL、スタックとともに `test-results/` の `page-errors.json` に添付し、標準出力に `PAGE-ERRORS {...}` の 1 行で出す。製品の例外とコンソールのエラーは検品を失敗にする。失敗にしない環境の事象（WebKit の座標が NaN のイベント、Vite の HMR の接続のエラー）の条件は [overlays.md](overlays.md#ページの例外の記録) にまとめている。

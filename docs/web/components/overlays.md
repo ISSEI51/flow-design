@@ -223,11 +223,28 @@ Dropdown Menu と Select の選択肢に共通する規則。Combobox、Multi Se
 | ブランドの変更 | Portal の中のボタンが `--primary` に従い、4.5:1 以上を保つ |
 | キー操作のハイライト | ポインターでは枠を出さず、キー操作では項目の内側に枠を出す。選択中との区別、スクロールの端 |
 | 他のコンポーネント | Dialog と Sheet の上の Toast、Dialog の中の Tooltip と Popover、開閉を繰り返した後に何も残らない |
+| Toast とフォーカス | Dialog、Alert Dialog（入れ子）、Drawer、閲覧の Sheet の表示中に、Toast の閉じるボタンと操作のボタンをポインターとキーボード（F6、Tab、Enter）で押す。フォーカスが開いている面の外へ移らず、Toast が消えた後も `<body>` に落ちず、閉じ込めが続く（`toast focus with overlays`） |
 | ページの例外 | 捕捉されなかった例外を記録し、検品を失敗にする（下記） |
 
 ### ページの例外の記録
 
-`preview/tests/page-errors.ts` は、Overlay の検品で、捕捉されなかった例外とコンソールのエラーを記録する。例外が起きた場合は、テスト名、project、ブラウザとバージョン、URL、例外の文とスタック、ファイルと行、発生時に開いていた Overlay、コンソールのログを `test-results/` に JSON で添付し、検品を失敗にする。
+`preview/tests/page-errors.ts` は、ブラウザを使うすべての検品（`collectPageErrors(test)`）で、捕捉されなかった例外、処理されなかった Promise の拒否（`unhandledrejection`）、コンソールのエラーを記録する。記録がある場合は、テスト名、project、ブラウザとバージョン、URL、例外の文とスタック、ファイルと行、発生時に開いていた Overlay を `test-results/` に JSON で添付し、標準出力に `PAGE-ERRORS {...}` の 1 行を出す。次のものは検品を失敗にする。
+
+- 捕捉されなかった例外のうち、下の環境の事象の条件を満たさないもの
+- 処理されなかった Promise の拒否（すべて）
+- コンソールのエラーのうち、検品の環境から出るもの（下記）以外。React の警告、Hydration の不一致の報告もここに含まれる
+
+コンソールのエラーで、検品の環境から出るものとして記録だけにするのは、次の 3 つの文で始まるものに限る（`CONSOLE_ENVIRONMENT`、先頭からの一致）。いずれも Vite の開発サーバーの HMR の接続から出る。
+
+| 文 | 原因 |
+| --- | --- |
+| `WebSocket connection to 'ws://localhost:<port>/?token=<token>' failed: ...` | Chromium の Local Network Access の制限で、Vite の HMR の WebSocket が接続できない |
+| `[vite] failed to connect to websocket. ...` | 同上の Vite の報告 |
+| `Failed to send error to Vite server: ...` | 同上。Vite のクライアントがエラーを開発サーバーへ送れない |
+
+時刻の扱い：`page.clock` で製品のコードの時計（`Date`）を固定する検品があるため、記録の前後関係には `Date.now()` を使わない。ページの中の記録は、リスナーが受け取った時点の `performance.now()` と文書の ID を持ち、同じ文書の記録だけを比べる。Playwright の `page.clock` は `window.performance` と `Event.prototype.timeStamp` も置き換え、`pauseAt` では止まるため、環境の事象の判定は、Node で受け取った時刻でもイベントの 50ms 以内であることを求める（下の条件 4）。`pageerror` と Node で受け取った記録は、Node の `performance.now()` で照合する。記録は `exposeBinding` でその場で Node へ送るため、ページを移動しても失われない。
+
+`page.clock.setFixedTime` を使うと、`setTimeout` と `requestAnimationFrame` のコールバックの中で起きた例外は、Playwright の時計の置き換えが捕捉してコンソールのエラーとして出す（Chromium は `page-errors.spec.ts` で検品、WebKit は調査で確認）。`pageerror` と `window` の `error` にはならない。この経路の例外も、コンソールのエラーとして検品を失敗にする。
 
 調査で確認した事象は次のとおりである。
 
@@ -241,7 +258,7 @@ Dropdown Menu と Select の選択肢に共通する規則。Combobox、Multi Se
 1. ブラウザが WebKit で、版が 27.x（調査で確認した版）である。Playwright を更新したときは、事象を確かめ直してから条件を変える。
 2. 例外の文が `The provided value is non-finite` である。
 3. スタックの先頭が `elementsFromPoint`、続いて `expectHitTarget` で、`http(s)://` の URL を持つフレーム（製品やライブラリのコード）を含まない。`window` の `error` のファイル名を持たない。
-4. 例外の 0〜5ms 前に、座標が有限でない信頼された `PointerEvent` か `MouseEvent`（`pointerdown`、`pointerup`、`click`、`mousedown`、`mouseup`）が記録されている。イベントは種類、コンストラクター、`isTrusted`、座標を構造化して記録する。
+4. 例外の 0〜5ms 前（ページの時刻）、かつ Node で受け取った時刻で 50ms 以内の前に、座標が有限でない信頼された `PointerEvent` か `MouseEvent`（`pointerdown`、`pointerup`、`click`、`mousedown`、`mouseup`）が記録されている。イベントは種類、コンストラクター、`isTrusted`、座標を構造化して記録する。
 5. `pageerror` は、条件を満たした `window` の `error` の重複に限る（50ms 以内、件数を超えない）。
 
 条件を満たさない例外、製品のコードの例外、Chromium の例外は、すべて検品を失敗にする。
@@ -265,6 +282,7 @@ Dropdown Menu と Select の選択肢に共通する規則。Combobox、Multi Se
 | VoiceOver、NVDA | 未確認。役割、名前、`aria-hidden` の付け外しを Playwright で確かめている |
 | WebKit の座標が NaN のイベント | 発生元は未特定（上記）。Base UI がこのイベントを外側のクリックとして扱い、Overlay が閉じる可能性がある（検品では観測していない） |
 | ResizeObserver の通知 | Chromium で、Select の一覧が閉じる動きと Dialog が閉じる動きが重なった場合に記録される。影響は確認されていない |
-| Toast を押した後のフォーカス | モーダル（Alert Dialog など）の表示中に Toast の閉じるボタンを押すと、フォーカスが `<body>` に移り、次の Tab で背後の Overlay（`aria-hidden`）の中へ移る（Chromium、WebKit で確認）。Base UI の Dialog は、内側として扱う要素を公開 API で指定できない。改善案は、Toast のボタンが押されてもフォーカスを奪わないようにすること（Feedback）、または Base UI にその API を求めること |
-| Base UI の内部の印 | 浮かぶ要素の層の切り替えは、Base UI の `data-base-ui-inert` に依存する。Base UI の更新時は、重なり順の検品で確かめる |
+| Base UI の内部の印 | 浮かぶ要素の層の切り替えは、Base UI の `data-base-ui-inert` に依存する。Base UI の更新時は、重なり順の検品で確かめる。依存の一覧は [integration-review.md](./integration-review.md) の「外部ライブラリへの依存」 |
+
+解消した項目：Toast を押した後のフォーカス（Components v0.1 の全体統合検品で修正）。モーダルの表示中に Toast のボタンをポインターで押すと、フォーカスがモーダルの外の Toast に移り、Toast が消えると `<body>` に落ちて、次の Tab で背後の `aria-hidden` の要素へ移っていた。Toast の `mousedown` の既定の動作（フォーカスの移動）を止めて解消した。キーボードでの操作（F6、Tab、Enter）は変わらない。詳細は [toast.md](./toast.md)。
 

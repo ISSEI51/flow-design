@@ -1,6 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { css, sameColor, token } from "./helpers"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 // Feedback Components v0.1 の確定時に追加した回帰テスト
 

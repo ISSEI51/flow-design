@@ -4,6 +4,10 @@ import { expect, test } from "@playwright/test"
 import { createElement } from "react"
 import { renderToString } from "react-dom/server"
 import { createServer, type ViteDevServer } from "vite"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 // Data Display（Table、Data Table、Pagination、Chart）の SSR と Hydration の検品。
 // npm run test:ssr（ファイル名に ssr を含むテスト）と npm run test:components の両方で実行する。

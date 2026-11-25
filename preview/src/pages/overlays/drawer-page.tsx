@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/drawer"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/components/ui/toast"
 
 import { customers } from "../../data/customers"
 import { Compare, Row, Section } from "../../layout/section"
@@ -111,6 +112,7 @@ function NoteDrawer() {
   const [note, setNote] = useState("")
   const [confirm, setConfirm] = useState(false)
   const [status, setStatus] = useState("")
+  const { toast } = useToast()
   return (
     <div className="flex flex-col items-start gap-2">
       <Drawer
@@ -145,6 +147,23 @@ function NoteDrawer() {
               </Field>
             </DrawerBody>
             <DrawerFooter>
+              {/* Drawer の表示中に、操作つきの通知（Toast）を出す例。通知を押した後も、フォーカスは Drawer の中に残る。 */}
+              <Button
+                type="button"
+                variant="ghost"
+                data-testid="drawer-note-draft"
+                disabled={note.trim() === ""}
+                onClick={() =>
+                  toast({
+                    variant: "info",
+                    title: "下書きを保存しました",
+                    id: "drawer-draft",
+                    action: { label: "元に戻す", onClick: () => setStatus("下書きの保存を取り消しました") },
+                  })
+                }
+              >
+                下書きを保存
+              </Button>
               <DrawerClose render={<Button variant="secondary" />}>キャンセル</DrawerClose>
               <Button type="submit" disabled={note.trim() === ""}>
                 メモを追加

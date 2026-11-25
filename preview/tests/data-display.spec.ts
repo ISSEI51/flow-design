@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { customers, queryCustomers, type CustomerQuery } from "../src/data/data-display/customers"
-import { colorContrast, css, sameColor, token } from "./helpers"
+import { colorContrast, css, sameColor, settledBox, token } from "./helpers"
 import { collectPageErrors } from "./page-errors"
 
 // ページで捕捉されなかった例外とコンソールのエラーがあれば、テストを失敗にする（page-errors.ts）。
@@ -868,8 +868,16 @@ test.describe("Data Table: checkbox hit areas by density", { tag: "@webkit" }, (
   ] as const) {
     test(`${density}: cell-wide target, no overlap, header, indeterminate, disabled, row click`, async ({ page, isMobile }) => {
       await open(page, "data-table")
+      // 上にある「サーバー側の処理を模擬」の表は、0.4〜0.8 秒後に初回の取得を終え、読み込み中の行が 50 行に変わる。
+      // 押している間にその表の高さが変わると、スクロールの位置の補正が起き、WebKit は mouseup と click を <html> へ送る。
+      // ページの初回の読み込みが終わってから操作する
+      const server = page.getByTestId("server").locator("[data-slot=data-table]")
+      await expect(server.locator("[data-slot=data-table-loading-row]")).toHaveCount(0)
+      await expect(server).not.toHaveAttribute("aria-busy", "true")
       const t = page.getByTestId(`density-${density}`)
       await t.scrollIntoViewIfNeeded()
+      // スクロールが終わり、位置が定まってから座標を測る
+      await settledBox(t)
       const rows = bodyRows(t)
       const state = page.getByTestId(`density-${density}-state`)
       // 行の最小の高さ。指で操作する端末では、選択できる行を 48px 以上にする
@@ -913,7 +921,7 @@ test.describe("Data Table: checkbox hit areas by density", { tag: "@webkit" }, (
       await expect(t.locator("tr[data-state=selected]")).toHaveCount(0)
       // 固定した列：横にスクロールしても、押したセルの行が切り替わる
       await t.locator("[data-slot=table-container]").evaluate((el) => (el.scrollLeft = 200))
-      await page.waitForTimeout(100)
+      await settledBox(rows.nth(4).locator("td").first())
       await press(rows.nth(4).locator("td").first(), 2, b.height / 2)
       await expect(rows.nth(4)).toHaveAttribute("data-state", "selected")
       await expect(t.locator("tr[data-state=selected]")).toHaveCount(1)

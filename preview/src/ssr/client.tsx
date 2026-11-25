@@ -2,6 +2,7 @@ import { StrictMode } from "react"
 import { hydrateRoot } from "react-dom/client"
 
 import { SsrFixture } from "./fixture"
+import { Hydrated } from "./hydrated"
 
 // サーバーで描画した HTML を Hydration する。不一致などの回復可能なエラーを window.__ssrErrors に記録する。
 declare global {
@@ -15,7 +16,9 @@ window.__ssrErrors = []
 hydrateRoot(
   document.getElementById("root")!,
   <StrictMode>
-    <SsrFixture />
+    <Hydrated>
+      <SsrFixture />
+    </Hydrated>
   </StrictMode>,
   {
     onRecoverableError: (error) => window.__ssrErrors.push(String(error)),
@@ -23,4 +26,3 @@ hydrateRoot(
     onUncaughtError: (error) => window.__ssrErrors.push(String(error)),
   }
 )
-window.__ssrHydrated = true

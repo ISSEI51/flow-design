@@ -14,7 +14,19 @@ import {
   ComboboxValue,
   useComboboxSearch,
 } from "@/components/ui/combobox"
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldError, FieldLabel, FieldRequiredMark } from "@/components/ui/field"
+import { MultiSelect } from "@/components/ui/multi-select"
 
 import { accounts, prefectures, searchPeople, type Option, type Person } from "../../data/advanced"
 import { Compare, Row, Section } from "../../layout/section"
@@ -62,6 +74,50 @@ function AccountCombobox({
         </ComboboxList>
       </ComboboxContent>
     </Combobox>
+  )
+}
+
+// Dialog の中の Combobox と Multi Select。メニューは Dialog より前面に表示し、Esc は前面のメニューだけを閉じる。
+function InDialog() {
+  const [account, setAccount] = useState<Option | null>(null)
+  const [regions, setRegions] = useState<string[]>([])
+  const [saved, setSaved] = useState<string | null>(null)
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <Dialog>
+        <DialogTrigger render={<Button variant="outline" data-testid="combobox-dialog-trigger" />}>配送の条件を編集</DialogTrigger>
+        <DialogContent data-testid="combobox-dialog">
+          <DialogHeader>
+            <DialogTitle>配送の条件を編集</DialogTitle>
+            <DialogDescription>取引先と配送エリアを選んでください。</DialogDescription>
+          </DialogHeader>
+          <DialogBody className="flex flex-col gap-6">
+            <Field>
+              <FieldLabel>取引先</FieldLabel>
+              <AccountCombobox testId="combobox-dialog-account" value={account} onValueChange={setAccount} />
+            </Field>
+            <Field>
+              <FieldLabel>配送エリア</FieldLabel>
+              <div data-testid="combobox-dialog-regions" className="contents">
+                <MultiSelect options={prefectures} value={regions} onValueChange={setRegions} />
+              </div>
+            </Field>
+          </DialogBody>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>キャンセル</DialogClose>
+            <DialogClose
+              render={<Button data-testid="combobox-dialog-save" />}
+              onClick={() => setSaved(`${account?.label ?? "未選択"} ／ ${regions.length}件`)}
+            >
+              保存
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <p className="text-caption text-muted-foreground" data-testid="combobox-dialog-state">
+        保存した条件：{saved ?? "なし"}
+      </p>
+    </div>
   )
 }
 
@@ -321,6 +377,15 @@ export function ComboboxPage() {
       <Section title="明示的な新規作成" lead="自由入力で項目を登録しない。製品が新規作成を許可する場合だけ、追加の操作を選択肢の最後に置く。">
         <Row label="追加できる">
           <CreatableCombobox />
+        </Row>
+      </Section>
+
+      <Section
+        title="Dialog の中"
+        lead="Combobox と Multi Select のメニューは Dialog より前面に表示する。Esc は前面のメニューだけを閉じ、もう一度押すと Dialog を閉じる。"
+      >
+        <Row label="Combobox と Multi Select">
+          <InDialog />
         </Row>
       </Section>
 

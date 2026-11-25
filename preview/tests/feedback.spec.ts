@@ -3,6 +3,10 @@ import { join } from "node:path"
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { colorContrast, css, sameColor, token } from "./helpers"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 const pages = ["badge", "avatar", "tooltip", "alert", "toast", "skeleton", "progress", "billing"]
 
@@ -129,6 +133,8 @@ test.describe("Tooltip", () => {
     await page.waitForTimeout(450)
     await expect(tip).toHaveCount(0)
     await expect(tip).toBeVisible({ timeout: 1000 })
+    // Base UI は開く動きの最初のフレーム（data-starting-style）の間、transition をインラインで無効にする。その後に測る
+    await expect(tip).not.toHaveAttribute("data-starting-style")
     expect(sameColor(await css(tip, "background-color"), await token(page, "--foreground"))).toBe(true)
     expect(sameColor(await css(tip, "color"), "#ffffff")).toBe(true)
     expect(await css(tip, "font-size")).toBe("12px")

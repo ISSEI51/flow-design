@@ -5,6 +5,10 @@ import { expect, test, type Page } from "@playwright/test"
 import { createElement } from "react"
 import { renderToString } from "react-dom/server"
 import { createServer, type ViteDevServer } from "vite"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 // Advanced Components の SSR と Hydration の検品。仕組みは ssr.spec.ts と同じ。
 // 1. Node.js（window と document がない環境）で preview/src/ssr/advanced-fixture.tsx を react-dom/server で HTML にする

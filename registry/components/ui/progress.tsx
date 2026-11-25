@@ -1,3 +1,5 @@
+"use client"
+
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress"
 

@@ -97,3 +97,50 @@ export async function colorContrast(page: Page, fg: string, bg: string) {
   )
   return contrast(f as Rgb, b as Rgb)
 }
+
+// 要素の位置と大きさが、2 フレーム続けて変わらなくなるまで待ってから返す。
+// スクロール（scrollIntoViewIfNeeded の後）や、開閉・配置の動きの途中で座標を測らないために使う。
+export async function settledBox(l: Locator) {
+  const frame = () => l.page().evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+  const same = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+    Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5
+  let prev = await l.boundingBox()
+  let stable = 0
+  for (let i = 0; i < 60; i++) {
+    await frame()
+    const cur = await l.boundingBox()
+    if (prev && cur && same(prev, cur)) {
+      if (++stable >= 2) return cur
+    } else stable = 0
+    prev = cur
+  }
+  throw new Error("element position did not settle")
+}
+
+// 要素と子孫の CSS のアニメーションとトランジション（繰り返しが有限のもの）が終わるまで待つ。
+export async function animationsDone(l: Locator) {
+  await l.evaluate(async (el) => {
+    for (let i = 0; i < 2; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      // 繰り返しが無限のアニメーション（Skeleton の点滅など）は終わらないため、待たない
+      const finite = el.getAnimations({ subtree: true }).filter((a) => a.effect?.getTiming().iterations !== Infinity)
+      await Promise.all(finite.map((a) => a.finished.catch(() => undefined)))
+    }
+  })
+}
+
+// スクロールの位置が、数フレーム続けて変わらなくなるまで待ち、その位置を返す（タッチのスクロールの慣性が終わるまで待つ）。
+export async function settledScrollTop(l: Locator) {
+  return l.evaluate(async (el) => {
+    let prev = el.scrollTop
+    let stable = 0
+    for (let i = 0; i < 300; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      if (el.scrollTop === prev) {
+        if (++stable >= 5) return prev
+      } else stable = 0
+      prev = el.scrollTop
+    }
+    throw new Error("scroll position did not settle")
+  })
+}

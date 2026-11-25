@@ -148,6 +148,7 @@ const table = useTable({
 - `DataTableAppliedFilters` には、Popover や Sheet にまとめた条件だけを渡す。個別に表示している Select の値は、欄の中に見えているため重複して並べない。
 - 条件のボタンを押すと、その条件を解除し、同じ位置のボタン（なければ前のボタン、最後は「すべて解除」）にフォーカスを移す。
 - `onClearAll` を渡すと「すべて解除」を表示する。検索と個別の条件も含めて解除する。
+- 「すべて解除」を押すと、製品は適用中の条件の一覧そのものを消すことが多い。この部品の中ではフォーカスを移せないため、`onClearAll` の中で、製品が検索欄などの残る要素へフォーカスを移す。0 件の表示（`noResults`）の「条件をすべて解除」も、押すと表示ごと消えるため同じようにする。移さないと、フォーカスが `<body>` に落ちる（プレビューの `customer-table.tsx` の `clearAllAndFocusSearch`、検品は `preview/tests/integration.spec.ts`）。
 
 ### 並べ替え
 

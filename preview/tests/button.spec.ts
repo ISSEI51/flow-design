@@ -3,6 +3,10 @@ import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 
 import { buttonContrast, css, sameColor, token } from "./helpers"
+import { collectPageErrors } from "./page-errors"
+
+// 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
+collectPageErrors(test)
 
 const variants = ["default", "secondary", "outline", "ghost", "destructive", "link"] as const
 

@@ -2,7 +2,7 @@ import { join } from "node:path"
 
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
-import { buttonContrast, colorContrast, css, sameColor, token } from "./helpers"
+import { buttonContrast, colorContrast, css, sameColor, settledBox, settledScrollTop, token } from "./helpers"
 import { collectPageErrors } from "./page-errors"
 
 // Overlay（Dialog、Alert Dialog、Popover、Dropdown Menu、Sheet、Drawer）の検品。
@@ -966,15 +966,17 @@ test.describe("Drawer", { tag: "@webkit" }, () => {
     const long = page.getByTestId("drawer-long")
     const body = page.getByTestId("drawer-long-body")
     await settle(long)
-    await page.waitForTimeout(300)
     await body.evaluate((el) => el.scrollTo(0, 400))
-    const bb = await box(body)
+    await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(400)
+    const bb = await settledBox(body)
     await touchDrag(page, bb.x + bb.width / 2, bb.y + 40, 200)
-    await page.waitForTimeout(500)
+    // スワイプの間は内容がスクロールし、閉じない（スクロールの慣性が止まるまで待ってから確かめる）
+    expect(await settledScrollTop(body)).toBeLessThan(400)
     await settle(long)
-    expect(await body.evaluate((el) => el.scrollTop)).toBeLessThan(400)
+    await expect(long).toBeVisible()
     // 上端に達してから下へスワイプすると閉じる
     await body.evaluate((el) => el.scrollTo(0, 0))
+    expect(await settledScrollTop(body)).toBe(0)
     await touchDrag(page, bb.x + bb.width / 2, bb.y + 40, 400)
     await expect(long).toBeHidden()
 
@@ -1415,6 +1417,164 @@ test.describe("focus guards", { tag: "@webkit" }, () => {
     }
     await expect.poll(() => containsFocus(popup)).toBe(true)
     expect(await focusLeaks(popup)).toEqual([])
+  })
+})
+
+// Toast を押した後のフォーカス（Components 全体の統合検品）。
+// モーダルの表示中に Toast を押しても、フォーカスがモーダルの外（<body>、背後の aria-hidden の要素）へ逸脱しない。
+// ポインターでは Toast がフォーカスを奪わない。キーボードでは F6 で通知の領域へ移り、閉じた後は Base UI が元の要素へ戻す。
+test.describe("toast focus with overlays", { tag: "@webkit" }, () => {
+  const toaster = (page: Page) => page.locator("[data-slot=toaster]")
+  const firstToast = (page: Page) => page.locator("[data-slot=toast]").first()
+
+  // フォーカスが container の中（フォーカスガード以外）にあり、<body> や隠れた要素にないこと
+  async function expectFocusIn(container: Locator) {
+    await expect
+      .poll(() =>
+        container.evaluate((root) => {
+          const a = document.activeElement
+          if (!a || a === document.body) return "body"
+          if (!root.contains(a)) return `outside:${a.tagName}`
+          if (a.closest("[aria-hidden=true]")) return "aria-hidden"
+          return "inside"
+        })
+      )
+      .toBe("inside")
+  }
+
+  // Tab を押してもフォーカスが container の中を循環し、背後に漏れない
+  async function expectTrapped(page: Page, container: Locator) {
+    await recordFocus(page)
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press("Tab")
+      await expect
+        .poll(() =>
+          container.evaluate((root) => root.contains(document.activeElement) && !document.activeElement!.hasAttribute("data-base-ui-focus-guard"))
+        )
+        .toBe(true)
+    }
+    expect(await focusLeaks(container)).toEqual([])
+  }
+
+  // キーボード：F6 で通知の領域へ移り、Tab で目的のボタンへ進み、Enter で押す
+  async function pressInToastByKeyboard(page: Page, slot: "toast-close" | "toast-action") {
+    await page.keyboard.press("F6")
+    await expect.poll(() => toaster(page).evaluate((el) => el.contains(document.activeElement))).toBe(true)
+    const target = firstToast(page).locator(slot === "toast-close" ? "[data-slot=toast-close]" : "button:not([data-slot=toast-close])")
+    for (let i = 0; i < 6 && !(await isFocused(target)); i++) await page.keyboard.press("Tab")
+    await expect(target).toBeFocused()
+    await page.keyboard.press("Enter")
+  }
+
+  type Scenario = { name: string; modal: boolean; setup: (page: Page) => Promise<Locator> }
+  const scenarios: Scenario[] = [
+    {
+      name: "dialog",
+      modal: true,
+      setup: async (page) => {
+        await open(page, "dialog")
+        await page.getByTestId("dialog-combo-trigger").click()
+        const popup = page.getByTestId("dialog-combo")
+        await settle(popup)
+        await page.getByTestId("dialog-combo-copy").click()
+        return popup
+      },
+    },
+    {
+      name: "nested alert dialog",
+      modal: true,
+      setup: async (page) => {
+        await open(page, "dialog")
+        await page.getByTestId("dialog-dirty-trigger").click()
+        const popup = page.getByTestId("dialog-dirty")
+        await settle(popup)
+        await page.getByTestId("dialog-dirty-name").fill("x")
+        await page.getByTestId("dialog-dirty-draft").click()
+        await expect(firstToast(page)).toBeVisible()
+        await page.getByTestId("dialog-dirty-name").focus()
+        await page.keyboard.press("Escape")
+        const alert = page.getByTestId("dialog-discard")
+        await settle(alert)
+        return alert
+      },
+    },
+    {
+      name: "drawer",
+      modal: true,
+      setup: async (page) => {
+        await open(page, "drawer")
+        await page.getByTestId("drawer-note-trigger").click()
+        const popup = page.getByTestId("drawer-note")
+        await settle(popup)
+        await page.getByTestId("drawer-note-field").fill("来週に連絡する")
+        await page.getByTestId("drawer-note-draft").click()
+        return popup
+      },
+    },
+    {
+      name: "sheet (view, non-modal)",
+      modal: false,
+      setup: async (page) => {
+        await open(page, "sheet")
+        await page.getByTestId("sheet-row-C-0012").click()
+        const sheet = page.getByTestId("sheet-customer")
+        await settle(sheet)
+        await page.getByTestId("sheet-actions-trigger").click()
+        await page.getByTestId("sheet-actions").getByRole("menuitem", { name: "複製" }).click()
+        // メニューが閉じ、フォーカスがメニューのトリガーへ戻り終わってから次へ進む
+        await expect(page.getByTestId("sheet-actions")).toHaveCount(0)
+        await expect(page.getByTestId("sheet-actions-trigger")).toBeFocused()
+        return sheet
+      },
+    },
+  ]
+
+  for (const sc of scenarios) {
+    test(`${sc.name}: closing the toast with the pointer keeps focus inside`, async ({ page, isMobile }) => {
+      const container = await sc.setup(page)
+      await expect(firstToast(page)).toBeVisible()
+      const before = await page.evaluateHandle(() => document.activeElement)
+      const close = firstToast(page).locator("[data-slot=toast-close]")
+      if (isMobile) await close.tap()
+      else await close.click()
+      await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+      // ポインターで押しても、フォーカスは押す前の要素から動かない
+      expect(await page.evaluate((b) => document.activeElement === b, before)).toBe(true)
+      await expectFocusIn(container)
+      if (sc.modal && !isMobile) await expectTrapped(page, container)
+    })
+
+    test(`${sc.name}: closing the toast with the keyboard (F6) returns focus inside`, async ({ page, isMobile }) => {
+      test.skip(isMobile, "F6 と Tab はハードウェアキーボードの操作のため、デスクトップで確かめる")
+      const container = await sc.setup(page)
+      await expect(firstToast(page)).toBeVisible()
+      const before = await page.evaluateHandle(() => document.activeElement)
+      await pressInToastByKeyboard(page, "toast-close")
+      await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+      // Base UI は、通知を閉じた後に F6 を押す前の要素へフォーカスを戻す
+      await expect.poll(() => page.evaluate((b) => document.activeElement === b, before)).toBe(true)
+      await expectFocusIn(container)
+      if (sc.modal) await expectTrapped(page, container)
+    })
+  }
+
+  test("toast action with the pointer and with the keyboard: runs, and focus stays in the drawer", async ({ page, isMobile }) => {
+    const drawer = scenarios.find((s) => s.name === "drawer")!
+    const container = await drawer.setup(page)
+    const action = firstToast(page).getByRole("button", { name: "元に戻す" })
+    await expect(action).toBeVisible()
+    if (isMobile) await action.tap()
+    else await action.click()
+    await expect(page.getByTestId("drawer-note-status")).toHaveText("下書きの保存を取り消しました")
+    await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+    await expectFocusIn(container)
+    if (isMobile) return
+    await page.getByTestId("drawer-note-draft").click()
+    await expect(firstToast(page)).toBeVisible()
+    await pressInToastByKeyboard(page, "toast-action")
+    await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+    await expectFocusIn(container)
+    await expectTrapped(page, container)
   })
 })
 
