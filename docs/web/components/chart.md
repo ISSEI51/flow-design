@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/chart.tsx`](../../../registry/components/ui/chart.tsx) |
 | 元にした実装 | shadcn/ui の Chart（Recharts 3） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 Data Display に共通する判断基準は [data-display.md](data-display.md) にまとめている。実装の例は [`preview/src/pages/data-display/charts.tsx`](../../../preview/src/pages/data-display/charts.tsx) にある。
 
@@ -58,7 +58,7 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 | `ChartConfig` | 系列ごとの `label`、`color`（または `theme`）、`icon`。Flow Design で `indicator`（`dot`、`line`、`dashed`）を追加した |
 | `ChartTooltip`、`ChartTooltipContent` | Tooltip。`valueFormatter` で単位を付ける（例：`(v) => \`${v}万円\``） |
 
-グラフの Tooltip は、Feedback の Tooltip（`foreground` の濃い面に `background` の文字）にしない。系列の色の印を濃い面に置くと、`chart-3`（#104e64）など濃い色の印が面と区別できなくなるためである。複数の系列の名前と値を並べる内容は、Popover と同じ明るい面で示す。
+グラフの Tooltip は、Feedback の Tooltip（`foreground` の濃い面に `background` の文字）にしない。系列の色の印を濃い面に置くと、`chart-2`（#134e4a）や `chart-4`（#4c1d95）など濃い色の印が面と区別できなくなるためである。複数の系列の名前と値を並べる内容は、Popover と同じ明るい面で示す。
 | `ChartLegend`、`ChartLegendContent` | 凡例 |
 | `ChartDataTable` | グラフと同じ数値の表（Table の `compact`）。値がない場合は「—」と「データなし」 |
 | `chartAnimation`、`chartStyles` | 系列と軸に展開して使う値 |
@@ -69,14 +69,23 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 
 | 場面 | 色 |
 | --- | --- |
-| 系列が 1 つ | 1 色（`var(--chart-1)` など） |
+| 系列が 1 つ | 1 色（`var(--chart-1)`） |
 | 特定の項目を強調する | 強調する項目を `var(--primary)` などの色、それ以外をニュートラル（`var(--border-strong)` など） |
-| 複数の系列、構成比 | `chart-1`〜`chart-5` を系列ごとに使う |
+| 複数の系列、構成比 | `chart-1` から順に系列ごとに使う。3 系列までは色だけでも区別できる組み合わせにしている |
+| 4 系列以上 | `chart-4`、`chart-5` を足し、線の種類、マーカー、直接のラベル、数値の表を必ず併用する |
+
+正式な値は [tokens.md の「グラフの色」](../tokens.md#グラフの色) にある。`chart-1` #2563eb、`chart-2` #134e4a、`chart-3` #d0620c、`chart-4` #4c1d95、`chart-5` #be185d。
+
+- 5 色とも、`background`、`card`、`muted`、`popover`（Tooltip の面）に対して 3:1 以上である。グラフの色で文字を書かない。
+- `chart-1`〜`chart-3` は、1 型・2 型・3 型の色覚のシミュレーションとグレースケールでも区別できる。プレビューの「グレースケールで確認」で目視できる。
+- 製品が `--chart-*` を上書きした場合は、`scripts/tokens/check-contrast.mjs` で背景とのコントラストと系列の区別を確かめる（[tokens.md](../tokens.md#ブランドと書体の変更)）。ブランドカラーを `chart-1` に使う例はプレビューにある。
 
 - 色は `ChartConfig` の `color` で指定し、系列は `var(--color-<key>)` で参照する。製品は `config` の値か、`--chart-*` の上書きで配色を変えられる。
 - 装飾のために、すべての棒を別の色にしない。
 - `success`、`warning`、`destructive` などの状態の色は、値が状態を表す場合（目標の達成、エラーの件数など）だけに使う。
 - 色だけで系列を区別しない。凡例、値の文字、線の種類（実線と破線、`indicator`）を組み合わせる。
+- 凡例（`ChartLegendContent`）は `ChartConfig` に書いた順に並べる。Recharts の Legend は既定（`itemSorter="value"`）で名前の順に並べ替えるため、系列の順と凡例の順が食い違わないようにしている。
+- Tooltip の系列の印は、系列と同じ色で描く（`indicator` の形は凡例と同じ）。
 - 装飾のためのグラデーションと 3D の表現は使わない。
 
 ### データの表し方
@@ -143,21 +152,16 @@ const config = {
 | Tooltip にだけ数値を置く | ホバーできない人が数値を確認できない | 見出し、説明、`ChartDataTable` |
 | グラフを Card で囲み、影を付ける | 区切りの手段が重なる | 余白と見出しで区切る |
 
-## 未解決
+## 検品で確かめていること
 
-### グラフの色（chart-1〜chart-5）
-
-`chart-1`〜`chart-5` は v0.1 で値を決めておらず、shadcn/ui の neutral テーマの既定値が入っている（[tokens.md](../tokens.md#4-color色)）。今回はトークンを変更していない。oklch から sRGB に変換し、WCAG 2 のコントラスト比を計算した結果は次のとおりである（色域外の値は 0〜1 に切り詰めた）。
-
-| トークン | oklch | sRGB | `background`（#ffffff）との比 | `muted`（#f5f5f5）との比 |
-| --- | --- | --- | ---: | ---: |
-| `chart-1` | 0.646 0.222 41.116 | #f54900 | 3.59 | 3.29 |
-| `chart-2` | 0.6 0.118 184.704 | #009689 | 3.66 | 3.36 |
-| `chart-3` | 0.398 0.07 227.392 | #104e64 | 9.12 | 8.36 |
-| `chart-4` | 0.828 0.189 84.429 | #ffb900 | 1.72 | 1.58 |
-| `chart-5` | 0.769 0.188 70.08 | #fe9a00 | 2.15 | 1.97 |
-
-- `chart-4` と `chart-5` は、グラフの要素に必要な非テキストのコントラスト（WCAG 1.4.11、3:1）を、白の背景でも `muted` の上でも下回る。
-- `chart-4` と `chart-5` は色相が 84° と 70° で近く、2 色の間のコントラスト比は 1.25 である。並べた系列を色で区別しにくい。`chart-1`（41°）と `chart-5` の比も 1.67 である。
-- 改善案：`chart-4` と `chart-5` を、白の背景で 3:1 以上になる明度（oklch の L を 0.65 程度以下）にし、`chart-1`〜`chart-3` と色相を 60° 以上離す。値はトークンの検討として別に決め、`scripts/tokens/check-contrast.mjs` で oklch を扱えるようにしてから検証する。
-- それまでの間、プレビューの「使う」例のグラフは 3 系列までにし、`chart-1`〜`chart-3` だけを使っている。`chart-4` と `chart-5` は「避ける」例（すべての棒を別の色にする、グラデーション）だけに使っている。
+| 項目 | 内容 |
+| --- | --- |
+| 0 と欠損 | 0 と欠損は、どちらも棒の長さが 0 になる。横軸の 2 行目に値（「0件」「データなし」）を常に示し、数値の表でも 0 と「データなし」を分ける |
+| 負の値 | 0 の線から下に伸ばし、増減の向きで色を変えない。棒の長さの比が値の比と一致する |
+| 空のデータ | 軸だけのグラフを描かず、Empty（`status="empty"`）で理由を示す |
+| 構成比に使えない値 | `getCompositionError(values)` が、負の値、欠損、数値でない値、合計 0 を理由として返す。理由があるときは Donut を描かず、Empty（`status="error"`）で示す |
+| 非表示の領域 | `details` などで隠した領域のグラフは、開いたときに親の幅で描かれる |
+| 画面の幅の変更 | 幅を変えると、グラフも親の幅に合わせて描き直す。ページ全体は横にスクロールしない |
+| 項目名の長い棒グラフ | 640px 未満の幅では横向きにし、項目名を重ねない |
+| 動きを減らす設定 | 動きを止める（Recharts の `isAnimationActive="auto"`） |
+| キーボード、タッチ | フォーカスして ← → で値を示す。タッチでは触れた位置の値を示す |

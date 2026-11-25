@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/table.tsx`](../../../registry/components/ui/table.tsx) |
 | 元にした実装 | shadcn/ui の Table |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 Data Display に共通する判断基準は [data-display.md](data-display.md) にまとめている。
 
@@ -58,7 +58,8 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 
 - 行の高さは最小の値である。複数行の文字や、ブラウザの文字の拡大で行が伸びる。
 - 文字の大きさは、どの密度でも 14px のまま変えない。
-- 指で操作する端末（`pointer: coarse`）では、操作できる行（`interactive` の行）を `compact` でも 48px 以上にする。
+- 指で操作する端末（`pointer: coarse`）では、操作できる行（`interactive` の行と、Checkbox のある行）を `compact` でも 48px 以上にする。Checkbox のある見出しのセルも 48px にする。
+- タッチで操作する表では、`compact` を選んでも行が 48px になり、表示できる行は `default` と同じになる。多くの行を見比べる表をタッチで操作する場合は、選択を行の詳細やメニューに移すなど、操作の数を減らすことを先に検討する。
 - 高さは Component トークン `--table-row-height` で決まる。`density` は外側の要素でこの値を上書きする。
 
 ### セルの配置
@@ -74,27 +75,38 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 
 - 単位と日付の表記は、列の中でそろえる（例：すべて「12,000円」、すべて「2026/11/25」）。
 - 値がないことは `TableNoValue` で示す。画面には「—」、支援技術には `label`（既定は「未登録」）を伝える。空欄や 0 にしない。0 は値として表示する。
-- 長い文字は、折り返して表示することを標準とする（`[word-break:auto-phrase]`）。列の幅を保つ必要がある場合だけ `TableTruncate` で 1 行に省略する。完全な内容はポインターでは `title` で示し、キーボードとタッチでは行の詳細などで確認できるようにする。
+- 長い文字は、折り返して表示することを標準とする（`[word-break:auto-phrase]`）。列の幅を保つ必要がある場合だけ `TableTruncate` で 1 行に省略する。
+- `title` はポインターだけで使え、タッチとキーボードでは完全な内容を確かめられない。次のどちらかを用意する。
+  - 行の詳細（Sheet など）がある表：詳細に完全な内容を表示する（推奨。Data Table の顧客の例）
+  - 詳細がない表：`TableTruncate expandable`。実際に省略されたセルにだけ「全文を表示」のボタン（`aria-expanded`）を置き、押すとそのセルだけを折り返して全文を表示する。省略されていないセルにはボタンを置かず、フォーカスできる要素を増やさない
 
 ### 行の状態
 
-| 状態 | 条件 | 表し方 |
-| --- | --- | --- |
-| 通常 | | `--table-row-base`（`background` か、交互の背景色の `muted`） |
-| ホバー | `interactive` の行だけ | 面に `foreground` を 4% 混ぜる |
-| 選択中 | `data-state="selected"` | `background` に `primary` を 12% 混ぜた面。交互の背景色より優先する |
-| 選択中のホバー | | `primary` を 16% 混ぜた面 |
-| 詳細を表示中 | `data-active` | ホバーと同じ面と、先頭のセルの内側に 2px の `primary` の線。`aria-current="true"` |
+行の面は、ブランドカラーに依存しないニュートラルの段階にする。ブランドカラー（`primary`）は、選択中の Checkbox と、詳細を表示中の線だけに使う。
+
+| 状態 | 条件 | 表し方 | 標準の色 |
+| --- | --- | --- | --- |
+| 通常 | | `background` | #ffffff |
+| 交互の背景色 | `variant="striped"` の偶数行 | `muted` | #f5f5f5 |
+| ホバー | `interactive` の行だけ | `foreground` 6% | #f2f2f2 |
+| 選択中 | `data-state="selected"` | `foreground` 12%。交互の背景色より優先する。Checkbox は `primary` | #e4e4e4 |
+| 選択中のホバー | | `foreground` 16% | #dbdbdb |
+| 詳細を表示中 | `data-active` | 先頭のセルの内側に 2px の `primary` の線。面はホバーと同じ（選択中なら選択中の面）。`aria-current="true"` | 線は `primary` |
+| キーボードのフォーカス | 行の中のリンク、ボタン、Checkbox | 各要素の `focus-ring`（2px、`ring`） | #262626 |
 
 - ホバーの面は、行を押して何かが起きる場合（`interactive`）だけに付ける。詳細を表示できない行を押せるように見せない。
-- 選択中、ホバー中、詳細を表示中の行では、`--muted-foreground` を `foreground` 75% と `background` 25% の混色（標準の色で #585858）に変える。面が濃くなっても、補足の文字が 4.5:1 以上になる。標準の色での計算値は次のとおりである。
+- 詳細を表示中は線、選択中は面と Checkbox で示し、両方が同時に成り立つ行でも混同しない。
+- ホバーの面を 6% にしているのは、ホバー中の行でも未選択の Checkbox の枠（`input`）が 3:1 を保つ上限のためである（3.08:1）。選択中の行の Checkbox は `primary` で塗られる。
+- 横線の表（`lines`）で選択中の行が続くとき、行の間の線を `foreground` 22%（#cecece）に濃くし、面に埋もれないようにする。
+- 選択中、ホバー中、詳細を表示中の行では、`--muted-foreground` を `foreground` 75%（#585858）に変える。面が濃くなっても、補足の文字が 4.5:1 以上になる。
 
-| 面 | 面の色 | 元の `muted-foreground`（#6e6e6e） | 変更後（#585858） | `foreground` |
-| --- | --- | ---: | ---: | ---: |
-| ホバー（`background` の行） | #f6f6f6 | 4.72 | 6.61 | 15.09 |
-| ホバー（`muted` の行） | #ececec | 4.33 | 6.07 | 13.85 |
-| 選択中 | #e5e5e5 | 4.05 | 5.67 | 12.93 |
-| 選択中のホバー | #dcdcdc | 3.73 | 5.22 | 11.91 |
+| 面 | 面の色 | 元の `muted-foreground`（#6e6e6e） | 変更後（#585858） | `foreground` | 未選択の Checkbox の枠 | `focus-ring` |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| ホバー | #f2f2f2 | 4.55 | 6.36 | 14.55 | 3.08 | 13.52 |
+| 選択中 | #e4e4e4 | 4.01 | 5.60 | 12.81 | （`primary` で塗る） | 11.90 |
+| 選択中のホバー | #dbdbdb | 3.68 | 5.14 | 11.77 | （`primary` で塗る） | 10.93 |
+
+- ブランドカラーを変えても行の面は変わらない。Checkbox と詳細を表示中の線は `primary` に従う。`primary` は Button の基準（白の上で 4.5:1 以上）を満たす色を選ぶため、選択中の面の上でも 3:1 以上になる（プレビューの青、紫で検品している）。
 - 選択中の面の色は `--table-row-selected` などの変数で決まり、製品が上書きできる。
 - 状態を表す色（`success`、`destructive` など）の文字をセルに置かない。選択中の面の上で 4.5:1 を下回る場合がある。色の印と `foreground` の文字を組み合わせる（例：緑の丸と「契約中」）。
 

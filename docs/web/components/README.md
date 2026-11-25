@@ -33,10 +33,10 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Accordion | [accordion.md](accordion.md) | v0.1 確定 |
 | Separator | [separator.md](separator.md) | v0.1 確定 |
 <<<<<<< HEAD
-| Table | [table.md](table.md) | 初期実装 |
-| Data Table | [data-table.md](data-table.md) | 初期実装 |
-| Pagination | [pagination.md](pagination.md) | 初期実装 |
-| Chart | [chart.md](chart.md) | 初期実装 |
+| Table | [table.md](table.md) | v0.1 確定 |
+| Data Table | [data-table.md](data-table.md) | v0.1 確定 |
+| Pagination | [pagination.md](pagination.md) | v0.1 確定 |
+| Chart | [chart.md](chart.md) | v0.1 確定 |
 =======
 | Combobox | [combobox.md](combobox.md) | 初期実装 |
 | Multi Select | [multi-select.md](multi-select.md) | 初期実装 |
@@ -115,7 +115,7 @@ npm install
 npm run preview:dev        # http://localhost:5173/
 npm run test:components    # Playwright（初回は npx playwright install chromium）
 npm run typecheck
-npm run test:ssr           # SSR と Hydration（Node.js での描画と、ブラウザでの Hydration）
+npm run test:ssr           # SSR と Hydration（Navigation & Layout と Data Display。ファイル名に ssr を含むテスト）
 ```
 
 ### ブラウザ

@@ -1,4 +1,6 @@
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
+
+import { Checkbox } from "@/components/ui/checkbox"
 
 import {
   Table,
@@ -106,6 +108,61 @@ const values = [
   { item: "割引", kind: "金額", value: -15000, date: "2026-11-05" },
   { item: "保守費用（見積もり中）", kind: "金額", value: null, date: null },
 ]
+
+const stateRows = [
+  { label: "通常", selected: false, active: false },
+  { label: "通常（偶数行）", selected: false, active: false },
+  { label: "選択中", selected: true, active: false },
+  { label: "詳細を表示中", selected: false, active: true },
+  { label: "選択中（偶数行）", selected: true, active: false },
+  { label: "選択中かつ詳細を表示中", selected: true, active: true },
+]
+
+// 行の状態の見本。Checkbox で選択を切り替えられる。
+function RowStates() {
+  const [selected, setSelected] = useState(() => stateRows.map((r) => r.selected))
+  return (
+    <Table variant="striped" data-testid="table-states">
+      <TableHeader>
+        <TableRow>
+          <TableHead>
+            <span className="sr-only">選択</span>
+          </TableHead>
+          <TableHead>状態</TableHead>
+          <TableHead>会社名</TableHead>
+          <TableHead>顧客ID</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {stateRows.map((r, i) => (
+          <TableRow
+            key={r.label}
+            interactive
+            data-testid={`table-state-${i}`}
+            data-state={selected[i] ? "selected" : undefined}
+            data-active={r.active || undefined}
+            aria-current={r.active ? "true" : undefined}
+          >
+            <TableCell>
+              <Checkbox
+                aria-label={`${customers[i].company}を選択`}
+                checked={selected[i]}
+                onCheckedChange={(v) => setSelected((list) => list.map((x, j) => (j === i ? v : x)))}
+              />
+            </TableCell>
+            <TableCell>{r.label}</TableCell>
+            <TableCell>
+              <a href={`#/table`} onClick={(e) => e.preventDefault()} className="rounded-xs font-medium underline-offset-4 outline-none hover:underline focus-visible:focus-ring">
+                {customers[i].company}
+              </a>
+            </TableCell>
+            <TableCell className="text-muted-foreground tabular-nums">{customers[i].id}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
 
 export function TablePage() {
   return (
@@ -239,7 +296,7 @@ export function TablePage() {
             </Table>
           </Block>
         </Row>
-        <Row label="省略が必要なとき" note="列の幅を保つ必要がある場合だけ。完全な内容は title と、行の詳細で確認できるようにする">
+        <Row label="省略が必要なとき" note="列の幅を保つ必要がある場合だけ。行の詳細がない表では expandable で、省略されたセルにだけ「全文を表示」を置く">
           <Block>
             <Table data-testid="table-truncate" className="table-fixed">
               <TableHeader>
@@ -252,7 +309,7 @@ export function TablePage() {
                 {customers.slice(12, 15).map((c, i) => (
                   <TableRow key={c.id}>
                     <TableCell>
-                      <TableTruncate>{i === 0 ? "医療法人社団 こもれび会 地域連携在宅医療推進センター" : c.company}</TableTruncate>
+                      <TableTruncate expandable>{i === 0 ? "医療法人社団 こもれび会 地域連携在宅医療推進センター" : c.company}</TableTruncate>
                     </TableCell>
                     <TableCell>{statusLabel[c.status]}</TableCell>
                   </TableRow>
@@ -265,36 +322,11 @@ export function TablePage() {
 
       <Section
         title="行の状態"
-        lead="押せる行（interactive）だけにホバーの背景を付ける。選択中は交互の背景色より優先し、詳細を表示中の行は先頭のセルの線で区別する。"
+        lead="押せる行（interactive）だけにホバーの面を付ける。選択中の面はニュートラルで、交互の背景色より優先する。詳細を表示中の行は、先頭のセルの線で区別する。"
       >
-        <Row label="ホバー・選択中・詳細を表示中" note="選択中とホバー中の行では、補足の文字を濃くしてコントラストを保つ">
+        <Row label="通常・選択中・詳細を表示中" note="ブランドカラーは Checkbox と詳細を表示中の線だけに使う。ホバーとキーボードのフォーカスは操作して確かめる">
           <Block>
-            <Table variant="striped" data-testid="table-states">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>状態</TableHead>
-                  <TableHead>会社名</TableHead>
-                  <TableHead>顧客ID</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(
-                  [
-                    ["通常", {}],
-                    ["通常（偶数行）", {}],
-                    ["選択中", { "data-state": "selected" }],
-                    ["詳細を表示中", { "data-active": true }],
-                    ["選択中（偶数行）", { "data-state": "selected" }],
-                  ] as const
-                ).map(([label, attrs], i) => (
-                  <TableRow key={label} interactive data-testid={`table-state-${i}`} {...attrs}>
-                    <TableCell>{label}</TableCell>
-                    <TableCell>{customers[i].company}</TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums">{customers[i].id}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <RowStates />
           </Block>
         </Row>
       </Section>

@@ -1,4 +1,4 @@
-import type * as React from "react"
+import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -17,12 +17,17 @@ type TableVariant = "lines" | "striped"
 type TableDensity = "compact" | "default" | "comfortable"
 type CellAlign = "left" | "center" | "right"
 
-// 選択中、ホバー中、詳細を表示中の行の背景。面の色が濃くなるため、補足の文字（muted-foreground）を
-// 濃くして、4.5:1 を保つ。値は製品が containerClassName などで上書きできる。
+// 行の状態の面。ブランドカラーに依存しないニュートラルの段階にする（ブランドカラーは Checkbox と詳細表示中の線だけに使う）。
+//   通常 background（#fff） < 交互の背景色 muted（#f5f5f5） < ホバー foreground 6%（#f2f2f2）
+//   < 選択中 foreground 12%（#e4e4e4） < 選択中のホバー foreground 16%（#dbdbdb）
+// ホバーを 6% にしているのは、ホバー中の行でも未選択の Checkbox の枠（input）が 3:1 を保つ上限のため。
+// 面が濃くなる行では、補足の文字（muted-foreground）を foreground 75% に濃くして 4.5:1 を保つ。
+// 値は製品が containerClassName などで上書きできる。
 const rowStateVars = cn(
-  "[--table-row-hover:color-mix(in_srgb,var(--foreground)_4%,var(--table-row-base))]",
-  "[--table-row-selected:color-mix(in_srgb,var(--primary)_12%,var(--background))]",
-  "[--table-row-selected-hover:color-mix(in_srgb,var(--primary)_16%,var(--background))]"
+  "[--table-row-hover:color-mix(in_srgb,var(--foreground)_6%,var(--background))]",
+  "[--table-row-selected:color-mix(in_srgb,var(--foreground)_12%,var(--background))]",
+  "[--table-row-selected-hover:color-mix(in_srgb,var(--foreground)_16%,var(--background))]",
+  "[--table-row-selected-border:color-mix(in_srgb,var(--foreground)_22%,var(--background))]"
 )
 
 function Table({
@@ -127,10 +132,13 @@ function TableRow({
         "data-interactive:hover:[--muted-foreground:color-mix(in_srgb,var(--foreground)_75%,var(--background))]",
         "data-active:[--muted-foreground:color-mix(in_srgb,var(--foreground)_75%,var(--background))]",
         "data-[state=selected]:[--muted-foreground:color-mix(in_srgb,var(--foreground)_75%,var(--background))]",
-        // 詳細を表示中の行：先頭のセルに 2px の線。選択中、ホバー中と区別する。
+        // 横線の表で選択中の行が続くとき、行の間の線が面に埋もれないよう、線を一段濃くする。
+        "data-[state=selected]:[&>td]:border-b-(--table-row-selected-border)",
+        // 詳細を表示中の行：先頭のセルに 2px の線（primary）。面は変えず、選択中、ホバー中と区別する。
         "data-active:[&>td:first-child]:shadow-[inset_2px_0_0_var(--primary)]",
-        // 指で操作する端末では、操作できる行を 48px 以上にする（Compact でも）。
+        // 指で操作する端末では、操作できる行（押すと詳細を開く行、Checkbox のある行）を 48px 以上にする（Compact でも）。
         "pointer-coarse:data-interactive:[&>td]:h-[max(var(--table-row-height),3rem)]",
+        "pointer-coarse:has-[>td>[role=checkbox]]:[&>td]:h-[max(var(--table-row-height),3rem)]",
         className
       )}
       {...props}
@@ -156,8 +164,9 @@ function TableHead({
       className={cn(
         "h-10 border-b border-border bg-background px-4 align-middle text-caption font-medium whitespace-nowrap text-muted-foreground",
         alignClass[align],
-        // Checkbox のセル：セル全体を押せる範囲にする。本文の行と重ならない。
+        // Checkbox のセル：セル全体を押せる範囲にする。本文の行と重ならない。指で操作する端末では 48px にする。
         "[&:has(>[role=checkbox])]:relative [&:has(>[role=checkbox])]:w-12 [&:has(>[role=checkbox])]:px-0",
+        "pointer-coarse:[&:has(>[role=checkbox])]:h-12",
         "[&>[role=checkbox]]:static [&>[role=checkbox]]:mx-auto [&>[role=checkbox]]:after:inset-0",
         className
       )}
@@ -213,16 +222,69 @@ function TableNoValue({ label = "未登録", className, ...props }: React.Compon
 }
 
 // 長い文字を 1 行に省略する。省略は、列の幅を保つ必要がある場合だけに使う。
-// 完全な内容は title（ポインター）で示す。キーボードとタッチでは、行の詳細などで完全な内容を確認できるようにする。
-function TableTruncate({ className, children, title, ...props }: React.ComponentProps<"span">) {
-  return (
+// 完全な内容を確かめる手段を、製品の文脈に合わせて用意する。
+// - 行の詳細（Sheet など）がある表では、詳細に完全な内容を表示する（推奨）
+// - 詳細がない表では expandable を指定する。実際に省略されたセルにだけ「全文を表示」のボタンを置き、
+//   押すとそのセルだけ折り返して全文を表示する。省略されていないセルはフォーカスできる要素を増やさない
+// title は、ポインターで確かめるための補助として付ける（タッチとキーボードでは使えない）。
+function TableTruncate({
+  className,
+  children,
+  title,
+  expandable = false,
+  expandLabel = "全文を表示",
+  collapseLabel = "折りたたむ",
+  ...props
+}: React.ComponentProps<"span"> & {
+  /** 省略されたときに、全文を表示するボタンを置く */
+  expandable?: boolean
+  expandLabel?: string
+  collapseLabel?: string
+}) {
+  const ref = React.useRef<HTMLSpanElement>(null)
+  const [truncated, setTruncated] = React.useState(false)
+  const [expanded, setExpanded] = React.useState(false)
+  const text = typeof children === "string" ? children : undefined
+
+  React.useEffect(() => {
+    const el = ref.current
+    if (!el || !expandable) return
+    const measure = () => setTruncated(el.scrollWidth > el.clientWidth + 1)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [expandable, children])
+
+  const span = (
     <span
+      ref={ref}
       data-slot="table-truncate"
-      title={title ?? (typeof children === "string" ? children : undefined)}
-      className={cn("block max-w-full truncate", className)}
+      data-expanded={expanded || undefined}
+      title={expanded ? undefined : (title ?? text)}
+      className={cn("block max-w-full min-w-0", expanded ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate", className)}
       {...props}
     >
       {children}
+    </span>
+  )
+  if (!expandable) return span
+  // 要素の構造を変えずに、省略されたときだけボタンを足す（測定の対象の要素を作り直さない）。
+  return (
+    <span data-slot="table-truncate-group" className="flex min-w-0 items-start gap-1">
+      <span className="min-w-0 flex-1">{span}</span>
+      {(truncated || expanded) && <button
+        type="button"
+        data-slot="table-truncate-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+        className={cn(
+          "-my-1 inline-flex min-h-8 shrink-0 items-center rounded-xs px-1 text-caption whitespace-nowrap text-muted-foreground underline underline-offset-4",
+          "outline-none hover:text-foreground focus-visible:focus-ring pointer-coarse:min-h-10"
+        )}
+      >
+        {expanded ? collapseLabel : expandLabel}
+      </button>}
     </span>
   )
 }

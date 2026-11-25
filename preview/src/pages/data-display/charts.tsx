@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from "react"
+import { BarChart3, CircleAlert } from "lucide-react"
 import {
   Area,
   AreaChart,
@@ -17,6 +18,7 @@ import {
   XAxis,
   YAxis,
   ZAxis,
+  type XAxisTickContentProps,
 } from "recharts"
 
 import {
@@ -28,9 +30,11 @@ import {
   ChartTooltipContent,
   chartAnimation,
   chartStyles,
+  getCompositionError,
   type ChartConfig,
   type ChartDataColumn,
 } from "@/components/ui/chart"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { cn } from "@/lib/utils"
 
 import { customers } from "../../data/data-display/customers"
@@ -254,7 +258,7 @@ export function RegionBarChart({
   )
 }
 
-const changeConfig = { change: { label: "前年同月比", color: "var(--chart-3)" } } satisfies ChartConfig
+const changeConfig = { change: { label: "前年同月比", color: "var(--chart-1)" } } satisfies ChartConfig
 
 export function ChangeBarChart() {
   const narrow = useNarrow()
@@ -301,7 +305,7 @@ export function ChangeBarChart() {
 }
 
 // ---------------------------------------------------------------- Area
-const areaConfig = { total: { label: "利用者数", color: "var(--chart-2)" } } satisfies ChartConfig
+const areaConfig = { total: { label: "利用者数", color: "var(--chart-1)" } } satisfies ChartConfig
 const totalUsers = usersByPlan.map((d) => ({ month: d.month, total: d.basic + d.standard + d.enterprise }))
 
 export function UsersAreaChart() {
@@ -455,7 +459,7 @@ export function StatusStackedBarChart() {
 }
 
 // ---------------------------------------------------------------- Scatter
-const scatterConfig = { customer: { label: "顧客", color: "var(--chart-3)" } } satisfies ChartConfig
+const scatterConfig = { customer: { label: "顧客", color: "var(--chart-1)" } } satisfies ChartConfig
 const scatterData = customers
   .filter((c) => c.status === "active" && c.monthlyFee)
   .slice(0, 120)
@@ -507,5 +511,111 @@ export function SeatsFeeScatterChart() {
         </ChartContainer>
       )}
     </ChartFigure>
+  )
+}
+
+// ---------------------------------------------------------------- データの扱い
+const visitsConfig = { visits: { label: "訪問件数", color: "var(--chart-1)" } } satisfies ChartConfig
+// 0 は「訪問しなかった」、null は「記録がない（欠損）」。棒の長さではどちらも区別できないため、値のラベルで示す。
+const visits: { region: string; visits: number | null }[] = [
+  { region: "北海道", visits: 12 },
+  { region: "東北", visits: 0 },
+  { region: "関東", visits: 31 },
+  { region: "中部", visits: null },
+  { region: "近畿", visits: 18 },
+]
+
+export function ZeroAndMissingBarChart() {
+  return (
+    <ChartFigure
+      testId="chart-zero-missing"
+      title="地域別の訪問件数"
+      description="単位：件。2026 年 11 月。東北は 0 件（訪問なし）、中部は記録がない（データなし）。横軸に値を示して区別する。"
+      data={visits}
+      columns={[
+        { key: "region", label: "地域" },
+        { key: "visits", label: "訪問件数（件）", numeric: true },
+      ]}
+    >
+      {({ titleId, descId }) => (
+        <ChartContainer config={visitsConfig} aria-labelledby={titleId} aria-describedby={descId} className="aspect-auto h-56 w-full">
+          <BarChart data={visits} margin={{ left: 8, right: 8, top: 8 }}>
+            <CartesianGrid {...chartStyles.grid} />
+            {/* 0 と欠損は、どちらも棒の長さが 0 になる。横軸の 2 行目に値を常に示し、「0件」と「データなし」を区別する。 */}
+            <XAxis
+              dataKey="region"
+              {...chartStyles.axis}
+              interval={0}
+              height={52}
+              tick={(props: XAxisTickContentProps) => {
+                const x = Number(props.x)
+                const y = Number(props.y)
+                const payload = props.payload as { value: string }
+                const v = visits.find((d) => d.region === payload.value)?.visits
+                const missing = v === null || v === undefined
+                return (
+                  <text x={x} y={y + 4} textAnchor="middle" className="text-caption" data-slot="chart-category" data-value={missing ? "missing" : String(v)}>
+                    <tspan x={x} dy="0.71em" className="fill-muted-foreground">
+                      {payload.value}
+                    </tspan>
+                    <tspan x={x} dy="1.5em" className={missing ? "fill-muted-foreground" : "fill-foreground"}>
+                      {missing ? "データなし" : `${v}件`}
+                    </tspan>
+                  </text>
+                )
+              }}
+            />
+            <YAxis {...chartStyles.axis} width={40} domain={[0, "auto"]} allowDecimals={false} />
+            <Bar dataKey="visits" fill="var(--color-visits)" radius={[chartStyles.barRadius, chartStyles.barRadius, 0, 0]} {...chartAnimation} />
+          </BarChart>
+        </ChartContainer>
+      )}
+    </ChartFigure>
+  )
+}
+
+// データがない期間は、空のグラフ（軸だけ）を描かず、Empty で理由を示す。
+export function EmptyChart() {
+  return (
+    <div data-testid="chart-empty">
+      <h3 className="text-heading">先月の解約数</h3>
+      <p className="mt-1 text-ui text-muted-foreground">単位：件。2026 年 10 月。</p>
+      <Empty status="empty" className="py-10">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <BarChart3 />
+          </EmptyMedia>
+          <EmptyTitle>この期間の解約はありません</EmptyTitle>
+          <EmptyDescription>解約があると、ここに推移を表示します。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    </div>
+  )
+}
+
+// 構成比に使えない値（負の値、欠損、合計 0）があるときは、Donut を描かずに理由を示す。
+const invalidPlanData = [
+  { plan: "basic", label: "ベーシック", count: 214 },
+  { plan: "standard", label: "スタンダード", count: -12 },
+  { plan: "enterprise", label: "エンタープライズ", count: 98 },
+]
+export function InvalidCompositionChart() {
+  const error = getCompositionError(invalidPlanData.map((d) => d.count))
+  return (
+    <div data-testid="chart-invalid-composition">
+      <h3 className="text-heading">プラン別の契約数の増減</h3>
+      <p className="mt-1 text-ui text-muted-foreground">前月との差。負の値を含むため、構成比（Donut）では表せない。</p>
+      {error && (
+        <Empty status="error" className="py-10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <CircleAlert />
+            </EmptyMedia>
+            <EmptyTitle>構成比を表示できません</EmptyTitle>
+            <EmptyDescription>{error}。増減は棒グラフで、0 の線をはさんで表します。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </div>
   )
 }

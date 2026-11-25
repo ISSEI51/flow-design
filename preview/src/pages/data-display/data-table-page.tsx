@@ -1,11 +1,14 @@
 import { useState } from "react"
-import { createColumnHelper, useTable } from "@tanstack/react-table"
+import { createColumnHelper, useTable, type RowSelectionState } from "@tanstack/react-table"
 
 import { Button } from "@/components/ui/button"
 import {
   DataTable,
   DataTableMessage,
+  DataTablePageCheckbox,
   DataTableRefreshing,
+  DataTableRowCheckbox,
+  DataTableRowTrigger,
   dataTableDefaults,
   dataTableFeatures,
   type DataTableFeatures,
@@ -15,11 +18,63 @@ import { TableNoValue } from "@/components/ui/table"
 
 import { customers, formatYen, type Customer } from "../../data/data-display/customers"
 import { PageHeader } from "../../layout/page-header"
-import { Section } from "../../layout/section"
+import { Row, Section } from "../../layout/section"
 import { CustomerTable } from "./customer-table"
 import { StatusText } from "./customer-parts"
 
 const helper = createColumnHelper<DataTableFeatures, Customer>()
+
+// 行の選択の検品用。選択の列と会社名の列を固定し、狭い幅で横にスクロールさせる。4 行目は選択できない（disabled）。
+const selectionColumns = helper.columns([
+  helper.display({
+    id: "select",
+    header: ({ table }) => <DataTablePageCheckbox table={table} />,
+    cell: ({ row }) => <DataTableRowCheckbox row={row} label={`${row.original.company}を選択`} />,
+    size: 48,
+    enableResizing: false,
+  }),
+  helper.accessor("company", {
+    header: "会社名",
+    cell: ({ row, getValue }) => <DataTableRowTrigger row={row}>{getValue()}</DataTableRowTrigger>,
+    meta: { label: "会社名" },
+    size: 200,
+  }),
+  helper.accessor("owner", { header: "担当者", size: 140, meta: { cellClassName: "whitespace-nowrap" } }),
+  helper.accessor("region", { header: "地域", size: 120, meta: { cellClassName: "whitespace-nowrap" } }),
+  helper.accessor("seats", { header: "利用者数", size: 120, meta: { align: "right" }, cell: ({ getValue }) => `${getValue()}人` }),
+])
+const selectionRows = customers.slice(20, 26)
+const selectionPinning = { start: ["select", "company"], end: [] }
+
+function SelectionDensityDemo({ density }: { density: "compact" | "default" | "comfortable" }) {
+  const [opened, setOpened] = useState<string | null>(null)
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
+  const table = useTable({
+    ...dataTableDefaults,
+    features: dataTableFeatures,
+    columns: selectionColumns,
+    data: selectionRows,
+    getRowId: (r) => r.id,
+    enableRowSelection: (row) => row.index !== 3,
+    state: { rowSelection, columnPinning: selectionPinning },
+    onRowSelectionChange: setRowSelection,
+  })
+  return (
+    <div data-testid={`density-${density}`} className="w-full max-w-md">
+      <DataTable
+        table={table}
+        density={density}
+        layout="fixed"
+        caption={`行の選択（${density}）`}
+        onRowOpen={(row) => setOpened(row.original.company)}
+        activeRowId={null}
+      />
+      <p className="mt-2 text-caption text-muted-foreground" data-testid={`density-${density}-state`}>
+        選択：{Object.keys(rowSelection).length}件 / 詳細：{opened ?? "なし"}
+      </p>
+    </div>
+  )
+}
 const stateColumns = helper.columns([
   helper.accessor("company", { header: "会社名", meta: { label: "会社名" } }),
   helper.accessor("status", { header: "契約状況", cell: ({ getValue }) => <StatusText status={getValue()} /> }),
@@ -88,7 +143,7 @@ function StateDemo({ state }: { state: DemoState }) {
           }
           error={
             <DataTableMessage
-              tone="error"
+              status="error"
               title="顧客の一覧を取得できませんでした"
               description="サーバーに接続できませんでした。時間をおいて、もう一度お試しください。"
               action={
@@ -130,6 +185,17 @@ export function DataTablePage() {
         lead="1 ページ分だけを模擬のサーバーから受け取る（0.4〜0.8 秒の遅延）。検索は入力が止まってから送り、古い応答で表示を上書きしない。再取得の間は表示中のデータを残す。"
       >
         <CustomerTable mode="server" testId="server" />
+      </Section>
+
+      <Section
+        title="情報密度と行の選択"
+        lead="Checkbox はセル全体が押せる範囲になり、隣の行とセルに重ならない。指で操作する端末では、Compact でも選択できる行を 48px 以上にする。4 行目は選択できない。"
+      >
+        {(["compact", "default", "comfortable"] as const).map((d) => (
+          <Row key={d} label={d === "compact" ? "Compact（36px）" : d === "default" ? "Default（48px）" : "Comfortable（64px）"}>
+            <SelectionDensityDemo density={d} />
+          </Row>
+        ))}
       </Section>
 
       <Section title="データの状態" lead="状態ごとに、表示と次の操作を変える。取得に失敗した状態を 0 件として表示しない。">

@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/pagination.tsx`](../../../registry/components/ui/pagination.tsx) |
 | 元にした実装 | shadcn/ui の Pagination（Base UI 版） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 Data Display に共通する判断基準は [data-display.md](data-display.md) にまとめている。
 
@@ -64,11 +64,14 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 - 並びの長さは 5 + `siblingCount` × 2 で一定である（`siblingCount` が 1 なら 7）。ページを移動しても項目の数が変わらず、ボタンの位置が大きく動かない。
 - ページ数が並びの長さ以下なら、すべてのページを並べる。
 - 例（全 12 ページ、`siblingCount` 1）：1 ページ目は「1 2 3 4 5 … 12」、6 ページ目は「1 … 5 6 7 … 12」。
-- 640px 未満の幅では `siblingCount` を 0 にし（例：「1 … 6 … 12」）、最初と最後への移動を表示しない。幅の判定は `useSyncExternalStore` で行い、サーバーでの描画と Hydration の間は広い画面の並びにする。サーバーとブラウザの HTML を一致させるためである（検品は `preview/tests/data-display.spec.ts` の「Data Display SSR」）。
+- 640px 未満の幅では `siblingCount` を 0 にし（例：「1 … 6 … 12」）、最初と最後への移動を表示しない。幅の判定は `useSyncExternalStore` で行い、サーバーでの描画と Hydration の間は広い画面の並びにする。サーバーとブラウザの HTML を一致させるためである（検品は `preview/tests/data-display-ssr.spec.ts`。`npm run test:ssr` で実行する）。
 - 最初と最後への移動は、既定ではページ数が 7 を超えるときに表示する（`showFirstLast` で指定できる）。
 
 ### 移動
 
+- 移動した後も、フォーカスをページ送りの中に残す。押したボタンが無効になった場合（最初、最後のページに着いた場合）や、並びが変わってボタンが消えた場合は、現在のページのボタン（カーソル方式では残っているボタン）へ移す。ブラウザは無効になったボタンから後でフォーカスを外すため、フォーカスのある要素が無効かどうかも確かめる。
+- `disabled`（読み込み中など）の間は、ページ番号、前後の移動、表示件数の選択を受け付けない。現在のページは示したままにし、フォーカスの移り先として残す。
+- ページが 1 つだけの場合は、ページ番号は 1 だけを示し、前へと次へを無効にする。
 - ページ番号は `button` で描画し、`onPageChange` を呼ぶ。`href` を渡すと `a` で描画し、支援技術にはリンクとして伝わる（Base UI の Button に `a` を描画させると `role="button"` が付くため、`a` は Button を使わずに `buttonVariants` のクラスで描画する）。無効な `a` からは `href` を外し、`aria-disabled="true"` を付ける。
 - 現在のページには `aria-current="page"` が付く。ページ番号の名前は「3ページ目」。見えている数字が名前の先頭に含まれる。
 - 全体は `nav` で、名前は既定で「ページ送り」。1 つの画面に複数ある場合は `aria-label` で区別する。

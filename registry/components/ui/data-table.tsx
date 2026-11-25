@@ -30,11 +30,11 @@ import {
   type RowData,
   type Table as TanstackTable,
 } from "@tanstack/react-table"
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronsUpDown, LoaderCircle, Pin, PinOff, Search, X } from "lucide-react"
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronsUpDown, CircleAlert, Inbox, LoaderCircle, Pin, PinOff, Search, SearchX, X } from "lucide-react"
 
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle, type EmptyStatus } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { PaginationControls } from "@/components/ui/pagination"
@@ -65,7 +65,8 @@ import { cn } from "@/lib/utils"
 // - DataTableAppliedFilters：個別に表示していない条件と「すべて解除」
 // - DataTableColumnOptions：列の表示・非表示、並び替え、固定（Popover などの中に置く）
 // - DataTablePagination：Pagination を表の状態につなぐ
-// - DataTableMessage：データ未登録、検索結果なし、取得失敗（Feedback の Alert）。読み込み中は Feedback の Skeleton
+// - DataTableMessage：データ未登録、検索結果なし、取得失敗（Advanced の Empty）。読み込み中は Feedback の Skeleton
+// - useDataTableStatus：表の状態（再取得中などで locked）を、行の中の操作から読む
 // 検索の処理、API 通信、権限、CSV 出力は持たない。製品の責務とする。
 // 定義は docs/web/components/data-table.md を参照。
 
@@ -117,10 +118,23 @@ const dataTableDefaults = {
 } as const
 
 // 行の型は表ごとに異なるため、Context では unknown として持ち、DataTableRowTrigger で受け渡すだけにする。
+// locked：表示中の行が最新の条件の結果と確定していない（読み込み中、再取得中、取得失敗）。
+// この間は、表示中の行に依存する操作（行の選択、ページ内の全選択、一括操作）を受け付けない。閲覧は残す。
 const DataTableContext = React.createContext<{
   openRow?: (row: unknown) => void
   activeRowId?: string | null
-}>({})
+  status: DataTableStatus
+  locked: boolean
+}>({ status: "ready", locked: false })
+
+// 表の状態を、行の中の操作（Dropdown Menu など）から読む。locked の間は、表示中の行を対象にする操作を無効にする。
+function useDataTableStatus() {
+  const { status, locked } = React.useContext(DataTableContext)
+  return { status, locked }
+}
+
+// DataTableMessage の既定の状態（Empty の status）を、DataTable が置いた行の種類から決める。
+const MessageKindContext = React.createContext<EmptyStatus>("empty")
 
 // 行の中で、それ自体が操作になる要素。これらを押したときは、行の詳細を開かない。
 const INNER_CONTROL =
@@ -218,7 +232,11 @@ function DataTable<TData extends RowData>({
   }, [sortKey])
 
   const openRow = React.useCallback((row: unknown) => onRowOpen?.(row as DataTableRow<TData>), [onRowOpen])
-  const context = React.useMemo(() => ({ openRow: onRowOpen ? openRow : undefined, activeRowId }), [onRowOpen, openRow, activeRowId])
+  const locked = status !== "ready"
+  const context = React.useMemo(
+    () => ({ openRow: onRowOpen ? openRow : undefined, activeRowId, status, locked }),
+    [onRowOpen, openRow, activeRowId, status, locked]
+  )
 
   const pinStyle = (column: Column<DataTableFeatures, TData, any>, isHeader: boolean): React.CSSProperties | undefined => {
     const pinned = column.getIsPinned()
@@ -258,11 +276,13 @@ function DataTable<TData extends RowData>({
   }
 
   const colSpan = Math.max(leafColumns.length, 1)
-  const messageRow = (node: React.ReactNode, kind: string) => (
+  const messageRow = (node: React.ReactNode, kind: EmptyStatus) => (
     <TableRow data-slot="data-table-message" data-kind={kind}>
-      <TableCell colSpan={colSpan} className="h-auto py-0">
-        {/* 横にスクロールしても、表示中の範囲に文字が残るようにする。 */}
-        <div className="sticky start-4 max-w-[min(36rem,calc(100vw-4rem))]">{node}</div>
+      <TableCell colSpan={colSpan} className="h-auto p-0">
+        {/* 横にスクロールしても、表示中の範囲に表示が残るようにする。 */}
+        <div className="sticky start-0 w-[100cqw]">
+          <MessageKindContext.Provider value={kind}>{node}</MessageKindContext.Provider>
+        </div>
       </TableCell>
     </TableRow>
   )
@@ -280,7 +300,7 @@ function DataTable<TData extends RowData>({
       </TableRow>
     ))
   } else if (status === "error") {
-    body = messageRow(error ?? <DataTableMessage tone="error" title="データを取得できませんでした" />, "error")
+    body = messageRow(error ?? <DataTableMessage title="データを取得できませんでした" />, "error")
   } else if (rows.length === 0) {
     body = isFiltered
       ? messageRow(noResults ?? <DataTableMessage title="条件に一致するデータがありません" />, "no-results")
@@ -328,7 +348,8 @@ function DataTable<TData extends RowData>({
         density={density}
         bordered={bordered}
         aria-busy={status === "loading" || status === "refreshing" || undefined}
-        containerClassName={containerClassName}
+        // 表示中の幅（cqw）を、本文の中の状態表示の幅に使う。
+        containerClassName={cn("@container", containerClassName)}
         // 幅を固定した列では、文節（auto-phrase）がセルの幅を超えるときだけ、文節の途中でも折り返す。
         className={cn(fixed && "table-fixed [&_td]:[overflow-wrap:anywhere]", className)}
         style={fixed ? { width: `max(100%, ${table.getTotalSize()}px)` } : undefined}
@@ -457,6 +478,7 @@ function DataTablePageCheckbox<TData extends RowData>({
   table: DataTableInstance<TData>
   label?: string
 }) {
+  const { locked } = React.useContext(DataTableContext)
   const all = table.getIsAllPageRowsSelected()
   const some = table.getIsSomePageRowsSelected()
   return (
@@ -464,19 +486,21 @@ function DataTablePageCheckbox<TData extends RowData>({
       aria-label={label}
       checked={all}
       indeterminate={some && !all}
-      disabled={table.getRowModel().rows.length === 0}
+      disabled={locked || table.getRowModel().rows.length === 0}
       onCheckedChange={(checked) => table.toggleAllPageRowsSelected(checked)}
     />
   )
 }
 
 // 行の選択。選択は行の ID（getRowId）で管理する。並べ替えやページ移動で、別の行が選ばれない。
+// 再取得中などで表が locked の間は押せない。選択済みの ID は残す。
 function DataTableRowCheckbox<TData extends RowData>({ row, label }: { row: DataTableRow<TData>; label: string }) {
+  const { locked } = React.useContext(DataTableContext)
   return (
     <Checkbox
       aria-label={label}
       checked={row.getIsSelected()}
-      disabled={!row.getCanSelect()}
+      disabled={locked || !row.getCanSelect()}
       onCheckedChange={(checked) => row.toggleSelected(checked)}
     />
   )
@@ -531,6 +555,11 @@ type DataTableSelectionBarProps = {
   }
   /** 一括操作のボタン */
   children?: React.ReactNode
+  /**
+   * 表示中の行が最新の条件の結果と確定していない（再取得中、取得失敗）。全データの選択と一括操作を無効にする。
+   * 選択の解除は、表示中の行に依存しないため残す。
+   */
+  disabled?: boolean
   className?: string
 }
 
@@ -538,8 +567,17 @@ const countFormat = new Intl.NumberFormat("ja-JP")
 
 // 選択件数と一括操作。1 件以上選んだときだけ表示する。
 // 表示件数の行と同じ位置に置き、表の位置がずれないようにする（docs/web/components/data-table.md）。
-// 狭い画面では、一括操作のボタンをアイコンだけにして 1 行に収める（文字は支援技術に残す）。
-function DataTableSelectionBar({ selectedCount, hiddenCount = 0, onClearSelection, selectAll, children, className }: DataTableSelectionBarProps) {
+// 狭い画面では、選択の解除を X のアイコンにして 1 行に収める（名前は支援技術に残す）。
+// 一括操作のボタンも、意味が伝わるアイコンがある操作に限ってアイコンだけにしてよい。削除など危険な操作は文字を残す。
+function DataTableSelectionBar({
+  selectedCount,
+  hiddenCount = 0,
+  onClearSelection,
+  selectAll,
+  children,
+  disabled = false,
+  className,
+}: DataTableSelectionBarProps) {
   if (selectedCount === 0 && !selectAll?.allSelected) return null
   const all = selectAll?.allSelected
   const count = all ? selectAll!.matchingCount : selectedCount
@@ -557,14 +595,28 @@ function DataTableSelectionBar({ selectedCount, hiddenCount = 0, onClearSelectio
         )}
       </p>
       {selectAll && selectAll.pageAllSelected && !all && selectAll.matchingCount > selectedCount && (
-        <Button variant="link" size="sm" onClick={selectAll.onSelectAll}>
+        <Button variant="link" size="sm" disabled={disabled} onClick={selectAll.onSelectAll}>
           検索条件に一致する {countFormat.format(selectAll.matchingCount)}件をすべて選択
         </Button>
       )}
-      <Button variant="ghost" size="sm" onClick={onClearSelection}>
-        選択を解除
+      <Button variant="ghost" size="sm" onClick={onClearSelection} className="max-sm:px-2">
+        <X aria-hidden="true" className="sm:hidden" />
+        <span className="max-sm:sr-only">選択を解除</span>
       </Button>
-      {children && <div className="flex flex-wrap items-center gap-2 sm:ms-auto">{children}</div>}
+      {disabled && (
+        <span data-slot="data-table-selection-disabled" className="text-ui text-muted-foreground">
+          更新が終わるまで操作できません
+        </span>
+      )}
+      {children && (
+        // disabled の fieldset は、中のボタンをまとめて押せなくする（Button の見た目も無効にそろえる）。
+        <fieldset
+          disabled={disabled}
+          className="contents [&_button:disabled]:cursor-not-allowed [&_button:disabled]:opacity-50"
+        >
+          <div className="flex flex-wrap items-center gap-2 sm:ms-auto">{children}</div>
+        </fieldset>
+      )}
     </div>
   )
 }
@@ -846,39 +898,46 @@ function DataTablePagination<TData extends RowData>({
   )
 }
 
-// 取得失敗、データ未登録、検索結果なしの表示。表の本文の中に置く。
-// 取得失敗は Feedback の Alert（destructive）で、原因と再試行の手段を示す。0 件の表示と混同させない。
-// データ未登録と検索結果なしは、見出しと説明と次の操作だけを置く（独立した Empty コンポーネントは対象外）。
+// データ未登録、検索結果なし、取得失敗の表示。表の本文の中に、Advanced Components の Empty で描く。
+// status を省略すると、DataTable が置いた行の種類（empty、no-results、error）から決まる。
+// 取得失敗は、操作の結果として後から表示されるため role="alert" で知らせる（docs/web/components/empty.md）。
+// tone="error" は、以前の API との互換のために残している（status="error" と同じ）。
 function DataTableMessage({
   title,
   description,
   action,
-  tone = "default",
+  icon,
+  status,
+  tone,
   className,
 }: {
   title: React.ReactNode
   description?: React.ReactNode
   action?: React.ReactNode
+  /** Lucide のアイコン。省略すると状態に応じたアイコン。false で表示しない */
+  icon?: React.ReactNode | false
+  status?: EmptyStatus
+  /** @deprecated status="error" を使う */
   tone?: "default" | "error"
   className?: string
 }) {
-  if (tone === "error") {
-    return (
-      <div data-slot="data-table-message-content" data-tone={tone} className={cn("py-6", className)}>
-        <Alert variant="destructive" role="alert">
-          <AlertTitle>{title}</AlertTitle>
-          {description && <AlertDescription>{description}</AlertDescription>}
-          {action && <AlertAction>{action}</AlertAction>}
-        </Alert>
-      </div>
-    )
-  }
+  const kind = React.useContext(MessageKindContext)
+  const resolved: EmptyStatus = status ?? (tone === "error" ? "error" : kind)
+  const Icon = resolved === "error" ? CircleAlert : resolved === "no-results" ? SearchX : Inbox
   return (
-    <div data-slot="data-table-message-content" data-tone={tone} className={cn("flex flex-col items-start gap-2 py-10", className)}>
-      <p className="text-body font-medium">{title}</p>
-      {description && <p className="text-ui text-muted-foreground [word-break:auto-phrase]">{description}</p>}
-      {action && <div className="mt-2 flex flex-wrap gap-2">{action}</div>}
-    </div>
+    <Empty
+      status={resolved}
+      role={resolved === "error" ? "alert" : undefined}
+      data-message="data-table"
+      className={cn("py-10", className)}
+    >
+      <EmptyHeader>
+        {icon !== false && <EmptyMedia variant="icon">{icon ?? <Icon />}</EmptyMedia>}
+        <EmptyTitle>{title}</EmptyTitle>
+        {description && <EmptyDescription>{description}</EmptyDescription>}
+      </EmptyHeader>
+      {action && <EmptyContent>{action}</EmptyContent>}
+    </Empty>
   )
 }
 
@@ -922,5 +981,6 @@ export {
   dataTableDefaults,
   dataTableFeatures,
   getSelectionSummary,
+  useDataTableStatus,
 }
 export type { AppliedFilter, DataTableColumnMeta, DataTableFeatures, DataTableInstance, DataTableRow, DataTableStatus }

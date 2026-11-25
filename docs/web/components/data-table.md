@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/data-table.tsx`](../../../registry/components/ui/data-table.tsx) |
 | 元にした実装 | shadcn/ui の Data Table の手順（TanStack Table を使う） |
-| 状態 | 初期実装 |
+| 状態 | v0.1 確定 |
 
 Data Display に共通する判断基準は [data-display.md](data-display.md) にまとめている。
 
@@ -39,7 +39,9 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 
 TanStack Table は v9（`@tanstack/react-table` 9.3）を使う。v9 は 2026 年 8 月から安定版であり、v8 の `useReactTable` ではなく `useTable` で表を作る。v9 では、使う機能（`rowSortingFeature` など）と処理（`createSortedRowModel()` など）を `tableFeatures()` で登録する。
 
-部品は `dataTableFeatures` で作った表（`DataTableInstance<TData>`）を受け取る。v9 の表の型は、登録した機能の組み合わせについて不変（`in out`）であり、機能の組み合わせが異なる表を同じ部品に渡せない。そのため、Flow Design の機能の組み合わせを `dataTableFeatures` として 1 つに決め、部品の型をこれに合わせている。製品で機能を追加する場合は、コピーした `data-table.tsx` の `dataTableFeatures` に追加する。
+部品は `dataTableFeatures` で作った表（`DataTableInstance<TData>`）を受け取る。v9 の表の型は、登録した機能の組み合わせについて不変（`in out`）であり、機能の組み合わせが異なる表を同じ部品に渡せない。そのため、Flow Design の機能の組み合わせを `dataTableFeatures` として 1 つに決め、部品の型をこれに合わせている。
+
+製品固有の機能（行の展開 `rowExpandingFeature` など）を使う場合は、コピーした `data-table.tsx` の `dataTableFeatures` に追加する。部品はすべて `DataTableFeatures`（`typeof dataTableFeatures`）を参照するため、追加した機能はそのまま型に反映される（`rowExpandingFeature` と `createExpandedRowModel()` を追加して、部品とプレビューの型の検査が通ることを確かめた）。一方、`dataTableFeatures` とは別に作った機能の組み合わせの表は、部品に渡せない。部品の型を機能の組み合わせについて汎用にすることは、型が複雑になるため行わない。
 
 ```tsx
 const table = useTable({
@@ -112,13 +114,15 @@ const table = useTable({
 
 | 状態 | 指定 | 表示 |
 | --- | --- | --- |
-| 読み込み中 | `status="loading"` | `loadingRowCount` 行の Skeleton（Feedback）。表に `aria-busy="true"`、読み上げの領域に「読み込み中」 |
-| データ未登録 | `status="ready"`、0 行、絞り込みなし | `empty` |
-| 検索結果なし | `status="ready"`、0 行、絞り込みあり | `noResults` |
-| 取得失敗 | `status="error"` | `error`。`DataTableMessage tone="error"` は Feedback の Alert（`destructive`、`role="alert"`）で原因と再試行を示す。行を 0 件として表示しない |
-| 再取得中 | `status="refreshing"` | 表示中の行を残す。表に `aria-busy="true"`。件数の行に `DataTableRefreshing` を置く |
+| 初回の読み込み | `status="loading"` | `loadingRowCount` 行の Skeleton（Feedback）。表に `aria-busy="true"`、読み上げの領域に「読み込み中」。選択の操作は受け付けない |
+| 再取得中 | `status="refreshing"` | 表示中の行を残す。表に `aria-busy="true"`。件数の行に `DataTableRefreshing` を置く。表示中の行に依存する操作は受け付けない（「再取得中の操作」） |
+| データ未登録 | `status="ready"`、0 行、絞り込みなし | `empty`。Empty（`status="empty"`） |
+| 検索結果なし | `status="ready"`、0 行、絞り込みあり | `noResults`。Empty（`status="no-results"`） |
+| 取得失敗 | `status="error"` | `error`。Empty（`status="error"`、`role="alert"`）で原因と再試行を示す。行を 0 件として表示しない |
 
-`empty`、`noResults`、`error` には `DataTableMessage` を使う。`title`、`description`、`action`（Button）を渡し、`tone="error"` ではアイコンと `role="alert"` が付く。表示は表の本文の 1 行で、横にスクロールしても表示中の範囲に残る（`sticky`）。
+`empty`、`noResults`、`error` には `DataTableMessage` を使う。Advanced Components の Empty で描き、`status` を省略すると、`DataTable` が置いた行の種類（未登録、検索結果なし、取得失敗）から決まる。`title`、`description`、`action`（Button）、`icon`（省略すると状態に応じたアイコン）を渡す。取得失敗は操作の結果として後から表示されるため、`role="alert"` を付ける（[empty.md](empty.md#5-behavior)）。以前の API の `tone="error"` は、`status="error"` と同じ意味で残している。
+
+表示は表の本文の 1 行で、`DataTable` の外側の要素をコンテナー（`@container`）にし、表示中の幅（`100cqw`）の中央に置く。表を横にスクロールしても表示中の範囲に残る（`sticky`）。
 
 ### 表の幅
 
@@ -181,10 +185,40 @@ const table = useTable({
   - クライアント側：`table.toggleAllRowsSelected(true)` で、絞り込み後のすべての行を ID で選ぶ。
   - サーバー側：読み込んでいない行は ID で選べないため、「条件に一致する全データを選択中」という状態を製品が持つ（`allSelected`）。条件を変えたら解除する。一括操作は、ID の一覧ではなく条件でサーバーに要求する。
 - `DataTableSelectionBar` は 1 件以上選んだときだけ表示する。件数を示す行と同じ位置に置き、選択の有無で表の位置が動かないようにする。
-- 狭い画面では、一括操作のボタンをアイコンだけにし（`<span className="max-sm:sr-only">` で文字を支援技術に残す）、件数、選択の解除と同じ 1 行に収める。2 行に折り返すと、押した行が指の下で動く。検品では、1 件目を選んだときの表の位置が変わらないことを確認している。
-- 「選択を解除」で選択をすべて解除する。
+- 狭い画面では、件数、選択の解除、一括操作を 1 行に収める。2 行に折り返すと、押した行が指の下で動く。検品では、1 件目を選んだときの表の位置が変わらないことを確認している。
+  - 「選択を解除」は X のアイコンにする（名前「選択を解除」は支援技術に残す）。選択の操作の中で広く使われる形である。
+  - 一括操作は、意味が伝わるアイコンがある操作（メールの送信）だけをアイコンにしてよい。削除などの危険な操作は文字を残す。意味が伝わりにくい操作は、メニュー（Dropdown Menu）にまとめる。
 - 選んだ行の面は、交互の背景色より優先する（[table.md](table.md#行の状態)）。
-- 削除などの危険な一括操作は、Alert Dialog で件数と結果を示して確認する。Alert Dialog の統合前のプレビューでは、件数の行の中で確認している。
+
+### 再取得中の操作
+
+表示中の行が、現在の検索・絞り込み・並べ替え・ページの結果と確定していない間（`status` が `loading`、`refreshing`、`error`）、`DataTable` は表を locked にする。古い行を対象にした誤操作を防ぐため、次を受け付けない。
+
+| 操作 | 部品 | locked の間 |
+| --- | --- | --- |
+| ページ内の全選択、行の選択・解除 | `DataTablePageCheckbox`、`DataTableRowCheckbox` | 無効（自動） |
+| 検索条件に一致する全データの選択、一括操作 | `DataTableSelectionBar` の `disabled` | 無効。「更新が終わるまで操作できません」と示す |
+| 行の中の操作（削除、編集など） | `useDataTableStatus().locked` を読み、製品が無効にする | 無効（プレビューの行のメニュー） |
+| 選択の解除 | `DataTableSelectionBar` | 押せる（表示中の行に依存しない） |
+| 行の詳細の閲覧、ページの移動、条件の変更 | | 押せる |
+
+- 選択済みの ID は、再取得の間も残す。条件を変えたときに解除するのは、条件に結びつく「全データを選択中」の状態だけである。
+- 操作を戻すのは、最新の要求の応答で、かつ応答の条件が現在の検索・絞り込み・並べ替え・ページと一致したときである。プレビューは、要求ごとの番号と、要求した条件の一致の両方を確かめてから `status` を `ready` にする。応答の順序が逆転しても、古い応答では操作を戻さない。
+- 取得、権限の確認、サーバー側での対象の検証は製品の責務である。サーバーは、一括操作の要求を受けたときに、対象が条件と権限に合っているかを確かめる。
+
+### 一括削除の流れ
+
+1. 削除のボタンで Alert Dialog を開く。見出しに件数を書き、初めのフォーカスはキャンセルに置く（Alert Dialog の既定）。
+2. 実行のボタン（「2件を削除する」）を押すと、要求が終わるまで処理中（`loading`、`aria-busy`）にし、キャンセルを無効にする。Dialog は閉じない。
+3. 成功：Dialog を閉じ、Toast で結果を知らせる。フォーカスは次の順で移す。Alert Dialog の `finalFocus` を `false` にし、消えた削除のボタンに戻さない。
+   1. 削除した先頭の行と同じ位置にある行（なければページの最後の行）の会社名のボタン
+   2. 行がなくなった場合（最後のページの行をすべて削除した場合は、存在するページに移った後の行）
+   3. データが 0 件になった場合は、空の状態の主要な操作（「顧客を登録する」「条件をすべて解除」）
+   4. それもない場合は検索欄
+4. 失敗：Dialog を閉じ、Toast（`destructive`）で知らせる。選択は残し、フォーカスは削除のボタンに戻る。
+5. キャンセル：フォーカスは削除のボタンに戻る。
+
+フォーカスは、Dialog が閉じ終わり（`onOpenChangeComplete`）、表が最新の状態（サーバー側では再取得の完了）になってから移す。
 
 ### 列の設定
 
@@ -230,7 +264,7 @@ Overlay と Feedback のコンポーネントが main に統合された後に�
 | 行の操作 | Dropdown Menu | プレビューの行の「…」。メニューの項目は Portal に描かれ、行の詳細を開かない |
 | 操作の結果 | Toast | プレビューの一括削除、メールの作成、ID のコピー |
 | 読み込み中 | Skeleton | `DataTable` の `status="loading"` |
-| 取得失敗 | Alert | `DataTableMessage` の `tone="error"` |
+| データ未登録、検索結果なし、取得失敗 | Empty（Advanced） | `DataTableMessage` |
 
 - 閲覧の Sheet は一覧の右側を覆う。行の詳細を開いたまま別の行を押す操作は、Sheet に覆われていない左側の列（会社名など）で行う。主要な列を左に置き、固定する。
 - 狭い画面では Sheet が画面の幅になるため、別の行を見るときは詳細を閉じてから選ぶ。

@@ -133,6 +133,28 @@ function PaginationEllipsis({ className, ...props }: React.ComponentProps<"span"
   )
 }
 
+// ページを移動した後のフォーカスの維持。押したボタンが無効になったとき（最初、最後のページに着いたとき）や
+// 並びが変わってボタンが消えたときに、フォーカスが body に移らないよう、現在のページか、残っているボタンへ移す。
+function useKeepFocus() {
+  const ref = React.useRef<HTMLElement>(null)
+  const pending = React.useRef(false)
+  const mark = () => {
+    pending.current = Boolean(ref.current?.contains(document.activeElement))
+  }
+  React.useEffect(() => {
+    if (!pending.current) return
+    pending.current = false
+    const root = ref.current
+    const active = document.activeElement as HTMLElement | null
+    // 無効になったボタンは、ブラウザが後からフォーカスを外す（その時点ではまだ activeElement のことがある）。
+    if (!root || (active && root.contains(active) && !active.matches(":disabled"))) return
+    const target =
+      root.querySelector<HTMLElement>("[aria-current=page]") ?? root.querySelector<HTMLElement>("button:not(:disabled), a[href]")
+    target?.focus()
+  })
+  return { ref, mark }
+}
+
 type PaginationItemValue = number | "ellipsis-start" | "ellipsis-end"
 
 // 最初と最後のページ、現在のページとその前後 siblingCount ページを並べ、間を省略記号にする。
@@ -180,11 +202,13 @@ function PageSizeSelect({
   pageSizeOptions,
   onPageSizeChange,
   unit,
+  disabled = false,
 }: {
   pageSize: number
   pageSizeOptions: readonly number[]
   onPageSizeChange: (size: number) => void
   unit: string
+  disabled?: boolean
 }) {
   const id = React.useId()
   const items = pageSizeOptions.map((n) => ({ value: n, label: `${formatCount(n)}${unit}` }))
@@ -193,7 +217,7 @@ function PageSizeSelect({
       <span id={id} className="text-ui whitespace-nowrap text-muted-foreground">
         表示件数
       </span>
-      <Select items={items} value={pageSize} onValueChange={(v) => v != null && onPageSizeChange(Number(v))}>
+      <Select items={items} value={pageSize} disabled={disabled} onValueChange={(v) => v != null && onPageSizeChange(Number(v))}>
         <SelectTrigger size="sm" aria-labelledby={id} className="w-auto min-w-28 text-ui pointer-coarse:min-h-12">
           <SelectValue />
         </SelectTrigger>
@@ -250,6 +274,11 @@ function PaginationControls({
   "aria-label": ariaLabel,
 }: PaginationControlsProps) {
   const narrow = useNarrow()
+  const keep = useKeepFocus()
+  const go = (p: number) => {
+    keep.mark()
+    onPageChange(p)
+  }
   const known = totalCount !== undefined
   const pageCount = known ? Math.max(1, Math.ceil(totalCount / pageSize)) : undefined
   const current = pageCount ? Math.min(Math.max(page, 1), pageCount) : Math.max(page, 1)
@@ -296,18 +325,19 @@ function PaginationControls({
             pageSize={pageSize}
             pageSizeOptions={pageSizeOptions}
             unit={unit}
+            disabled={disabled}
             onPageSizeChange={(size) => onPageSizeChange(size, pageForPageSize(current, pageSize, size))}
           />
         )}
-        <Pagination aria-label={ariaLabel}>
+        <Pagination aria-label={ariaLabel} ref={keep.ref as React.Ref<HTMLElement>}>
           <PaginationContent>
             {firstLast && (
               <PaginationItem>
-                <PaginationFirst disabled={!canPrev} onClick={() => onPageChange(1)} />
+                <PaginationFirst disabled={!canPrev} onClick={() => go(1)} />
               </PaginationItem>
             )}
             <PaginationItem>
-              <PaginationPrevious disabled={!canPrev} onClick={() => onPageChange(current - 1)} />
+              <PaginationPrevious disabled={!canPrev} onClick={() => go(current - 1)} />
             </PaginationItem>
             {items.map((item) =>
               typeof item === "number" ? (
@@ -316,7 +346,7 @@ function PaginationControls({
                     isActive={item === current}
                     disabled={disabled && item !== current}
                     aria-label={`${item}ページ目`}
-                    onClick={() => item !== current && onPageChange(item)}
+                    onClick={() => item !== current && go(item)}
                   >
                     {item}
                   </PaginationLink>
@@ -328,11 +358,11 @@ function PaginationControls({
               )
             )}
             <PaginationItem>
-              <PaginationNext disabled={!canNext} onClick={() => onPageChange(current + 1)} />
+              <PaginationNext disabled={!canNext} onClick={() => go(current + 1)} />
             </PaginationItem>
             {firstLast && pageCount !== undefined && (
               <PaginationItem>
-                <PaginationLast disabled={!canNext} onClick={() => onPageChange(pageCount)} />
+                <PaginationLast disabled={!canNext} onClick={() => go(pageCount)} />
               </PaginationItem>
             )}
           </PaginationContent>
@@ -374,6 +404,7 @@ function CursorPagination({
   className,
   "aria-label": ariaLabel,
 }: CursorPaginationProps) {
+  const keep = useKeepFocus()
   return (
     <div
       data-slot="cursor-pagination"
@@ -388,16 +419,29 @@ function CursorPagination({
             pageSize={pageSize}
             pageSizeOptions={pageSizeOptions}
             unit={unit}
+            disabled={disabled}
             onPageSizeChange={onPageSizeChange}
           />
         )}
-        <Pagination aria-label={ariaLabel}>
+        <Pagination aria-label={ariaLabel} ref={keep.ref as React.Ref<HTMLElement>}>
           <PaginationContent>
             <PaginationItem>
-              <PaginationPrevious disabled={disabled || !hasPrevious} onClick={onPrevious} />
+              <PaginationPrevious
+                disabled={disabled || !hasPrevious}
+                onClick={() => {
+                  keep.mark()
+                  onPrevious()
+                }}
+              />
             </PaginationItem>
             <PaginationItem>
-              <PaginationNext disabled={disabled || !hasNext} onClick={onNext} />
+              <PaginationNext
+                disabled={disabled || !hasNext}
+                onClick={() => {
+                  keep.mark()
+                  onNext()
+                }}
+              />
             </PaginationItem>
           </PaginationContent>
         </Pagination>

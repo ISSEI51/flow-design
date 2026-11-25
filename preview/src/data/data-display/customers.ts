@@ -117,12 +117,21 @@ type MockConfig = {
   failNext: boolean
   /** 受け付けた要求の数（検品用） */
   requests: CustomerQuery[]
+  /** 削除の応答までの時間（ms） */
+  deleteLatency: number
+  /** 次の削除を失敗させる */
+  failNextDelete: boolean
+  /** 削除した顧客の ID。取得の結果から除く */
+  deleted: Set<string>
 }
 
 export const mockServer: MockConfig = {
   latency: () => 400 + Math.floor(Math.random() * 400),
   failNext: false,
   requests: [],
+  deleteLatency: 400,
+  failNextDelete: false,
+  deleted: new Set(),
 }
 
 declare global {
@@ -165,12 +174,25 @@ export function fetchCustomers(q: CustomerQuery, signal?: AbortSignal): Promise<
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       if (fail) reject(new Error("サーバーに接続できませんでした（模擬）"))
-      else resolve(queryCustomers(q))
+      else resolve(queryCustomers(q, customers.filter((c) => !mockServer.deleted.has(c.id))))
     }, mockServer.latency(q))
     signal?.addEventListener("abort", () => {
       clearTimeout(timer)
       reject(new DOMException("aborted", "AbortError"))
     })
+  })
+}
+
+// 削除の模擬。クライアント側とサーバー側の例で共通に使う。失敗させる場合は failNextDelete を true にする。
+export function deleteCustomers(ids: readonly string[]): Promise<void> {
+  const fail = mockServer.failNextDelete
+  mockServer.failNextDelete = false
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      if (fail) return reject(new Error("削除できませんでした（模擬）"))
+      for (const id of ids) mockServer.deleted.add(id)
+      resolve()
+    }, mockServer.deleteLatency)
   })
 }
 

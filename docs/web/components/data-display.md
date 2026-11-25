@@ -4,10 +4,10 @@ Table、Data Table、Pagination、Chart に共通する判断基準。個別の�
 
 | コンポーネント | 資料 | 状態 |
 | --- | --- | --- |
-| Table | [table.md](table.md) | 初期実装 |
-| Data Table | [data-table.md](data-table.md) | 初期実装 |
-| Pagination | [pagination.md](pagination.md) | 初期実装 |
-| Chart | [chart.md](chart.md) | 初期実装 |
+| Table | [table.md](table.md) | v0.1 確定 |
+| Data Table | [data-table.md](data-table.md) | v0.1 確定 |
+| Pagination | [pagination.md](pagination.md) | v0.1 確定 |
+| Chart | [chart.md](chart.md) | v0.1 確定 |
 
 データを表示すること自体を目的にしない。ユーザーが必要な情報を見つけ、判断し、次の操作へ移れることを目的にする。大量の情報を扱えることと、考えなくても読めることを両立させる。
 
@@ -109,10 +109,10 @@ Table、Data Table、Pagination、Chart に共通する判断基準。個別の�
 
 | 状態 | 表示 | 次の操作 |
 | --- | --- | --- |
-| 読み込み中 | Skeleton（行の形） | 待つ |
+| 初回の読み込み | Skeleton（行の形） | 待つ。選択の操作は受け付けない |
 | データ未登録 | 登録されていないことと、登録した後に表示されるもの | 最初の登録 |
 | 検索結果なし | 条件に一致しないこと | 条件の変更、解除 |
-| 取得失敗 | 取得できなかったことと原因 | 再試行 |
+| 取得失敗 | 取得できなかったことと原因（Empty の `status="error"`） | 再試行。一括操作は受け付けない |
 | 再取得中 | 表示中のデータと「更新中」 | 待つ、または操作を続ける |
 
 - 取得に失敗した状態を 0 件として表示しない。データがないと誤解され、再試行の手段がなくなる。
@@ -170,7 +170,8 @@ Table、Data Table、Pagination、Chart に共通する判断基準。個別の�
 | Forms | Checkbox（行の選択、複数選択の条件、列の表示）、Select（単一選択の条件、表示件数）、Input（検索欄）、Field | 統合済み |
 | Button | 一括操作、再試行、ページ送り | 統合済み |
 | Overlay | Sheet（行の詳細、`mode="view"`）、Popover（その他の条件、列の表示）、Alert Dialog（危険な一括操作の確認）、Dropdown Menu（行の操作） | 接続済み |
-| Feedback | Skeleton（読み込み中）、Alert（取得失敗）、Toast（操作の結果） | 接続済み |
+| Feedback | Skeleton（読み込み中）、Toast（操作の結果） | 接続済み |
+| Advanced | Empty（データ未登録、検索結果なし、取得失敗） | 接続済み |
 | Navigation & Layout | 業務ダッシュボードの画面の構成（カードで囲まず、余白と見出しで区切る方針） | 方針に従っている。Sidebar などの部品は使っていない |
 
 依存するコンポーネントは独自に実装していない。Overlay と Feedback が main に統合された後に接続した（[data-table.md](data-table.md#他のコンポーネントとの接続)）。

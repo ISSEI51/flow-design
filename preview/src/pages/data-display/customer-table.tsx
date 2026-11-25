@@ -45,8 +45,10 @@ import { useToast } from "@/components/ui/toast"
 
 import {
   customers as allCustomers,
+  deleteCustomers,
   fetchCustomers,
   mockServer,
+  queryCustomers,
   owners,
   regions,
   statusOptions,
@@ -122,8 +124,13 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
   const [openId, setOpenId] = useState<string | null>(null)
   const [allMatching, setAllMatching] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  // 削除の後にフォーカスを移す先。削除した先頭の行の位置（ページの中の何行目か）を覚えておく。
+  const [focusAfterDelete, setFocusAfterDelete] = useState<number | null>(null)
+  const [dialogClosed, setDialogClosed] = useState(true)
   const [data, setData] = useState<Customer[]>(allCustomers)
   const container = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
   // ---------------------------------------------------------------- server
@@ -140,6 +147,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
     return () => clearTimeout(t)
   }, [mode, filters.search])
 
+  const latestQuery = useRef("")
   const query: CustomerQuery = useMemo(
     () => ({
       search: debouncedSearch,
@@ -153,15 +161,19 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
     [debouncedSearch, filters.status, filters.owner, filters.regions, sorting, pagination]
   )
 
+  latestQuery.current = JSON.stringify(query)
+
   useEffect(() => {
     if (mode !== "server") return
     // 要求ごとに番号を付け、最新の要求の応答だけを表示する。古い応答で上書きしない。
     const id = ++requestId.current
+    const requested = JSON.stringify(query)
     const controller = new AbortController()
     setStatus((s) => (s === "loading" ? "loading" : "refreshing"))
     fetchCustomers(query, controller.signal).then(
       (result) => {
-        if (id !== requestId.current) return
+        // 最新の要求の応答で、かつ現在の検索・絞り込み・並べ替え・ページと同じ条件のときだけ表示し、操作を有効に戻す。
+        if (id !== requestId.current || requested !== latestQuery.current) return
         setPage(result)
         setStatus("ready")
       },
@@ -240,20 +252,62 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
     setConfirmDelete(false)
   }
 
-  const deleteSelected = () => {
+  // 一括削除。削除の要求が終わるまで Alert Dialog を開いたままにし、実行のボタンを処理中にする。
+  // 成功：Dialog を閉じ、削除した先頭の行の位置にある行（なければ次に操作する要素）へフォーカスを移す。
+  // 失敗：Dialog を閉じ、選択を残す。フォーカスは削除のボタンに戻る（Alert Dialog の既定）。
+  const deleteSelected = async () => {
     const count = effectiveSelected
-    if (mode === "client") {
-      const ids = new Set(allMatching ? table.getFilteredRowModel().rows.map((r) => r.id) : summary.selectedIds)
-      setData((d) => d.filter((c) => !ids.has(c.id)))
-      if (openId && ids.has(openId)) setOpenId(null)
+    const ids =
+      mode === "client"
+        ? allMatching
+          ? table.getFilteredRowModel().rows.map((r) => r.id)
+          : summary.selectedIds
+        : allMatching
+          ? queryCustomers({ ...query, pageIndex: 0, pageSize: Number.MAX_SAFE_INTEGER }, allCustomers.filter((c) => !mockServer.deleted.has(c.id))).rows.map((c) => c.id)
+          : summary.selectedIds
+    const pageRows = table.getRowModel().rows
+    const firstIndex = Math.max(0, pageRows.findIndex((r) => ids.includes(r.id)))
+    setDeleting(true)
+    try {
+      await deleteCustomers(ids)
+    } catch {
+      setDeleting(false)
+      setConfirmDelete(false)
+      toast({ variant: "destructive", title: "顧客を削除できませんでした", description: "選択はそのまま残しています。時間をおいて、もう一度お試しください。" })
+      return
     }
-    clearSelection()
-    toast({
-      variant: "success",
-      title: mode === "client" ? `${count.toLocaleString("ja-JP")}件の顧客を削除しました` : `${count.toLocaleString("ja-JP")}件の顧客の削除を受け付けました`,
-      description: mode === "client" ? "プレビューの中だけで削除しています。" : "模擬のサーバーのため、データは変わりません。",
-    })
+    const removed = new Set(ids)
+    if (mode === "client") setData((d) => d.filter((c) => !removed.has(c.id)))
+    else setReloadKey((k) => k + 1)
+    if (openId && removed.has(openId)) setOpenId(null)
+    setFocusAfterDelete(firstIndex)
+    setDeleting(false)
+    setRowSelection({})
+    setAllMatching(false)
+    setConfirmDelete(false)
+    toast({ variant: "success", title: `${count.toLocaleString("ja-JP")}件の顧客を削除しました` })
   }
+
+  // 削除の後のフォーカス。Dialog が閉じ終わり、表が最新の状態になってから移す。
+  // 1. 削除した先頭の行と同じ位置の行（なければページの最後の行）の会社名のボタン
+  // 2. 行がない場合は、空の状態の主要な操作（顧客を登録する、条件をすべて解除）
+  // 3. それもない場合は検索欄
+  const status_ = mode === "server" ? status : "ready"
+  useEffect(() => {
+    if (focusAfterDelete === null || !dialogClosed || status_ !== "ready") return
+    const frame = requestAnimationFrame(() => {
+      const root = container.current
+      if (!root) return
+      const triggers = root.querySelectorAll<HTMLElement>("[data-slot=data-table-row-trigger]")
+      const target =
+        triggers[Math.min(focusAfterDelete, triggers.length - 1)] ??
+        root.querySelector<HTMLElement>("[data-slot=empty-content] button") ??
+        searchRef.current
+      target?.focus()
+      setFocusAfterDelete(null)
+    })
+    return () => cancelAnimationFrame(frame)
+  })
 
   // 閉じた後は、最後に開いた行の会社名のボタンにフォーカスを戻す。
   // 閉じる時点では openId が null になっているため、開いた行の ID を別に覚えておく。
@@ -264,7 +318,6 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
       ? (container.current?.querySelector<HTMLElement>(`[data-row-id="${lastOpenId.current}"] [data-slot=data-table-row-trigger]`) ?? null)
       : null
 
-  const status_ = mode === "server" ? status : "ready"
   const isEmptyData = mode === "client" ? data.length === 0 : false
 
   return (
@@ -280,6 +333,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
       <div data-testid={testId} className="flex flex-col gap-4">
         <div role="search" aria-label="顧客の検索と絞り込み" className="flex flex-wrap items-center gap-3">
           <DataTableSearch
+            ref={searchRef}
             data-testid={`${testId}-search`}
             className="sm:max-w-72"
             placeholder="会社名で検索"
@@ -334,6 +388,8 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
           {effectiveSelected > 0 ? (
               <DataTableSelectionBar
                 className="flex-1"
+                // 再取得中と取得失敗の間は、表示中の行が最新の条件の結果と確定していないため、一括操作を受け付けない。
+                disabled={status_ !== "ready"}
                 selectedCount={summary.selectedCount}
                 hiddenCount={summary.hiddenCount}
                 onClearSelection={clearSelection}
@@ -356,7 +412,8 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setConfirmDelete(true)} className="text-destructive">
                   <Trash2 />
-                  <span className="max-sm:sr-only">削除</span>
+                  {/* 危険な操作は、狭い画面でも文字を残す。 */}
+                  削除
                 </Button>
               </DataTableSelectionBar>
           ) : (
@@ -367,15 +424,23 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
           {status_ === "refreshing" && <DataTableRefreshing className="ms-auto" />}
         </div>
         {/* 危険な一括操作は Alert Dialog で確かめる。 */}
-        <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-          <AlertDialogContent data-testid={`${testId}-confirm`}>
+        <AlertDialog
+          open={confirmDelete}
+          onOpenChange={(open) => !deleting && setConfirmDelete(open)}
+          onOpenChangeComplete={(open) => setDialogClosed(!open)}
+        >
+          <AlertDialogContent
+            data-testid={`${testId}-confirm`}
+            // 削除に成功したときは、消えた削除のボタンではなく、上の効果で次の操作の対象へ移す。
+            finalFocus={() => (focusAfterDelete === null ? true : false)}
+          >
             <AlertDialogHeader>
               <AlertDialogTitle>{effectiveSelected.toLocaleString("ja-JP")}件の顧客を削除しますか？</AlertDialogTitle>
               <AlertDialogDescription>削除すると元に戻せません。契約と請求の履歴も表示できなくなります。</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>キャンセル</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={deleteSelected}>
+              <AlertDialogCancel disabled={deleting}>キャンセル</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" loading={deleting} onClick={deleteSelected}>
                 {effectiveSelected.toLocaleString("ja-JP")}件を削除する
               </AlertDialogAction>
             </AlertDialogFooter>
@@ -415,7 +480,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
             }
             error={
               <DataTableMessage
-                tone="error"
+                status="error"
                 title="顧客の一覧を取得できませんでした"
                 description="サーバーに接続できませんでした。時間をおいて、もう一度お試しください。"
                 action={

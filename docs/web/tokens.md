@@ -141,10 +141,11 @@ Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn
 | `success` / `success-foreground` | #15803d / #ffffff | 完了、正常 |
 | `warning` / `warning-foreground` | #b45309 / #ffffff | 注意 |
 | `info` / `info-foreground` | #2563eb / #ffffff | お知らせ |
+| `chart-1`〜`chart-5` | #2563eb / #134e4a / #d0620c / #4c1d95 / #be185d | グラフの系列（「グラフの色」） |
 
 - `success`、`warning`、`info`、`border-strong`、`destructive-foreground` は、shadcn/ui の「Adding New Tokens」の手順で追加したトークンである。
 - `sidebar-*` は、`sidebar` と `sidebar-accent` を除き、対応する `foreground`、`primary`、`accent-foreground`、`border`、`ring` を参照する。`sidebar` は `--fd-neutral-100`（#f5f5f5）、`sidebar-accent` は `--fd-neutral-200`（#e5e5e5）である。Sidebar をメインの内容と背景で区別し、現在位置の面を Sidebar の面より一段濃くするためである（[sidebar.md](components/sidebar.md)）。
-- `chart-1`〜`chart-5` は v0.1 では決めず、shadcn/ui の neutral テーマの既定値を入れている。
+- `chart-1`〜`chart-5` はグラフの系列の色であり、状態を表さない。`chart-1` は `info` と同じ値だが、意味は「1 番目の系列」である。
 
 ### 状態
 
@@ -205,6 +206,49 @@ Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn
 `border`（#e5e5e5）は白の上で 1.26:1 であり、3:1 に届かない。`border` は装飾の区切りだけに使い、部品の識別に必要な枠には `input` か `border-strong` を使う。
 
 無効な部品の文字は、WCAG 1.4.3 でコントラストの基準の対象外である。そのため、無効の状態は透明度だけでなく、`disabled` 属性で支援技術にも伝える。
+
+### グラフの色
+
+| トークン | 値 | `background`・`card`・`popover` との比 | `muted` との比 | L*（グレースケール） |
+| --- | --- | ---: | ---: | ---: |
+| `chart-1` | #2563eb（青） | 5.17 | 4.74 | 46.1 |
+| `chart-2` | #134e4a（濃い青緑） | 9.48 | 8.69 | 29.6 |
+| `chart-3` | #d0620c（オレンジ） | 3.86 | 3.54 | 54.2 |
+| `chart-4` | #4c1d95（濃い紫） | 10.95 | 10.05 | 25.5 |
+| `chart-5` | #be185d（赤紫） | 6.04 | 5.54 | 41.8 |
+
+線、棒、円の扇形、マーカー、Tooltip の系列の印は非テキストの要素として扱い、背景に対して 3:1 以上を求める（WCAG 1.4.11）。グラフの色で文字を書かない。
+
+系列どうしの区別は、`check-contrast.mjs` が次の方法で確かめる。
+
+- 色差：CIEDE2000。通常の色覚と、1 型・2 型・3 型の色覚のシミュレーション（Machado ほか 2009、程度 1.0）
+- グレースケール：CIELAB の明度（L*）の差
+- `chart-1`〜`chart-3`（3 系列までのグラフで一緒に使う色）：すべての組み合わせで、4 種類の色差が 20 以上、かつ明度の差が 8 以上
+- それ以外の組み合わせ：4 種類の色差の最小が 15 以上、または明度の差が 10 以上
+
+| 組み合わせ | 色差（通常 / 1 型 / 2 型 / 3 型） | 明度の差 |
+| --- | --- | ---: |
+| `chart-1` / `chart-2` | 34.9 / 32.1 / 27.3 / 21.7 | 16.4 |
+| `chart-1` / `chart-3` | 52.6 / 59.8 / 65.6 / 61.8 | 8.1 |
+| `chart-2` / `chart-3` | 47.7 / 28.9 / 41.4 / 55.8 | 24.6 |
+| `chart-1` / `chart-4` | 22.9 / 21.1 / 16.6 / 29.3 | 20.5 |
+| `chart-1` / `chart-5` | 36.5 / 25.2 / 42.0 / 64.5 | 4.2 |
+| `chart-2` / `chart-4` | 32.2 / 24.5 / 19.8 / 22.8 | 4.1 |
+| `chart-2` / `chart-5` | 42.4 / 8.3 / 21.2 / 54.7 | 12.2 |
+| `chart-3` / `chart-4` | 55.3 / 60.4 / 66.2 / 41.3 | 28.7 |
+| `chart-3` / `chart-5` | 35.4 / 37.1 / 21.6 / 10.4 | 12.4 |
+| `chart-4` / `chart-5` | 29.2 / 16.3 / 41.7 / 37.5 | 16.3 |
+
+候補（#2563eb、#0f766e、#7c3aed、#b45309、#be185d）から変えた点は次のとおりである。候補は 5 色とも背景に対して 4.6:1 以上だったが、系列の区別で 10 組のうち 5 組が基準を満たさなかった。
+
+| トークン | 候補 | 採用 | 理由 |
+| --- | --- | --- | --- |
+| `chart-2` | #0f766e | #134e4a | 候補の 5 色は L* が 42〜47 に集まり、グレースケールで区別できない（`chart-1` との明度の差 1.6）。暗くして差を 16.4 にした |
+| `chart-3` | #7c3aed | #d0620c | `chart-1`（青）と紫は、2 型色覚のシミュレーションで色差 0.5 となり区別できない。3 系列のグラフで隣り合うため、`chart-3` を色覚の特性によらず青と区別しやすいオレンジにし、明るくして明度の差を付けた |
+| `chart-4` | #b45309 | #4c1d95 | #b45309 は `warning` と同じ値で、注意の意味に見える。紫を `chart-4` に移し、暗くして `chart-1` との明度の差を 20.5 にした（2 型色覚の色差 16.6） |
+| `chart-1`、`chart-5` | #2563eb、#be185d | 変更なし | 基準を満たす |
+
+5 色すべての組み合わせを、すべての色覚の特性で色だけで区別することは、背景に対して 3:1 以上という明度の制約の中ではできない。4 系列以上のグラフでは、色に加えて線の種類、マーカー、直接のラベル、数値の表を使う（[chart.md](components/chart.md)）。
 
 ### 候補の値から変えた点
 
@@ -285,8 +329,9 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 | ニュートラルの色味 | `--fd-neutral-0`〜`--fd-neutral-900` |
 | フォント | `--fd-font-sans` |
 | 角丸の大きさ | `--fd-radius-xs`〜`--fd-radius-2xl`。ボタンの角丸だけを変える場合は、shadcn/ui と同じく `--radius` でもよい |
+| グラフの色 | `--chart-1`〜`--chart-5`。グラフを囲む要素で上書きしてもよい |
 
-上書きした後は、「検証の方法」の 2 つのスクリプトで確認する。`primary` は、Button のホバー（`primary/90`）と押下（`primary/80`）でも 4.5:1 以上になる色を選ぶ。たとえば #1d4ed8 は、押下が白の上で 4.42:1 になるため使えない。
+上書きした後は、「検証の方法」の 2 つのスクリプトで確認する。グラフの色を上書きした製品は、背景との 3:1 と、系列の区別（「グラフの色」の基準）を `check-contrast.mjs` で確かめる責務を持つ。基準を満たさない色にする場合は、線の種類、マーカー、ラベル、数値の表で系列を区別できるようにする。`primary` は、Button のホバー（`primary/90`）と押下（`primary/80`）でも 4.5:1 以上になる色を選ぶ。たとえば #1d4ed8 は、押下が白の上で 4.42:1 になるため使えない。
 
 角丸は shadcn/ui の既定のように `--radius` からの倍率で計算していない。Flow Design の段階（4、8、12、14、20、24px）が倍率では表せないためである。
 
@@ -298,7 +343,7 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 
 | スクリプト | 検査すること | 必要なもの |
 | --- | --- | --- |
-| `node scripts/tokens/check-contrast.mjs [CSS]` | `var()` の未定義と循環、「4. Color」の組み合わせのコントラスト | Node.js だけ |
+| `node scripts/tokens/check-contrast.mjs [CSS]` | `var()` の未定義と循環、「4. Color」の組み合わせのコントラスト、グラフの系列の区別 | Node.js だけ |
 | `node scripts/tokens/verify-theme.mjs [CSS]` | Tailwind CSS v4 でのコンパイル、ユーティリティの生成、Chromium での計算後のスタイル、CSS 変数の上書き、動きを減らす設定 | Node.js、初回のネットワーク接続、Playwright の Chromium |
 
 どちらも結果を 1 行に 1 つの JSON で出力し、失敗があれば終了コード 1 で終わる。
@@ -306,7 +351,7 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 `check-contrast.mjs` の検査範囲と制約は次のとおりである。
 
 - 最上位の `:root` ブロックの変数だけを読む。`@media` の中は読まない。
-- 色は `#rrggbb` に解決できるものだけを計算する。`oklch()` などを使う `chart-*` は対象外である。
+- 色は `#rrggbb` に解決できるものだけを計算する。`oklch()` などの値は計算できないため、`#rrggbb` で書く。
 - 検査する組み合わせは、スクリプト内の一覧に書いたものだけである。部品が新しい組み合わせを使う場合は、一覧に追加する。
 
 `verify-theme.mjs` は、バージョンを固定したパッケージ（tailwindcss 4.3.5、@tailwindcss/cli 4.3.5、shadcn 4.23.0、playwright-core 1.65.1）を、リポジトリの外の一時ディレクトリに入れて使う。リポジトリに依存パッケージは追加しない。Chromium がない場合は `npx playwright-core@1.65.1 install chromium` で入れる。
@@ -320,7 +365,8 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 | 削除ボタンのホバー | `verify-theme.mjs`（Playwright の Chromium 159） | 面が rgb(190, 32, 32)（`destructive` を 10% 暗くした色）になった |
 | CSS 変数の上書き | `verify-theme.mjs`（Playwright の Chromium 159） | `--fd-radius-md`、`--fd-radius-xl`、`--fd-radius-lg`、`--radius`、`--primary`、`--fd-neutral-500`、`--control-height`、`--table-row-height`、`--focus-ring-width`、`--icon-stroke-width` の上書きが、計算後のスタイルに反映された。`--fd-radius-md` の上書きで、他の角丸は変わらなかった |
 | 参照関係 | `check-contrast.mjs` | 63 の変数で、未定義と循環はない |
-| コントラスト | `check-contrast.mjs` | 41 の組み合わせがすべて基準を満たした |
+| コントラスト | `check-contrast.mjs` | 61 の組み合わせ（グラフの色の 20 を含む）がすべて基準を満たした |
+| グラフの系列の区別 | `check-contrast.mjs` | 10 の組み合わせがすべて基準を満たした（「グラフの色」） |
 | 動きを減らす設定 | `verify-theme.mjs` | `--duration-slow` と `--duration-layout` が 0ms になり、`--duration-fast` は 120ms のまま |
 | 表示 | ボタン、入力欄、メニュー、ダイアログ、テーブルを並べたページを Chromium で表示（v0.1 の作成時） | 余白、文字、角丸、高さの段階が意図どおりに表示された |
 
@@ -357,7 +403,6 @@ const twMerge = extendTailwindMerge(
 ## 未定のこと
 
 - ダークモードの値
-- グラフの色（`chart-1`〜`chart-5`）
 - Registry での配布の形式（CSS ファイルか、`registry:theme` などの item の `cssVars` か）
 - 文字の字間（letter-spacing）
 - 実際のコンポーネントを使った検品の結果による値の調整

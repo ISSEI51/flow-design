@@ -327,12 +327,20 @@ function ChartLegendContent({
     return null
   }
 
+  // Recharts の Legend は、既定（itemSorter="value"）で名前の順に並べ替える。系列の順を保つため、ChartConfig に書いた順に並べる。
+  const order = Object.keys(config)
+  const rank = (item: (typeof payload)[number]) => {
+    const i = order.indexOf(`${nameKey ? (item.payload as Record<string, unknown> | undefined)?.[nameKey] : item.dataKey}`)
+    return i === -1 ? order.length : i
+  }
+  const items = [...payload].sort((a, b) => rank(a) - rank(b))
+
   return (
     <ul
       data-slot="chart-legend"
       className={cn("flex flex-wrap items-center justify-center gap-x-4 gap-y-1", verticalAlign === "top" ? "pb-3" : "pt-3", className)}
     >
-      {payload
+      {items
         .filter((item) => item.type !== "none")
         .map((item, index) => {
           const key = `${nameKey ?? item.dataKey ?? "value"}`
@@ -415,6 +423,17 @@ function ChartDataTable<T extends Record<string, unknown>>({
   )
 }
 
+// 構成比（Donut など）に使えるかを確かめる。使えない場合は理由を返す。
+// 負の値、数値でない値、合計が 0 以下の場合は、全体に対する割合を表せない。欠損（null）は 0 として扱わず、理由として返す。
+function getCompositionError(values: readonly (number | null | undefined)[]): string | null {
+  if (values.length === 0) return "データがありません"
+  if (values.some((v) => v === null || v === undefined)) return "値のない項目があります"
+  if (values.some((v) => !Number.isFinite(v))) return "数値でない値があります"
+  if (values.some((v) => (v as number) < 0)) return "負の値があります"
+  if (values.reduce<number>((sum, v) => sum + (v as number), 0) <= 0) return "合計が 0 です"
+  return null
+}
+
 function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key: string) {
   if (typeof payload !== "object" || payload === null) {
     return undefined
@@ -444,6 +463,7 @@ export {
   ChartTooltipContent,
   chartAnimation,
   chartStyles,
+  getCompositionError,
   useChart,
 }
 export type { ChartDataColumn }

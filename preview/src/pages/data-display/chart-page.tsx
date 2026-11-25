@@ -8,6 +8,9 @@ import { PageHeader } from "../../layout/page-header"
 import { Compare, Section } from "../../layout/section"
 import {
   ChangeBarChart,
+  EmptyChart,
+  InvalidCompositionChart,
+  ZeroAndMissingBarChart,
   PlanDonutChart,
   RegionBarChart,
   RevenueLineChart,
@@ -17,10 +20,12 @@ import {
   UsersLineChart,
 } from "./charts"
 
-// 製品がグラフの色を変える例。--chart-1〜5 を、グラフを囲む要素で上書きする。
+// 製品がグラフの色を変える例。--chart-* を、グラフを囲む要素で上書きする。
+// 上書きした製品は、scripts/tokens/check-contrast.mjs で背景とのコントラストと系列の区別を確かめる（docs/web/tokens.md）。
 const palettes = [
   { id: "default", name: "標準（chart-1〜5）", vars: {} },
-  { id: "brand", name: "ブランドの色", vars: { "--chart-1": "var(--primary)", "--chart-2": "#0f766e", "--chart-3": "#9a3412" } },
+  { id: "brand", name: "chart-1 をブランドの色に", vars: { "--chart-1": "var(--primary)" } },
+  { id: "gray", name: "グレースケールで確認", vars: { filter: "grayscale(1)" } },
 ] as const
 
 const bars = newContractsByRegion.slice(0, 5)
@@ -118,6 +123,22 @@ export function ChartPage() {
           <PlanDonutChart />
           <StatusStackedBarChart />
           <SeatsFeeScatterChart />
+        </div>
+      </Section>
+
+      <Section title="データの扱い" lead="0 と欠損、空のデータ、構成比に使えない値を、グラフの見た目だけに任せずに示す。">
+        <div className="grid gap-16">
+          <ZeroAndMissingBarChart />
+          <EmptyChart />
+          <InvalidCompositionChart />
+          <details data-testid="chart-hidden" className="group">
+            <summary className="inline-flex min-h-10 cursor-pointer items-center rounded-sm text-ui font-medium underline-offset-4 outline-none hover:underline focus-visible:focus-ring pointer-coarse:min-h-12">
+              非表示の領域にあるグラフを開く
+            </summary>
+            <div className="mt-6">
+              <RevenueLineChart testId="chart-hidden-line" headingLevel={4} />
+            </div>
+          </details>
         </div>
       </Section>
 

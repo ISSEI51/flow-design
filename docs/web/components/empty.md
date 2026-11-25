@@ -65,7 +65,7 @@
 - アイコンは飾りとして扱い、支援技術には読ませない（`aria-hidden`）。状態はタイトルの文字で伝える。
 - 取得失敗の Empty を、操作の結果として後から表示する場合は、製品が `role="alert"` を付けて知らせる。最初から表示されている空の状態には付けない。
 - 画面の一部の取得に失敗し、ほかの内容は使える場合は、Empty ではなく Alert を使う。
-- Data Table のデータ未登録、検索結果なし、取得失敗の表示は、Empty を使って作れる。Data Display Components への組み込みは、Data Display Components の統合後に別の作業として行う。
+- Data Table のデータ未登録、検索結果なし、取得失敗の表示は、Data Display Components の `DataTableMessage` が Empty で描く（[data-table.md](data-table.md#データの状態)）。
 
 ## 6. Anti-patterns
 

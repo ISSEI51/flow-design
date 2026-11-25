@@ -8,6 +8,7 @@ import {
   DataTablePageCheckbox,
   DataTableRowCheckbox,
   DataTableRowTrigger,
+  useDataTableStatus,
   type DataTableFeatures,
 } from "@/components/ui/data-table"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -142,11 +143,14 @@ export const customerColumns = helper.columns([
 // 行の中の操作（Dropdown Menu）。押しても行の詳細は開かない（DataTable が行の中の button と Portal を除く）。
 export const RowActionContext = createContext<(action: "compose" | "copy", customer: Customer) => void>(() => {})
 
+// 再取得中などで表が locked の間は、表示中の古い行を対象にした操作を防ぐため、メニューを開けない。
 function RowActions({ customer }: { customer: Customer }) {
   const run = useContext(RowActionContext)
+  const { locked } = useDataTableStatus()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
+        disabled={locked}
         render={<Button variant="ghost" size="icon-sm" aria-label={`${customer.company}の操作`} className="pointer-coarse:size-12" />}
       >
         <Ellipsis />

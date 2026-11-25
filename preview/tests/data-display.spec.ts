@@ -1,10 +1,6 @@
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 
 import { expect, test, type Locator, type Page } from "@playwright/test"
-import { createElement } from "react"
-import { renderToString } from "react-dom/server"
-import { createServer, type ViteDevServer } from "vite"
 
 import { customers, queryCustomers, type CustomerQuery } from "../src/data/data-display/customers"
 import { colorContrast, css, sameColor, token } from "./helpers"
@@ -29,6 +25,24 @@ const fmt = (n: number) => n.toLocaleString("ja-JP")
 // ブランドカラーは App の要素に設定されるため、main から計算後の値を読む。
 const tokenIn = (page: Page, name: string) =>
   page.locator("main").evaluate((el, n) => getComputedStyle(el).getPropertyValue(n).trim(), name)
+
+// CSS の色（oklab()、color-mix() の結果を含む）を、canvas で塗って 0〜255 の RGB にする。
+const rgbOf = (page: Page, color: string) =>
+  page.evaluate((c) => {
+    const canvas = document.createElement("canvas")
+    canvas.width = canvas.height = 1
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!
+    ctx.fillStyle = "#fff"
+    ctx.fillRect(0, 0, 1, 1)
+    ctx.fillStyle = c
+    ctx.fillRect(0, 0, 1, 1)
+    return Array.from(ctx.getImageData(0, 0, 1, 1).data.slice(0, 3))
+  }, color)
+// 2 つの色が、各チャンネル 1 以内で一致する
+async function sameRgb(page: Page, a: string, b: string) {
+  const [x, y] = [await rgbOf(page, a), await rgbOf(page, b)]
+  return x.every((v, i) => Math.abs(v - y[i]) <= 1)
+}
 
 // 文字色と、行（セル）の面の色のコントラスト比
 async function textContrast(page: Page, text: Locator, surface: Locator) {
@@ -164,57 +178,135 @@ test.describe("Table", { tag: "@webkit" }, () => {
     expect(new Set(rights).size).toBe(1)
   })
 
-  test("row states: hover only for interactive rows, selected > striped, contrast", async ({ page, isMobile }) => {
+  test("row states: neutral ladder, selected over striped, active line, contrast", async ({ page, isMobile, browserName }) => {
     await open(page, "table")
-    const bg = (r: Locator) => css(r.locator("td").first(), "background-color")
+    // 2 番目のセル（状態の名前）の面で比べる。1 番目は Checkbox のセル
+    const cellOf = (r: Locator) => r.locator("td").nth(1)
+    const bg = (r: Locator) => css(cellOf(r), "background-color")
+    const settle = async () => {
+      await page.mouse.move(0, 0)
+      await page.waitForTimeout(250) // 背景色のトランジション（120ms）が終わるまで待つ
+    }
     // 押せない行はホバーで変わらない
     const plain = page.getByTestId("table-lines").locator("tbody tr").first()
-    const before = await bg(plain)
+    const before = await css(plain.locator("td").first(), "background-color")
     if (!isMobile) {
       await plain.hover()
-      expect(await bg(plain)).toBe(before)
+      expect(await css(plain.locator("td").first(), "background-color")).toBe(before)
     }
-    const normal = page.getByTestId("table-state-0")
-    const even = page.getByTestId("table-state-1")
-    const selected = page.getByTestId("table-state-2")
-    const active = page.getByTestId("table-state-3")
-    const selectedEven = page.getByTestId("table-state-4")
-    if (!isMobile) {
-      const normalBg = await bg(normal)
-      await normal.hover()
-      expect(await bg(normal)).not.toBe(normalBg)
-    }
-    // 選択中は交互の背景色より優先する（偶数行でも選択中の面）。
-    // ホバーを外し、背景色のトランジション（120ms）が終わってから比べる
-    await page.mouse.move(0, 0)
-    await page.waitForTimeout(250)
-    expect(await bg(selected)).toBe(await bg(selectedEven))
-    expect(await bg(selectedEven)).not.toBe(await bg(even))
-    // 詳細を表示中：先頭のセルに 2px の線
+    const [normal, even, selected, active, selectedEven, selectedActive] = [0, 1, 2, 3, 4, 5].map((i) => page.getByTestId(`table-state-${i}`))
+    await page.getByTestId("table-states").scrollIntoViewIfNeeded()
+    await settle()
+    const mix = (pct: number) => `color-mix(in srgb, var(--foreground) ${pct}%, var(--background))`
+    const resolve = (value: string) =>
+      page.evaluate((v) => {
+        const el = document.createElement("div")
+        el.style.background = v
+        document.body.append(el)
+        const c = getComputedStyle(el).backgroundColor
+        el.remove()
+        return c
+      }, value)
+    // 通常 < 交互の背景色 < ホバー < 選択中 < 選択中のホバー（すべてニュートラル）
+    expect(await sameRgb(page, await bg(normal), await token(page, "--background"))).toBe(true)
+    expect(await sameRgb(page, await bg(even), await token(page, "--muted"))).toBe(true)
+    expect(await sameRgb(page, await bg(selected), await resolve(mix(12)))).toBe(true)
+    // 選択中は交互の背景色より優先する。選択中と詳細を表示中を混同しない
+    expect(await sameRgb(page, await bg(selectedEven), await bg(selected))).toBe(true)
+    expect(await sameRgb(page, await bg(selectedActive), await bg(selected))).toBe(true)
+    expect(await sameRgb(page, await bg(active), await bg(selected))).toBe(false)
+    expect(await sameRgb(page, await bg(active), await resolve(mix(6)))).toBe(true)
     expect(await css(active.locator("td").first(), "box-shadow")).toContain("inset")
+    expect(await css(selectedActive.locator("td").first(), "box-shadow")).toContain("inset")
     expect(await css(selected.locator("td").first(), "box-shadow")).toBe("none")
-    // 補足の文字（muted-foreground）も 4.5:1 以上
-    await page.mouse.move(0, 0)
-    for (const row of [normal, even, selected, active, selectedEven]) {
-      for (const cell of await row.locator("td").all()) {
-        expect(await textContrast(page, cell, cell)).toBeGreaterThanOrEqual(4.5)
-      }
-    }
     if (!isMobile) {
-      await selectedEven.hover()
-      for (const cell of await selectedEven.locator("td").all()) expect(await textContrast(page, cell, cell)).toBeGreaterThanOrEqual(4.5)
-      await even.hover()
-      for (const cell of await even.locator("td").all()) expect(await textContrast(page, cell, cell)).toBeGreaterThanOrEqual(4.5)
+      const hovered = async (row: Locator, pct: number) => {
+        await row.hover()
+        await expect.poll(async () => sameRgb(page, await bg(row), await resolve(mix(pct)))).toBe(true)
+      }
+      await hovered(normal, 6)
+      await hovered(even, 6)
+      await hovered(selected, 16)
+      await settle()
+    }
+    // 文字と補足の文字は 4.5:1 以上（ホバー中も）
+    const rows = [normal, even, selected, active, selectedEven, selectedActive]
+    const checkText = async () => {
+      for (const row of rows) for (const cell of (await row.locator("td").all()).slice(1)) expect(await textContrast(page, cell, cell)).toBeGreaterThanOrEqual(4.5)
+    }
+    await checkText()
+    if (!isMobile) {
+      for (const row of rows) {
+        await row.hover()
+        await page.waitForTimeout(200)
+        for (const cell of (await row.locator("td").all()).slice(1)) expect(await textContrast(page, cell, cell)).toBeGreaterThanOrEqual(4.5)
+        // 未選択の Checkbox の枠は、ホバー中の面でも 3:1 以上
+        const box_ = row.getByRole("checkbox")
+        if ((await box_.getAttribute("aria-checked")) === "false") {
+          expect(await colorContrast(page, await css(box_, "border-top-color"), await css(row.locator("td").first(), "background-color"))).toBeGreaterThanOrEqual(3)
+        }
+      }
+      await settle()
+    }
+    // 選択中の Checkbox の面は primary。キーボードのフォーカスは focus-ring で、選択中の面でも 3:1 以上
+    expect(await sameRgb(page, await css(selected.getByRole("checkbox"), "background-color"), await token(page, "--primary"))).toBe(true)
+    const link = selectedActive.getByRole("link")
+    // WebKit は既定で Tab でリンクに移らないため、Option + Tab を使う
+    const tab = browserName === "webkit" ? "Alt+Tab" : "Tab"
+    await selectedActive.getByRole("checkbox").focus()
+    await page.keyboard.press(tab)
+    await expect(link).toBeFocused()
+    expect(await css(link, "outline-style")).toBe("solid")
+    expect(await css(link, "outline-width")).toBe("2px")
+    expect(await colorContrast(page, await css(link, "outline-color"), await bg(selectedActive))).toBeGreaterThanOrEqual(3)
+    // Checkbox で選択を切り替えると、面が変わる
+    await normal.getByRole("checkbox").click()
+    await settle()
+    await expect(normal).toHaveAttribute("data-state", "selected")
+    expect(await sameRgb(page, await bg(normal), await bg(selected))).toBe(true)
+  })
+
+  test("brand color: selected rows stay neutral; checkbox and active line follow --primary", async ({ page }) => {
+    await open(page, "table")
+    const row = page.getByTestId("table-state-5")
+    const cell = row.locator("td").nth(1)
+    const neutral = await css(cell, "background-color")
+    for (const brand of ["青", "紫"]) {
+      await page.getByRole("radio", { name: brand }).check()
+      await page.waitForTimeout(200)
+      expect(await sameRgb(page, await css(cell, "background-color"), neutral)).toBe(true)
+      const primary = await tokenIn(page, "--primary")
+      expect(await sameRgb(page, await css(row.getByRole("checkbox"), "background-color"), primary)).toBe(true)
+      expect(await css(row.locator("td").first(), "box-shadow")).toContain("inset")
+      for (const c of (await row.locator("td").all()).slice(1)) expect(await textContrast(page, c, c)).toBeGreaterThanOrEqual(4.5)
+      // 選択中の Checkbox（primary の面）は、行の面に対して 3:1 以上
+      expect(await colorContrast(page, primary, neutral)).toBeGreaterThanOrEqual(3)
     }
   })
 
-  test("brand color: selected row follows --primary and keeps contrast", async ({ page }) => {
+  test("truncated text: only truncated cells get a toggle; full text by keyboard and touch", async ({ page, isMobile }) => {
     await open(page, "table")
-    const cell = page.getByTestId("table-state-2").locator("td").first()
-    const neutral = await css(cell, "background-color")
-    await page.getByRole("radio", { name: "青" }).check()
-    expect(await css(cell, "background-color")).not.toBe(neutral)
-    for (const c of await page.getByTestId("table-state-2").locator("td").all()) expect(await textContrast(page, c, c)).toBeGreaterThanOrEqual(4.5)
+    const t = page.getByTestId("table-truncate")
+    const toggles = t.locator("[data-slot=table-truncate-toggle]")
+    // 省略されたセルにだけボタンを置く（すべてのセルをフォーカスできるようにはしない）
+    const truncated = await t.locator("[data-slot=table-truncate]").evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length)
+    expect(truncated).toBeGreaterThan(0)
+    await expect(toggles).toHaveCount(truncated)
+    const first = toggles.first()
+    await expect(first).toHaveAttribute("aria-expanded", "false")
+    await expect(first).toHaveAccessibleName("全文を表示")
+    if (isMobile) await first.tap()
+    else {
+      await first.focus()
+      await page.keyboard.press("Enter")
+    }
+    await expect(first).toHaveAttribute("aria-expanded", "true")
+    const text = t.locator("[data-slot=table-truncate]").first()
+    await expect(text).toHaveAttribute("data-expanded", "true")
+    expect(await text.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+    await expect(text).toHaveText("医療法人社団 こもれび会 地域連携在宅医療推進センター")
+    await first.click()
+    await expect(first).toHaveAttribute("aria-expanded", "false")
   })
 })
 
@@ -375,25 +467,98 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     expect(await top()).toBe(y)
   })
 
-  test("bulk delete asks for confirmation", async ({ page }) => {
+  test("bulk delete asks for confirmation; async; focus moves to the row now in that place", async ({ page }) => {
     await open(page, "data-table")
     const c = client(page)
-    await bodyRows(c).nth(0).getByRole("checkbox").click()
+    await page.evaluate(() => (window.__fdMockServer!.deleteLatency = 600))
+    const next = (await bodyRows(c).nth(3).locator("td").nth(1).textContent())!.trim()
     await bodyRows(c).nth(1).getByRole("checkbox").click()
+    await bodyRows(c).nth(2).getByRole("checkbox").click()
     // 一括操作は 1 件以上選んだときだけ表示する
     await expect(c.getByRole("region", { name: "選択した行の操作" })).toBeVisible()
-    // 危険な一括操作は Alert Dialog で確かめる
-    await c.getByRole("button", { name: "削除" }).click()
+    // 危険な一括操作は Alert Dialog で確かめる。キャンセルするとフォーカスは削除のボタンに戻る
+    const del = c.getByRole("button", { name: "削除" })
+    await del.click()
     const dialog = page.getByRole("alertdialog")
     await expect(dialog).toHaveAccessibleName("2件の顧客を削除しますか？")
     await dialog.getByRole("button", { name: "キャンセル" }).click()
     await expect(dialog).toHaveCount(0)
+    await expect(del).toBeFocused()
     await expect(c.getByText("2件を選択中")).toBeVisible()
-    await c.getByRole("button", { name: "削除" }).click()
-    await page.getByRole("alertdialog").getByRole("button", { name: "2件を削除する" }).click()
+    // 実行：処理中はボタンを処理中にし、キャンセルを無効にする
+    await del.click()
+    const action = page.getByRole("alertdialog").getByRole("button", { name: "2件を削除する" })
+    await action.click()
+    await expect(action).toHaveAttribute("aria-busy", "true")
+    await expect(page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" })).toBeDisabled()
+    await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 3000 })
     await expect(count(c, "client")).toHaveText(`${fmt(customers.length - 2)}件`)
-    await expect(page.getByText("2件の顧客を削除しました")).toBeVisible()
+    await expect(page.locator("[data-slot=toast-title]", { hasText: "2件の顧客を削除しました" })).toBeVisible()
     await expect(c.getByRole("region", { name: "選択した行の操作" })).toHaveCount(0)
+    // 削除した先頭の行の位置にある行（元の 4 行目）の会社名のボタンにフォーカスを移す
+    const focused = c.locator("[data-slot=data-table-row-trigger]:focus")
+    await expect(focused).toHaveText(next)
+    await expect(bodyRows(c).nth(1).locator("[data-slot=data-table-row-trigger]")).toBeFocused()
+  })
+
+  test("bulk delete failure keeps the selection and returns focus to the delete button", async ({ page }) => {
+    await open(page, "data-table")
+    const c = client(page)
+    await page.evaluate(() => {
+      window.__fdMockServer!.deleteLatency = 100
+      window.__fdMockServer!.failNextDelete = true
+    })
+    await bodyRows(c).nth(0).getByRole("checkbox").click()
+    const del = c.getByRole("button", { name: "削除" })
+    await del.click()
+    await page.getByRole("alertdialog").getByRole("button", { name: "1件を削除する" }).click()
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
+    await expect(page.locator("[data-slot=toast-title]", { hasText: "顧客を削除できませんでした" })).toBeVisible()
+    await expect(c.getByText("1件を選択中")).toBeVisible()
+    await expect(count(c, "client")).toHaveCount(0)
+    await expect(del).toBeFocused()
+  })
+
+  test("bulk delete with the keyboard; deleting the last page and all data moves focus to what remains", async ({ page }) => {
+    await open(page, "data-table")
+    const c = client(page)
+    await page.evaluate(() => (window.__fdMockServer!.deleteLatency = 50))
+    // 最後のページ（551〜580 件目）の行をすべて削除すると、存在する最後のページへ移る
+    await c.getByRole("button", { name: "12ページ目", exact: true }).click()
+    await expect(c.locator("[data-slot=pagination-range]")).toContainText(`551–580 / ${fmt(customers.length)}件`)
+    await c.getByRole("checkbox", { name: "このページの行をすべて選択" }).click()
+    const del = c.getByRole("button", { name: "削除" })
+    await del.focus()
+    await page.keyboard.press("Enter")
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog.getByRole("button", { name: "キャンセル" })).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(dialog.getByRole("button", { name: "30件を削除する" })).toBeFocused()
+    await page.keyboard.press("Enter")
+    await expect(dialog).toHaveCount(0)
+    await expect(c.locator("[data-slot=pagination-range]")).toContainText("501–550 / 550件")
+    await expect(bodyRows(c).first().locator("[data-slot=data-table-row-trigger]")).toBeFocused()
+    // 検索条件に一致する全データを削除すると、空の状態の主要な操作にフォーカスを移す
+    await c.getByRole("checkbox", { name: "このページの行をすべて選択" }).click()
+    await c.getByRole("button", { name: "検索条件に一致する 550件をすべて選択" }).click()
+    await del.click()
+    await page.getByRole("alertdialog").getByRole("button", { name: "550件を削除する" }).click()
+    await expect(c.locator("[data-slot=data-table-message][data-kind=empty]")).toBeVisible()
+    await expect(c.getByRole("button", { name: "顧客を登録する" })).toBeFocused()
+  })
+
+  test("mobile: bulk actions keep accessible names; delete keeps its text", async ({ page, isMobile }) => {
+    test.skip(!isMobile, "モバイルだけ")
+    await open(page, "data-table")
+    const c = client(page)
+    await bodyRows(c).first().getByRole("checkbox").click()
+    const bar = c.getByRole("region", { name: "選択した行の操作" })
+    await expect(bar.getByRole("button", { name: "選択を解除" })).toBeVisible()
+    await expect(bar.getByRole("button", { name: "メールを送信" })).toBeVisible()
+    await expect(bar.getByRole("button", { name: "削除" })).toHaveText("削除")
+    // 1 行に収まる
+    const h = (await box(bar)).height
+    expect(h).toBeLessThanOrEqual(56)
   })
 
   test("checkbox hit area stays inside its cell", async ({ page, isMobile }) => {
@@ -674,6 +839,184 @@ test.describe("Data Table: states", { tag: "@webkit" }, () => {
     await expect(page.getByTestId("state-error").getByRole("button", { name: "再試行" })).toBeVisible()
     await expect(page.getByTestId("state-refreshing").locator("tbody tr[data-row-id]")).toHaveCount(3)
     await expect(page.getByTestId("state-refreshing").getByText("更新中").first()).toBeVisible()
+    // 状態の表示は Advanced の Empty。取得失敗だけを role="alert" で知らせる
+    for (const [id, status] of [["empty", "empty"], ["no-results", "no-results"], ["error", "error"]] as const) {
+      const empty = page.getByTestId(`state-${id}`).locator("[data-slot=empty]")
+      await expect(empty).toHaveAttribute("data-status", status)
+      if (status === "error") await expect(empty).toHaveAttribute("role", "alert")
+      else expect(await empty.getAttribute("role")).toBeNull()
+      // 表を横にスクロールしても、表示中の幅の中央に置く
+      const table = page.getByTestId(`state-${id}`).locator("[data-slot=table-container]")
+      const [eb, tb] = [await box(empty), await box(table)]
+      expect(Math.abs(eb.x + eb.width / 2 - (tb.x + tb.width / 2))).toBeLessThan(2)
+    }
+    // 取得失敗と再取得中は、0 件の表示にしない
+    await expect(page.getByTestId("state-error").locator("[data-slot=data-table-message][data-kind=error]")).toHaveCount(1)
+    await expect(page.getByTestId("state-error").locator("[data-kind=empty], [data-kind=no-results]")).toHaveCount(0)
+    await expect(page.getByTestId("state-refreshing").locator("[data-slot=data-table-message]")).toHaveCount(0)
+    // 初回の読み込みと再取得中は、選択の操作を受け付けない（表の locked）
+    await expect(page.getByTestId("state-refreshing").locator("[data-slot=data-table]")).toHaveAttribute("aria-busy", "true")
+  })
+})
+
+// ---------------------------------------------------------------- Data Table: selection and density
+test.describe("Data Table: checkbox hit areas by density", { tag: "@webkit" }, () => {
+  for (const [density, min] of [
+    ["compact", 36],
+    ["default", 48],
+    ["comfortable", 64],
+  ] as const) {
+    test(`${density}: cell-wide target, no overlap, header, indeterminate, disabled, row click`, async ({ page, isMobile }) => {
+      await open(page, "data-table")
+      const t = page.getByTestId(`density-${density}`)
+      await t.scrollIntoViewIfNeeded()
+      const rows = bodyRows(t)
+      const state = page.getByTestId(`density-${density}-state`)
+      // 行の最小の高さ。指で操作する端末では、選択できる行を 48px 以上にする
+      const h0 = (await box(rows.first())).height
+      expect(Math.round(h0)).toBe(isMobile ? Math.max(min, 48) : min)
+      const header = t.getByRole("checkbox", { name: "このページの行をすべて選択" })
+      if (isMobile) expect((await box(header.locator("xpath=.."))).height).toBeGreaterThanOrEqual(48)
+      const cell = rows.nth(1).locator("td").first()
+      const b = await box(cell)
+      const press = (target: Locator, x: number, y: number) => (isMobile ? target.tap({ position: { x, y } }) : target.click({ position: { x, y } }))
+      // セルの四隅を押しても、その行だけが切り替わる（隣の行と重ならない）
+      await press(cell, 2, 2)
+      await expect(rows.nth(1)).toHaveAttribute("data-state", "selected")
+      await expect(t.locator("tr[data-state=selected]")).toHaveCount(1)
+      await expect(header).toHaveAttribute("aria-checked", "mixed")
+      await press(cell, b.width - 2, b.height - 2)
+      await expect(t.locator("tr[data-state=selected]")).toHaveCount(0)
+      await press(rows.nth(2).locator("td").first(), 2, 2)
+      await expect(rows.nth(2)).toHaveAttribute("data-state", "selected")
+      await expect(rows.nth(1)).not.toHaveAttribute("data-state", "selected")
+      await expect(state).toContainText("詳細：なし")
+      // 隣の列（会社名のセル）を押すと、選択ではなく詳細を開く。
+      // マウスでは境界のすぐ右（3px）で確かめる。タッチでは、ブラウザが押した位置を近くの操作要素へ補正するため、セルの中央で確かめる
+      const company = (await rows.nth(1).locator("td").nth(1).textContent())!.trim()
+      const companyCell = rows.nth(1).locator("td").nth(1)
+      const cb = await box(companyCell)
+      await press(companyCell, isMobile ? cb.width - 8 : 3, isMobile ? cb.height / 2 : 3)
+      await expect(state).toContainText(`詳細：${company}`)
+      await expect(t.locator("tr[data-state=selected]")).toHaveCount(1)
+      // 選択できない行（4 行目）：押しても切り替わらず、詳細も開かない
+      const disabled = rows.nth(3)
+      await expect(disabled.getByRole("checkbox")).toBeDisabled()
+      await press(disabled.locator("td").first(), b.width / 2, 4)
+      await expect(disabled).not.toHaveAttribute("data-state", "selected")
+      await expect(state).toContainText(`詳細：${company}`)
+      // ヘッダーの全選択：選択できる行だけを選び、すべて選ぶと checked
+      await header.click()
+      await expect(t.locator("tr[data-state=selected]")).toHaveCount(5)
+      await expect(header).toHaveAttribute("aria-checked", "true")
+      await header.click()
+      await expect(t.locator("tr[data-state=selected]")).toHaveCount(0)
+      // 固定した列：横にスクロールしても、押したセルの行が切り替わる
+      await t.locator("[data-slot=table-container]").evaluate((el) => (el.scrollLeft = 200))
+      await page.waitForTimeout(100)
+      await press(rows.nth(4).locator("td").first(), 2, b.height / 2)
+      await expect(rows.nth(4)).toHaveAttribute("data-state", "selected")
+      await expect(t.locator("tr[data-state=selected]")).toHaveCount(1)
+    })
+  }
+})
+
+// ---------------------------------------------------------------- Data Table: server refreshing locks
+test.describe("Data Table: server refreshing locks the actions", { tag: "@webkit" }, () => {
+  const ready = async (s: Locator) => expect(s.locator("[data-slot=data-table-refreshing]")).toHaveCount(0, { timeout: 5000 })
+  const expectLocked = async (s: Locator, locked: boolean) => {
+    const check = (l: Locator) => (locked ? expect(l).toBeDisabled() : expect(l).toBeEnabled())
+    await check(s.getByRole("checkbox", { name: "このページの行をすべて選択" }))
+    await check(bodyRows(s).first().getByRole("checkbox"))
+    await check(bodyRows(s).first().getByRole("button", { name: /の操作$/ }))
+    // 閲覧は残す：会社名のボタンで詳細を開ける
+    await expect(bodyRows(s).first().locator("[data-slot=data-table-row-trigger]")).toBeEnabled()
+  }
+
+  test("page, sort, filter and search changes; reversed responses; selection kept by id", async ({ page }) => {
+    await open(page, "data-table")
+    const s = server(page)
+    await expect(count(s, "server")).toHaveText(`${fmt(customers.length)}件`)
+    await page.evaluate(() => (window.__fdMockServer!.latency = () => 50))
+    await bodyRows(s).nth(0).getByRole("checkbox").click()
+    await bodyRows(s).nth(1).getByRole("checkbox").click()
+    const bar = s.getByRole("region", { name: "選択した行の操作" })
+    await expect(bar).toContainText("2件を選択中")
+    // ページの移動：再取得の間は、表示中の古い行に対する操作を受け付けない
+    await page.evaluate(() => (window.__fdMockServer!.latency = () => 1200))
+    await s.getByRole("button", { name: "次へ" }).click()
+    await expect(s.locator("[data-slot=data-table-refreshing]")).toBeVisible()
+    await expectLocked(s, true)
+    await expect(bar.getByRole("button", { name: "削除" })).toBeDisabled()
+    await expect(bar).toContainText("更新が終わるまで操作できません")
+    // 選択の解除は、表示中の行に依存しないため押せる
+    await expect(bar.getByRole("button", { name: "選択を解除" })).toBeEnabled()
+    await ready(s)
+    await expectLocked(s, false)
+    await expect(bar.getByRole("button", { name: "削除" })).toBeEnabled()
+    // 選択済みの ID は残る（表示していないページの 2 件）
+    await expect(bar).toContainText("2件を選択中（表示していない 2件を含む）")
+    // 並べ替え：応答の順序が逆転しても、最新の条件の応答で操作を戻す
+    // 1 回目の要求（降順）を 1.5 秒、2 回目（昇順）を 0.2 秒で返す
+    await page.evaluate(() => {
+      let i = 0
+      window.__fdMockServer!.latency = () => (i++ === 0 ? 1500 : 200)
+    })
+    await s.locator("th", { hasText: "月額" }).getByRole("button").click()
+    await page.waitForTimeout(50)
+    await s.locator("th", { hasText: "月額" }).getByRole("button").click()
+    await expectLocked(s, true)
+    await ready(s)
+    await expect(s.locator("th", { hasText: "月額" })).toHaveAttribute("aria-sort", "ascending")
+    await expectLocked(s, false)
+    const ascFirst = queryCustomers({ ...baseQuery, sort: { id: "monthlyFee", desc: false } }).rows[0].company
+    await expect(bodyRows(s).first().locator("td").nth(1)).toHaveText(ascFirst)
+    await page.waitForTimeout(1500)
+    // 遅れて届いた降順の応答で上書きしない
+    await expect(bodyRows(s).first().locator("td").nth(1)).toHaveText(ascFirst)
+    await expectLocked(s, false)
+    // 絞り込みと検索：条件が変わっても、選択済みの ID は残る
+    await page.evaluate(() => (window.__fdMockServer!.latency = () => 400))
+    await chooseFilter(page, s, "server-status", "契約中")
+    await expectLocked(s, true)
+    await ready(s)
+    await s.getByRole("searchbox", { name: "会社名で検索" }).fill("株式会社")
+    await expect(s.locator("[data-slot=data-table-refreshing]")).toBeVisible({ timeout: 2000 })
+    await expectLocked(s, true)
+    await ready(s)
+    await expectLocked(s, false)
+    await expect(bar).toContainText("2件を選択中")
+    await expect(count(s, "server")).toHaveCount(0)
+  })
+
+  test("failure keeps the selection; select-all-matching is not offered while refreshing", async ({ page }) => {
+    await open(page, "data-table")
+    const s = server(page)
+    await expect(count(s, "server")).toHaveText(`${fmt(customers.length)}件`)
+    await page.evaluate(() => (window.__fdMockServer!.latency = () => 50))
+    await s.getByRole("checkbox", { name: "このページの行をすべて選択" }).click()
+    const bar = s.getByRole("region", { name: "選択した行の操作" })
+    const selectAll = bar.getByRole("button", { name: `検索条件に一致する ${fmt(customers.length)}件をすべて選択` })
+    await expect(selectAll).toBeEnabled()
+    // 再取得中：全データの選択と一括操作を無効にする
+    await page.evaluate(() => (window.__fdMockServer!.latency = () => 1000))
+    await s.getByTestId("server-reload").click()
+    await expect(s.locator("[data-slot=data-table-refreshing]")).toBeVisible()
+    await expect(selectAll).toBeDisabled()
+    await expect(s.getByRole("checkbox", { name: "このページの行をすべて選択" })).toBeDisabled()
+    await ready(s)
+    await expect(selectAll).toBeEnabled()
+    // 取得失敗：表を 0 件にせず、一括操作を無効にし、選択を残す
+    await page.evaluate(() => (window.__fdMockServer!.latency = () => 50))
+    await s.getByTestId("server-fail").click()
+    await expect(s.locator("[data-slot=data-table-message][data-kind=error]")).toBeVisible()
+    await expect(bar).toContainText("50件を選択中")
+    await expect(bar.getByRole("button", { name: "削除" })).toBeDisabled()
+    await s.getByRole("button", { name: "再試行" }).click()
+    await ready(s)
+    await expect(bar.getByRole("button", { name: "削除" })).toBeEnabled()
+    await expect(bar).toContainText("50件を選択中")
+    await expect(s.getByRole("checkbox", { name: "このページの行をすべて選択" })).toHaveAttribute("aria-checked", "true")
   })
 })
 
@@ -758,6 +1101,43 @@ test.describe("Pagination", { tag: "@webkit" }, () => {
     await expect(page.getByTestId("pagination-cursor-state")).toHaveText(`先頭：${customers[25].id}`)
     await c.getByRole("button", { name: "前へ" }).click()
     await expect(page.getByTestId("pagination-cursor-state")).toHaveText(`先頭：${customers[0].id}`)
+  })
+
+  test("one page, disabled, and focus kept after moving", async ({ page, isMobile }) => {
+    await open(page, "pagination")
+    // 1 ページだけ
+    const single = page.getByTestId("pagination-single")
+    await expect(single.locator("[data-slot=pagination-range]")).toContainText("1–30 / 30件")
+    await expect(single.getByRole("button", { name: /ページ目/ })).toHaveCount(1)
+    await expect(single.getByRole("button", { name: "前へ" })).toBeDisabled()
+    await expect(single.getByRole("button", { name: "次へ" })).toBeDisabled()
+    // 処理中：移動と表示件数を受け付けない。現在のページは示したまま
+    const busy = page.getByTestId("pagination-disabled")
+    await expect(busy.getByRole("button", { name: "3ページ目", exact: true })).toHaveAttribute("aria-current", "page")
+    for (const b of await busy.getByRole("button").all()) {
+      if ((await b.getAttribute("aria-current")) !== "page") await expect(b).toBeDisabled()
+    }
+    await expect(busy.getByRole("combobox", { name: "表示件数" })).toBeDisabled()
+    // 最後のページに着いて「次へ」が無効になっても、フォーカスは現在のページのボタンに残る
+    const few = nav(page, "pagination-few")
+    const next = few.getByRole("button", { name: "次へ" })
+    await next.focus()
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Enter")
+    await expect(page.getByTestId("pagination-few-state")).toHaveText("page=4 pageSize=50")
+    await expect(next).toBeDisabled()
+    await expect(few.getByRole("button", { name: "4ページ目", exact: true })).toBeFocused()
+    // ページ番号で移動した後も、押したボタンにフォーカスが残る
+    await few.getByRole("button", { name: "2ページ目", exact: true }).click()
+    await expect(few.getByRole("button", { name: "2ページ目", exact: true })).toBeFocused()
+    // カーソル：最初に戻って「前へ」が無効になったら、「次へ」へ移す
+    const cursor = page.getByTestId("pagination-cursor")
+    await cursor.getByRole("button", { name: "次へ" }).click()
+    const prev = cursor.getByRole("button", { name: "前へ" })
+    await prev.focus()
+    await page.keyboard.press("Enter")
+    await expect(prev).toBeDisabled()
+    await expect(cursor.getByRole("button", { name: "次へ" })).toBeFocused()
+    if (isMobile) for (const b of await few.getByRole("button").all()) expect((await box(b)).height).toBeGreaterThanOrEqual(48)
   })
 
   test("links render <a> with aria-current", async ({ page }) => {
@@ -934,6 +1314,66 @@ test.describe("Chart", { tag: "@webkit" }, () => {
     await expect(chart.locator("text tspan").first()).toHaveText("580")
   })
 
+  test("zero vs missing, empty data, invalid composition", async ({ page }) => {
+    await open(page, "chart")
+    const zm = page.getByTestId("chart-zero-missing")
+    const cats = zm.locator("[data-slot=chart-category]")
+    await expect(cats).toHaveCount(5)
+    await expect(zm.locator('[data-slot=chart-category][data-value="0"]')).toContainText("0件")
+    await expect(zm.locator('[data-slot=chart-category][data-value="missing"]')).toContainText("データなし")
+    // 0 と欠損は棒を描かない。表では 0 と「データなし」を区別する
+    await page.waitForTimeout(500)
+    await expect(bars(zm)).toHaveCount(3)
+    await zm.getByText("数値を表で見る").click()
+    const table = zm.locator("[data-slot=chart-data-table] tbody")
+    await expect(table.locator("tr", { hasText: "東北" }).locator("td").nth(1)).toHaveText("0")
+    await expect(table.locator("tr", { hasText: "中部" }).locator("td").nth(1)).toContainText("データなし")
+    // 空のデータ：軸だけのグラフを描かず、Empty で示す
+    const empty = page.getByTestId("chart-empty")
+    await expect(empty.locator("[data-slot=empty]")).toHaveAttribute("data-status", "empty")
+    await expect(empty.locator("svg.recharts-surface")).toHaveCount(0)
+    // 構成比に使えない値：Donut を描かず、理由を示す
+    const invalid = page.getByTestId("chart-invalid-composition")
+    await expect(invalid.locator("[data-slot=empty]")).toHaveAttribute("data-status", "error")
+    await expect(invalid).toContainText("負の値があります")
+    await expect(invalid.locator(".recharts-pie-sector")).toHaveCount(0)
+  })
+
+  test("legend follows series order; tooltip indicators match series colors", async ({ page, isMobile }) => {
+    await open(page, "chart")
+    const multi = page.getByTestId("chart-line-multi")
+    await expect(multi.locator("[data-slot=chart-legend] li")).toHaveText(["ベーシック", "スタンダード", "エンタープライズ"])
+    await expect(page.getByTestId("chart-stacked").locator("[data-slot=chart-legend] li")).toHaveText(["契約中", "試用中", "休止中"])
+    test.skip(isMobile, "ホバーはデスクトップで確かめる（タッチは別のテスト）")
+    await multi.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(500)
+    const svg = multi.locator("svg[role=application]")
+    const b = await box(svg)
+    await page.mouse.move(b.x + b.width * 0.6, b.y + b.height / 2)
+    const tip = multi.locator("[data-slot=chart-tooltip]")
+    await expect(tip).toBeVisible()
+    const indicators = await tip.locator("[data-slot=chart-indicator]").evaluateAll((els) => els.map((e) => getComputedStyle(e).borderTopColor))
+    const strokes = await multi.locator(".recharts-line-curve").evaluateAll((els) => els.map((e) => getComputedStyle(e).stroke))
+    expect(indicators).toHaveLength(3)
+    for (let i = 0; i < 3; i++) expect(await sameRgb(page, indicators[i], strokes[i])).toBe(true)
+  })
+
+  test("hidden area and width changes: the chart follows its container", async ({ page, isMobile }) => {
+    await open(page, "chart")
+    const hidden = page.getByTestId("chart-hidden")
+    await hidden.locator("summary").first().click()
+    const fig = page.getByTestId("chart-hidden-line").locator("[data-slot=chart]")
+    await expect(fig.locator("svg.recharts-surface")).toBeVisible()
+    await expect.poll(async () => Math.round((await box(fig.locator("svg.recharts-surface").first())).width)).toBe(Math.round((await box(fig)).width))
+    test.skip(isMobile, "幅の変更はデスクトップの表示で確かめる")
+    const line = page.getByTestId("chart-line").locator("[data-slot=chart]")
+    const wide = (await box(line)).width
+    await page.setViewportSize({ width: 700, height: 900 })
+    await expect.poll(async () => Math.round((await box(line.locator("svg.recharts-surface").first())).width)).toBe(Math.round((await box(line)).width))
+    expect((await box(line)).width).toBeLessThan(wide)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  })
+
   test("tooltip: hover, keyboard, touch", async ({ page, isMobile }) => {
     await open(page, "chart")
     const chart = page.getByTestId("chart-bar")
@@ -1004,61 +1444,6 @@ test.describe("Dashboard", { tag: "@webkit" }, () => {
     // 更新日の昇順
     const dates = await d.locator("tbody tr td:nth-child(5)").allTextContents()
     expect(dates).toEqual([...dates].sort())
-  })
-})
-
-// ---------------------------------------------------------------- SSR
-// Node.js（window と document がない環境）で Table、Data Table、Pagination、Chart を HTML にし、
-// ブラウザで Hydration して不一致がないことを確かめる。手順は ssr.spec.ts と同じ。
-test.describe("Data Display SSR", { tag: "@webkit" }, () => {
-  let vite: ViteDevServer
-  let html = ""
-
-  test.beforeAll(async () => {
-    vite = await createServer({
-      configFile: fileURLToPath(new URL("../vite.config.ts", import.meta.url)),
-      server: { middlewareMode: true, hmr: false },
-      appType: "custom",
-      logLevel: "error",
-      // 検品の開発サーバーと、ssr.spec.ts のキャッシュを共有しない。同時に書き込むと失敗するため。
-      cacheDir: fileURLToPath(new URL("../../node_modules/.vite-ssr-check-data-display", import.meta.url)),
-    })
-    const mod = (await vite.ssrLoadModule("/src/ssr/data-display-fixture.tsx")) as typeof import("../src/ssr/data-display-fixture")
-    html = renderToString(createElement(mod.DataDisplaySsrFixture))
-  })
-
-  test.afterAll(async () => {
-    await vite?.close()
-  })
-
-  test("renders on the server and hydrates without mismatches", async ({ page }) => {
-    expect(typeof (globalThis as { window?: unknown }).window).toBe("undefined")
-    expect(html).toContain('data-slot="table"')
-    expect(html).toContain('data-slot="data-table"')
-    expect(html).toContain('data-slot="pagination-controls"')
-    expect(html).toContain('data-slot="cursor-pagination"')
-    expect(html).toContain('data-slot="chart"')
-    // サーバーでは広い画面の並び（前後 1 ページ）にする
-    expect(html).toContain('aria-label="2ページ目"')
-    const errors: string[] = []
-    page.on("console", (m) => m.type() === "error" && errors.push(m.text()))
-    await page.route("**/ssr.html", async (route) => {
-      const res = await route.fetch()
-      const body = (await res.text())
-        .replace("<!--ssr-outlet-->", html)
-        .replace("/src/ssr/client.tsx", "/src/ssr/data-display-client.tsx")
-      await route.fulfill({ response: res, body })
-    })
-    await page.goto("/ssr.html")
-    await page.waitForFunction(() => window.__ssrHydrated === true)
-    await page.waitForTimeout(300)
-    expect(await page.evaluate(() => window.__ssrErrors)).toEqual([])
-    expect(errors.filter((e) => /hydrat|did not match|mismatch/i.test(e))).toEqual([])
-    // Hydration の後に操作できる
-    await page.getByRole("checkbox", { name: "青葉製作所を選択" }).click()
-    await expect(page.getByRole("checkbox", { name: "このページの行をすべて選択" })).toHaveAttribute("aria-checked", "mixed")
-    await page.getByRole("button", { name: "会社名" }).click()
-    await expect(page.locator("th[aria-sort]")).toHaveAttribute("aria-sort", "ascending")
   })
 })
 

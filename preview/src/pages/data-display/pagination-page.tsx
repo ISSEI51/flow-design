@@ -16,7 +16,19 @@ import { fetchCustomersByCursor } from "../../data/data-display/customers"
 import { PageHeader } from "../../layout/page-header"
 import { Row, Section } from "../../layout/section"
 
-function Controlled({ total, testId, initialPage = 1, initialSize = 50 }: { total?: number; testId: string; initialPage?: number; initialSize?: number }) {
+function Controlled({
+  total,
+  testId,
+  initialPage = 1,
+  initialSize = 50,
+  disabled,
+}: {
+  total?: number
+  testId: string
+  initialPage?: number
+  initialSize?: number
+  disabled?: boolean
+}) {
   const [page, setPage] = useState(initialPage)
   const [size, setSize] = useState(initialSize)
   return (
@@ -26,6 +38,7 @@ function Controlled({ total, testId, initialPage = 1, initialSize = 50 }: { tota
         pageSize={size}
         totalCount={total}
         hasNextPage={total === undefined ? page < 4 : undefined}
+        disabled={disabled}
         onPageChange={setPage}
         onPageSizeChange={(s, p) => {
           setSize(s)
@@ -101,6 +114,9 @@ export function PaginationPage() {
       />
 
       <Section title="標準の組み合わせ" lead="表示範囲と総件数、表示件数、ページ番号、前後の移動。表示件数の初期値は 50 件。">
+        <Row label="1 ページだけ" note="30 件。前へと次へは無効にし、ページ番号は 1 だけ">
+          <Controlled total={30} testId="pagination-single" />
+        </Row>
         <Row label="少ないページ" note="ページ数が 7 以下なら、すべてのページを並べる">
           <Controlled total={180} testId="pagination-few" />
         </Row>
@@ -121,6 +137,9 @@ export function PaginationPage() {
         </Row>
         <Row label="0 件" note="範囲の代わりに 0 件と示し、移動を無効にする">
           <Controlled total={0} testId="pagination-zero" />
+        </Row>
+        <Row label="処理中" note="disabled。読み込み中は移動を受け付けない。現在のページは示したままにする">
+          <Controlled total={580} initialPage={3} testId="pagination-disabled" disabled />
         </Row>
       </Section>
 
