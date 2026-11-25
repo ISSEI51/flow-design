@@ -1,6 +1,14 @@
 import type { ComponentType } from "react"
 
 import { ButtonPage } from "./pages/button-page"
+import { AlertPage } from "./pages/feedback/alert-page"
+import { AvatarPage } from "./pages/feedback/avatar-page"
+import { BadgePage } from "./pages/feedback/badge-page"
+import { BillingPage } from "./pages/feedback/billing-page"
+import { ProgressPage } from "./pages/feedback/progress-page"
+import { SkeletonPage } from "./pages/feedback/skeleton-page"
+import { ToastPage } from "./pages/feedback/toast-page"
+import { TooltipPage } from "./pages/feedback/tooltip-page"
 import { CheckboxPage } from "./pages/forms/checkbox-page"
 import { CustomerFormPage } from "./pages/forms/customer-form-page"
 import { FieldPage } from "./pages/forms/field-page"
@@ -23,4 +31,12 @@ export const catalog: { id: string; name: string; page: ComponentType }[] = [
   { id: "switch", name: "Switch", page: SwitchPage },
   { id: "field", name: "Field", page: FieldPage },
   { id: "customer-form", name: "フォームの例", page: CustomerFormPage },
+  { id: "badge", name: "Badge", page: BadgePage },
+  { id: "avatar", name: "Avatar", page: AvatarPage },
+  { id: "tooltip", name: "Tooltip", page: TooltipPage },
+  { id: "alert", name: "Alert", page: AlertPage },
+  { id: "toast", name: "Toast", page: ToastPage },
+  { id: "skeleton", name: "Skeleton", page: SkeletonPage },
+  { id: "progress", name: "Progress", page: ProgressPage },
+  { id: "billing", name: "請求書の例", page: BillingPage },
 ]

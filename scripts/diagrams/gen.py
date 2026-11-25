@@ -659,7 +659,111 @@ def form_validation():
     d.save("form-validation")
 
 
+# ---------------------------------------------------------------- 15 feedback choice
+SUCCESS_C = "light-dark(#15803D,#3FB950)"
+WARNING_C = "light-dark(#B45309,#D29922)"
+INFO_C = "light-dark(#2563EB,#4493F8)"
+
+
+def feedback_choice():
+    d = D()
+    d.text(0, 0, 400, 18, "伝えたいこと", S_LABEL, MUTED, bold=True)
+    d.text(520, 0, 300, 18, "使うコンポーネント", S_LABEL, MUTED, bold=True)
+    rows = [("現在の状態・分類", "短い文字で", "Badge", "badge"),
+            ("人物・組織", "名前の横で識別する", "Avatar", "avatar"),
+            ("補足", "なくても操作できる情報", "Tooltip", "tooltip"),
+            ("継続して示す重要な情報", "注意、エラー、次の操作", "Alert", "alert"),
+            ("一時的な操作の結果", "数秒で消えてよい情報", "Toast", "toast"),
+            ("読み込み中の画面の構造", "読み込み後と同じ形", "Skeleton", "skeleton"),
+            ("処理の進み具合", "実際の進捗率と件数", "Progress", "progress")]
+    for i, (q, sub, comp, kind) in enumerate(rows):
+        y = 32 + i * 80
+        d.text(0, y + 8, 440, 24, q, S_NAME, TEXT, bold=True)
+        d.text(0, y + 38, 440, 20, sub, S_SUB, MUTED)
+        d.line([(452, y + 32), (508, y + 32)])
+        d.rect(520, y, 380, 64)
+        cx, cy = 544, y + 32
+        if kind == "badge":
+            d.rect(cx, cy - 11, 56, 22, fill="none", stroke=SUCCESS_C, r=11, sw=1)
+            d.text(cx, cy - 11, 56, 22, "完了", 12, SUCCESS_C, bold=True, align="center", valign="middle")
+        elif kind == "avatar":
+            d.dot(cx + 16, cy, d=32, fill=BAR, stroke="none")
+            d.text(cx, cy - 16, 32, 32, "山", 13, MUTED, bold=True, align="center", valign="middle")
+        elif kind == "tooltip":
+            d.rect(cx, cy - 13, 56, 26, fill=TEXT, r=6)
+            d.text(cx, cy - 13, 56, 26, "編集", 12, BTN_FG, bold=True, align="center", valign="middle")
+        elif kind == "alert":
+            d.rect(cx, cy - 16, 56, 32, fill="none", stroke=BAR, r=8, sw=1)
+            d.dot(cx + 14, cy, d=12, fill="none", stroke=WARNING_C)
+            d.bar(cx + 26, cy - 3, 22, 6, fill=BAR_STRONG)
+        elif kind == "toast":
+            d.rect(cx, cy - 16, 56, 32, fill=SURFACE, stroke=BAR, r=8, sw=1)
+            d.dot(cx + 14, cy, d=12, fill="none", stroke=SUCCESS_C)
+            d.bar(cx + 26, cy - 3, 22, 6, fill=BAR_STRONG)
+        elif kind == "skeleton":
+            d.dot(cx + 10, cy, d=20, fill=BAR, stroke="none")
+            d.bar(cx + 26, cy - 8, 30, 6)
+            d.bar(cx + 26, cy + 3, 20, 6)
+        else:
+            d.bar(cx, cy - 4, 56, 8)
+            d.bar(cx, cy - 4, 34, 8, fill=TEXT)
+        d.text(cx + 76, y, 260, 64, comp, S_NAME, TEXT, bold=True, valign="middle")
+    d.save("feedback-choice")
+
+
+# ---------------------------------------------------------------- 16 toast timing
+def toast_timing():
+    d = D()
+    X0, W = 170, 700
+    sec = W / 8  # 8 seconds on the axis
+    d.text(0, 0, 400, 18, "表示時間", S_LABEL, MUTED, bold=True)
+    rows = [("Success", 4, SUCCESS_C, "4 秒"), ("Info", 5, INFO_C, "5 秒"),
+            ("Warning", 6, WARNING_C, "6 秒"), ("Destructive", None, DANGER, "閉じるまで"),
+            ("操作つき", None, TEXT, "閉じるまで")]
+    for i, (name, s, color, label) in enumerate(rows):
+        y = 34 + i * 52
+        d.text(0, y, 160, 28, name, S_NAME, TEXT, bold=True, valign="middle")
+        if s:
+            d.bar(X0, y + 10, s * sec, 8, fill=color)
+            d.text(X0 + s * sec + 12, y, 200, 28, label, S_SUB, MUTED, valign="middle")
+        else:
+            d.bar(X0, y + 10, W - 40, 8, fill=color)
+            d.line([(X0 + W - 36, y + 14), (X0 + W, y + 14)], color=color, arrow=True)
+            d.text(X0 + W - 200, y - 18, 200, 20, label, S_SUB, MUTED, align="right")
+    ay = 34 + 5 * 52 + 4
+    d.line([(X0, ay), (X0 + W, ay)], color=BAR, arrow=False, sw=1)
+    for s in range(0, 9, 2):
+        d.text(X0 + s * sec - 20, ay + 6, 40, 18, f"{s}s", 13, MUTED, align="center")
+    py = ay + 52
+    d.rect(0, py, 900, 76)
+    d.text(22, py + 16, 860, 24, "ポインターを重ねている間と、フォーカスがある間は、タイマーを止める", S_NAME, TEXT, bold=True)
+    d.text(22, py + 46, 860, 20, "同じ id の通知は新しく増やさず更新する。同じ処理の失敗は 1 つにまとめる", S_SUB, MUTED)
+    d.save("toast-timing")
+
+
+# ---------------------------------------------------------------- 17 progress states
+def progress_states():
+    d = D()
+    W = 900
+    rows = [("0%", 0, TEXT, "aria-valuenow=0"), ("途中", 0.45, TEXT, "実際に処理した量から"),
+            ("完了", 1, TEXT, "実際に完了したときだけ 100%"), ("不明", None, TEXT, "aria-valuenow を出さない"),
+            ("失敗", 0.62, DANGER, "色、アイコン、文字で示す"), ("中断", 0.3, BAR_STRONG, "完了と失敗と区別する")]
+    for i, (name, v, color, note) in enumerate(rows):
+        y = i * 60
+        d.text(0, y, 120, 28, name, S_NAME, TEXT, bold=True, valign="middle")
+        bx, bw = 130, 460
+        d.bar(bx, y + 10, bw, 8)
+        if v is None:
+            d.bar(bx + bw / 3, y + 10, bw / 3, 8, fill=color)
+        elif v > 0:
+            d.bar(bx, y + 10, bw * v, 8, fill=color)
+        d.text(bx + bw + 24, y, 300, 28, note, S_SUB, MUTED, valign="middle")
+    d.text(0, 6 * 60 + 8, W, 20, "時間の経過で進めた見せかけの進捗率は使わない", S_SUB, MUTED)
+    d.save("progress-states")
+
+
 for f in (journey, principles, wording, layout, visual, process, architecture, site, tokens,
-          button_anatomy, button_hierarchy, field_anatomy, form_choice, form_validation):
+          button_anatomy, button_hierarchy, field_anatomy, form_choice, form_validation,
+          feedback_choice, toast_timing, progress_states):
     f()
 print("ok")
