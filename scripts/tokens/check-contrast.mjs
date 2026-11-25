@@ -118,6 +118,12 @@ const pairs = [
   ["ring", "muted", 3, "ui", "focus-ring on muted"],
   ["ring/50", "background", 3, "ui", "shadcn/ui ring-ring/50"],
   ["ring/50", "muted", 3, "ui", "shadcn/ui ring-ring/50 on muted"],
+  ["sidebar-foreground", "sidebar", 4.5, "text", "sidebar text"],
+  ["muted-foreground", "sidebar", 4.5, "text", "sidebar item, group label"],
+  ["sidebar-accent-foreground", "sidebar-accent", 4.5, "text", "sidebar current item"],
+  ["sidebar-accent-foreground", "sidebar-accent/50@sidebar", 4.5, "text", "sidebar hovered item"],
+  ["ring", "sidebar", 3, "ui", "focus-ring on sidebar"],
+  ["ring", "sidebar-accent", 3, "ui", "focus-ring on sidebar current item"],
 ];
 
 let failed = 0;
