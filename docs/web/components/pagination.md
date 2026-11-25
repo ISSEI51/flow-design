@@ -64,7 +64,7 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 - 並びの長さは 5 + `siblingCount` × 2 で一定である（`siblingCount` が 1 なら 7）。ページを移動しても項目の数が変わらず、ボタンの位置が大きく動かない。
 - ページ数が並びの長さ以下なら、すべてのページを並べる。
 - 例（全 12 ページ、`siblingCount` 1）：1 ページ目は「1 2 3 4 5 … 12」、6 ページ目は「1 … 5 6 7 … 12」。
-- 640px 未満の幅では `siblingCount` を 0 にし（例：「1 … 6 … 12」）、最初と最後への移動を表示しない。
+- 640px 未満の幅では `siblingCount` を 0 にし（例：「1 … 6 … 12」）、最初と最後への移動を表示しない。幅の判定は `useSyncExternalStore` で行い、サーバーでの描画と Hydration の間は広い画面の並びにする。サーバーとブラウザの HTML を一致させるためである（検品は `preview/tests/data-display.spec.ts` の「Data Display SSR」）。
 - 最初と最後への移動は、既定ではページ数が 7 を超えるときに表示する（`showFirstLast` で指定できる）。
 
 ### 移動

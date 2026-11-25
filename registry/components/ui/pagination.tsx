@@ -159,17 +159,20 @@ function pageForPageSize(page: number, pageSize: number, nextPageSize: number) {
   return Math.floor(((page - 1) * pageSize) / nextPageSize) + 1
 }
 
+// 640px 未満の幅か。サーバーでの描画と Hydration の間は false（広い画面の並び）にし、
+// その後にブラウザの幅に合わせる。初めの描画でサーバーとブラウザの HTML を一致させるため。
+const NARROW_QUERY = "(max-width: 39.99rem)"
+function subscribeNarrow(onChange: () => void) {
+  const mq = window.matchMedia(NARROW_QUERY)
+  mq.addEventListener("change", onChange)
+  return () => mq.removeEventListener("change", onChange)
+}
 function useNarrow() {
-  const query = "(max-width: 39.99rem)"
-  const [narrow, setNarrow] = React.useState(() => typeof window !== "undefined" && window.matchMedia(query).matches)
-  React.useEffect(() => {
-    const mq = window.matchMedia(query)
-    const onChange = () => setNarrow(mq.matches)
-    onChange()
-    mq.addEventListener("change", onChange)
-    return () => mq.removeEventListener("change", onChange)
-  }, [])
-  return narrow
+  return React.useSyncExternalStore(
+    subscribeNarrow,
+    () => window.matchMedia(NARROW_QUERY).matches,
+    () => false
+  )
 }
 
 function PageSizeSelect({
