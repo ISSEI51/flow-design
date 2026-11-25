@@ -5,6 +5,7 @@ import { Check, ChevronDown, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   ComboboxContent,
+  comboboxKeyHighlight,
   ComboboxEmpty,
   ComboboxInput,
   ComboboxList,
@@ -306,6 +307,7 @@ function MultiSelectItem({ className, children, ...props }: ComboboxPrimitive.It
       className={cn(
         "group/multi-select-item relative flex min-h-10 w-full cursor-default items-center gap-3 rounded-md py-2 pr-3 pl-3 text-body outline-none select-none",
         "data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+        comboboxKeyHighlight,
         "data-disabled:pointer-events-none data-disabled:opacity-50",
         className
       )}

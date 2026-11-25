@@ -28,7 +28,7 @@
 | 件数 | 「他 N 件」。14px、`muted-foreground` | `text-ui` |
 | メニュー、検索欄 | Combobox と同じ | |
 | 選択の状況 | 「N 件を選択中」と「すべて解除」。上限があるときは「（最大 N 件）」 | `text-ui` |
-| 選択肢 | 高さ 40px 以上。左に Checkbox と同じ形の印（20px、角丸 4px） | `min-h-10` |
+| 選択肢 | 高さ 40px 以上。左に Checkbox と同じ形の印（20px、角丸 4px）。ハイライトは Combobox と同じ | `min-h-10` |
 
 ```tsx
 <Field>

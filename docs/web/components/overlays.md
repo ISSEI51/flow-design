@@ -183,7 +183,7 @@ const [confirm, setConfirm] = useState(false)
 
 ## 6. キー操作のハイライト
 
-Dropdown Menu と Select の選択肢に共通する規則。将来の Combobox、Multi Select、Command も同じ規則に従う。
+Dropdown Menu と Select の選択肢に共通する規則。Combobox、Multi Select、Command も同じ規則に従う（[advanced.md](advanced.md#8-共通の実装)）。
 
 | 操作 | 表し方 |
 | --- | --- |

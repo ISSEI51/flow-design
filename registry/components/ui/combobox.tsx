@@ -29,6 +29,26 @@ function Combobox<Value, Multiple extends boolean | undefined = false>(
   return <ComboboxPrimitive.Root filter={searchItemFilter} {...props} open={props.readOnly ? false : props.open} />
 }
 
+// キー操作のハイライト（docs/web/components/overlays.md の「キー操作のハイライト」）。
+// 検索欄にフォーカスを残したまま aria-activedescendant で選択肢を移るため、:focus-visible は選択肢に一致しない。
+// そこで data-highlighted に項目の内側の focus-ring を付け、ポインターを動かしている間は Popup の data-pointer で消す。
+const keyHighlight = cn(
+  "data-highlighted:focus-ring [--focus-ring-offset:calc(var(--focus-ring-width)*-1)]",
+  "[[data-pointer]_&]:data-highlighted:outline-none"
+)
+
+// ポインターを動かしている間は data-pointer を付け、キーを押したら外す（Select、Dropdown Menu と同じ）。
+// 矢印キーは検索欄で Base UI が処理し、Popup まで伝わらない場合があるため、キャプチャの段階で受け取る。
+const pointerHandlers = <T extends HTMLElement>(onPointerMove?: React.PointerEventHandler<T>) => ({
+  onPointerMove: (event: React.PointerEvent<T>) => {
+    event.currentTarget.setAttribute("data-pointer", "")
+    onPointerMove?.(event)
+  },
+  onKeyDownCapture: (event: React.KeyboardEvent<T>) => {
+    event.currentTarget.removeAttribute("data-pointer")
+  },
+})
+
 // Select の SelectTrigger と同じ外観。閉じた状態では、Select と見分けが付かないようにする。
 const triggerClassName = cn(
   "group/combobox flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-4 py-2 text-left text-body text-foreground select-none",
@@ -72,6 +92,7 @@ function ComboboxContent({
   sideOffset = 4,
   align = "start",
   alignOffset = 0,
+  onPointerMove,
   ...props
 }: ComboboxPrimitive.Popup.Props &
   Pick<ComboboxPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
@@ -95,6 +116,7 @@ function ComboboxContent({
             "motion-safe:data-starting-style:scale-95 motion-safe:data-ending-style:scale-95",
             className
           )}
+          {...pointerHandlers(onPointerMove)}
           {...props}
         >
           {children}
@@ -153,6 +175,7 @@ function ComboboxItem({ className, children, ...props }: ComboboxPrimitive.Item.
       className={cn(
         "relative flex min-h-10 w-full cursor-default items-center rounded-md py-2 pr-10 pl-3 text-body outline-none select-none",
         "data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+        keyHighlight,
         "aria-selected:font-medium",
         "data-disabled:pointer-events-none data-disabled:opacity-50",
         className
@@ -179,6 +202,7 @@ function ComboboxCreateItem({ className, children, ...props }: ComboboxPrimitive
       className={cn(
         "relative flex min-h-10 w-full cursor-default items-center gap-2 rounded-md py-2 pr-3 pl-3 text-body outline-none select-none",
         "data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+        keyHighlight,
         className
       )}
       {...props}
@@ -359,6 +383,8 @@ export {
   ComboboxStatus,
   ComboboxTrigger,
   ComboboxValue,
+  keyHighlight as comboboxKeyHighlight,
+  pointerHandlers as comboboxPointerHandlers,
   triggerClassName as comboboxTriggerClassName,
   useComboboxSearch,
 }

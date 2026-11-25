@@ -27,7 +27,7 @@
 | Dialog（`CommandDialog`） | 中央。最大幅 640px、角丸 20px、高さは 480px と画面の高さの小さい方で固定。背景と開閉は Dialog と同じ | Dialog の `size="lg"`、`rounded-xl` |
 | 検索欄（`CommandInput`） | 高さ 56px、文字 16px。左に Lucide の Search（20px）、下に区切りの線 | `h-14`、`text-body` |
 | グループの見出し（`CommandGroup` の `heading`） | 12px、`muted-foreground` | `text-caption` |
-| 候補（`CommandItem`） | 高さ 48px 以上、角丸 12px、文字 14px、アイコン 20px（Lucide）。選んでいる候補の面は `accent` | `min-h-12`、`rounded-md`、`text-ui`、`bg-accent` |
+| 候補（`CommandItem`） | 高さ 48px 以上、角丸 12px、文字 14px、アイコン 20px（Lucide）。選んでいる候補の面は `accent`。キーで移ったときは加えて内側に 2px の枠（ポインターの操作中は出さない） | `min-h-12`、`rounded-md`、`text-ui`、`bg-accent` |
 | ショートカットの表示（`CommandShortcut`） | 12px、`muted-foreground`。表示だけ | `text-caption` |
 | 結果なし（`CommandEmpty`）、状態（`CommandStatus`） | 14px、`muted-foreground` | `text-ui` |
 

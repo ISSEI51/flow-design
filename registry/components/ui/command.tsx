@@ -2,7 +2,7 @@ import * as React from "react"
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete"
 import { Search } from "lucide-react"
 
-import { ComboboxStatus } from "@/components/ui/combobox"
+import { comboboxKeyHighlight, comboboxPointerHandlers, ComboboxStatus } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { searchItemFilter } from "@/lib/search"
 import { cn } from "@/lib/utils"
@@ -53,9 +53,11 @@ function Command<Item extends CommandItemData = CommandItemData>({
       itemToStringValue={(item: Item) => item.label}
       {...props}
     >
+      {/* ポインターを動かしている間は、キー操作のハイライトの枠を消す（Combobox と同じ） */}
       <div
         data-slot="command"
         className={cn("flex min-h-0 w-full flex-col overflow-hidden bg-popover text-popover-foreground", className)}
+        {...comboboxPointerHandlers<HTMLDivElement>()}
       >
         {children}
       </div>
@@ -179,6 +181,7 @@ function CommandItem({
       className={cn(
         "relative flex min-h-12 w-full cursor-default items-center gap-3 rounded-md px-3 py-2 text-ui text-foreground outline-none select-none",
         "data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+        comboboxKeyHighlight,
         "data-disabled:pointer-events-none data-disabled:opacity-50",
         "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-5 [&>svg]:text-muted-foreground",
         className

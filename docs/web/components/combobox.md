@@ -26,7 +26,7 @@
 | 値（`ComboboxValue`） | 確定した値。未選択はプレースホルダーを `muted-foreground` で表示 | |
 | メニュー（`ComboboxContent`） | Select と同じ。角丸 20px、`border`、`shadow-menu`、高さは画面の空きと 384px の小さい方 | `rounded-xl`、`shadow-menu` |
 | 検索欄（`ComboboxInput`） | 高さ 40px、角丸 12px、文字 16px。左に Lucide の Search（20px） | `h-10`、`rounded-md`、`text-body` |
-| 選択肢（`ComboboxItem`） | 高さ 40px 以上、角丸 12px、文字 16px。選択中は Check（20px）と太さ 500 | `min-h-10`、`rounded-md` |
+| 選択肢（`ComboboxItem`） | 高さ 40px 以上、角丸 12px、文字 16px。選択中は Check（20px）と太さ 500。ハイライトは `accent` の面、キーで移ったときは加えて内側に 2px の枠 | `min-h-10`、`rounded-md` |
 | 結果なし（`ComboboxEmpty`）、状態（`ComboboxStatus`） | 14px、`muted-foreground`。取得失敗は `destructive` とアイコン | `text-ui` |
 
 ```tsx

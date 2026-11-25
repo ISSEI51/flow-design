@@ -173,6 +173,8 @@ Combobox と Multi Select は、Select と同じ欄とメニューを使い、�
 | フォーム | `name` を指定すると、隠れた入力欄で値を送信する。Multi Select は選んだ ID ごと、Date Picker は `"YYYY-MM-DD"` |
 | 製品の責務 | 検索の方法、API の通信、保存、ルーティング、権限、ファイルの処理 |
 | メニューの見た目 | Combobox と Multi Select のメニューは Select と同じ（角丸 20px、`shadow-menu`、180ms の開閉） |
+| キー操作のハイライト | [overlays.md](overlays.md#6-キー操作のハイライト) の規則に従う。検索欄にフォーカスを残したまま `aria-activedescendant` で移るため、`data-highlighted` の選択肢の内側に `focus-ring`（2px、offset −2px）を付け、ポインターを動かしている間は `data-pointer` で消す |
+| 重なり順 | Combobox と Multi Select のメニューは、アンカーに付いて浮かぶ要素として `z-50`。Command は Dialog に従う（`z-40`） |
 | モバイル | Date Picker は 768px 未満で Drawer を使い、Calendar を 1 か月だけ表示する（[overlays.md](overlays.md#4-モバイルでの使い分け)） |
 | 動きを減らす設定 | 大きさと回転の動きを止める。Command は Dialog に従う |
 

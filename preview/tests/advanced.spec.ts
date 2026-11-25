@@ -3,6 +3,10 @@ import { join } from "node:path"
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { colorContrast, css, sameColor, token } from "./helpers"
+import { collectPageErrors } from "./page-errors"
+
+// ページで捕捉されなかった例外があれば、テストを失敗にする。
+collectPageErrors(test)
 
 // Advanced Components（Combobox、Multi Select、Command、Calendar、Date Picker、File Upload、Empty）の検品。
 // 日付に関わるテストは、時計を 2026-11-25 10:00（日本時間、水曜日）に固定する。
@@ -186,6 +190,28 @@ test.describe("Combobox", { tag: "@webkit" }, () => {
     await page.keyboard.press("ArrowDown")
     await expect(search).toBeFocused()
     await expect(listbox(page).getByRole("option", { name: "北星物流株式会社" })).toHaveAttribute("aria-selected", "true")
+  })
+
+  test("key highlight: ring on keyboard, none while the pointer moves", async ({ page, isMobile }) => {
+    test.skip(isMobile, "ポインターの移動はデスクトップで確認する")
+    await open(page, "combobox")
+    await openMenu(page, page.getByTestId("combobox-pref"))
+    await page.keyboard.press("ArrowDown")
+    const item = listbox(page).locator("[data-highlighted]")
+    await expect(item).toHaveCount(1)
+    expect(await css(item, "outline-style")).toBe("solid")
+    expect(await css(item, "outline-width")).toBe("2px")
+    expect(await css(item, "outline-offset")).toBe("-2px")
+    expect(sameColor(await css(item, "outline-color"), await token(page, "--ring"))).toBe(true)
+    // 枠は accent の面に対して 3:1 以上
+    expect(await colorContrast(page, await css(item, "outline-color"), await token(page, "--accent"))).toBeGreaterThanOrEqual(3)
+    const b = (await listbox(page).getByRole("option").nth(3).boundingBox())!
+    await page.mouse.move(b.x + 20, b.y + b.height / 2)
+    await page.mouse.move(b.x + 24, b.y + b.height / 2)
+    await expect(listbox(page).getByRole("option").nth(3)).toHaveAttribute("data-highlighted", "")
+    expect(await css(listbox(page).locator("[data-highlighted]"), "outline-style")).toBe("none")
+    await page.keyboard.press("ArrowDown")
+    expect(await css(listbox(page).locator("[data-highlighted]"), "outline-style")).toBe("solid")
   })
 
   test("IME composition does not filter until committed", async ({ page, browserName, isMobile }) => {
