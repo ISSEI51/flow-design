@@ -141,7 +141,7 @@ Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn
 | `info` / `info-foreground` | #2563eb / #ffffff | お知らせ |
 
 - `success`、`warning`、`info`、`border-strong`、`destructive-foreground` は、shadcn/ui の「Adding New Tokens」の手順で追加したトークンである。
-- `sidebar-*` は、対応する `background`、`primary`、`accent`、`border`、`ring` を参照する。
+- `sidebar-*` は、`sidebar` と `sidebar-accent` を除き、対応する `foreground`、`primary`、`accent-foreground`、`border`、`ring` を参照する。`sidebar` は `--fd-neutral-100`（#f5f5f5）、`sidebar-accent` は `--fd-neutral-200`（#e5e5e5）である。Sidebar をメインの内容と背景で区別し、現在位置の面を Sidebar の面より一段濃くするためである（[sidebar.md](components/sidebar.md)）。
 - `chart-1`〜`chart-5` は v0.1 では決めず、shadcn/ui の neutral テーマの既定値を入れている。
 
 ### 状態
@@ -187,6 +187,11 @@ Flow Design が独自に追加した Primitive には `--fd-` を付け、shadcn
 | `ring` / `muted`（`focus-ring`） | 13.88 | 3 以上（非テキスト） |
 | `ring/50` / `background`（shadcn/ui の標準の部品） | 3.09 | 3 以上（非テキスト） |
 | `ring/50` / `muted`（shadcn/ui の標準の部品） | 3.02 | 3 以上（非テキスト） |
+| `sidebar-foreground` / `sidebar` | 14.94 | 4.5 以上 |
+| `muted-foreground` / `sidebar`（Sidebar の項目、グループの名前） | 4.68 | 4.5 以上 |
+| `sidebar-accent-foreground` / `sidebar-accent`（現在位置） | 12.01 | 4.5 以上 |
+| `sidebar-accent-foreground` / `sidebar` の上の `sidebar-accent/50`（ホバー） | 12.93 | 4.5 以上 |
+| `ring` / `sidebar`、`sidebar-accent`（`focus-ring`） | 13.88、12.01 | 3 以上（非テキスト） |
 
 半透明の色（`primary/90`、`primary/80`、`ring/50`）は、実際に下にある色（`background` か `muted`）と合成してから比を計算している。
 
@@ -313,7 +318,7 @@ shadcn/ui の base-nova スタイルの標準の部品は、ボタンと入力�
 | 削除ボタンのホバー | `verify-theme.mjs`（Playwright の Chromium 159） | 面が rgb(190, 32, 32)（`destructive` を 10% 暗くした色）になった |
 | CSS 変数の上書き | `verify-theme.mjs`（Playwright の Chromium 159） | `--fd-radius-md`、`--fd-radius-xl`、`--fd-radius-lg`、`--radius`、`--primary`、`--fd-neutral-500`、`--control-height`、`--table-row-height`、`--focus-ring-width`、`--icon-stroke-width` の上書きが、計算後のスタイルに反映された。`--fd-radius-md` の上書きで、他の角丸は変わらなかった |
 | 参照関係 | `check-contrast.mjs` | 63 の変数で、未定義と循環はない |
-| コントラスト | `check-contrast.mjs` | 35 の組み合わせがすべて基準を満たした |
+| コントラスト | `check-contrast.mjs` | 41 の組み合わせがすべて基準を満たした |
 | 動きを減らす設定 | `verify-theme.mjs` | `--duration-slow` と `--duration-layout` が 0ms になり、`--duration-fast` は 120ms のまま |
 | 表示 | ボタン、入力欄、メニュー、ダイアログ、テーブルを並べたページを Chromium で表示（v0.1 の作成時） | 余白、文字、角丸、高さの段階が意図どおりに表示された |
 

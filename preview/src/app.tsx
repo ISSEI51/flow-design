@@ -12,7 +12,8 @@ const brands = [
 ] as const
 
 function currentId() {
-  const id = window.location.hash.replace("#/", "")
+  // "#/app?page=customers" のように、ページの中の状態をハッシュの ? 以降に持つページがある。
+  const id = window.location.hash.replace("#/", "").split("?")[0]
   return catalog.some((c) => c.id === id) ? id : catalog[0].id
 }
 
@@ -36,6 +37,20 @@ export function App() {
     for (const b of brands) for (const k of Object.keys(b.vars)) root.style.removeProperty(k)
     for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
   }, [vars])
+
+  // 画面全体を使うページ（業務アプリケーションの例）は、プレビューの見出しと幅の制限を付けずに表示する。
+  if (entry.fullscreen) {
+    return (
+      <ToastProvider>
+        <TooltipProvider>
+          <div className="min-h-dvh bg-background text-foreground">
+            <Page />
+          </div>
+          <Toaster />
+        </TooltipProvider>
+      </ToastProvider>
+    )
+  }
 
   return (
     <ToastProvider>

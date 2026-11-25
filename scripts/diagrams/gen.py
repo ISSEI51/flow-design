@@ -760,6 +760,281 @@ def progress_states():
         d.text(bx + bw + 24, y, 300, 28, note, S_SUB, MUTED, valign="middle")
     d.text(0, 6 * 60 + 8, W, 20, "時間の経過で進めた見せかけの進捗率は使わない", S_SUB, MUTED)
     d.save("progress-states")
+# ---------------------------------------------------------------- 15 navigation & layout
+def num(d, n, cx, cy):
+    d.dot(cx, cy, d=24, fill=ACCENT_SURFACE, stroke=ACCENT)
+    d.text(cx - 12, cy - 12, 24, 24, n, 14, ACCENT, bold=True, align="center", valign="middle")
+
+
+def legend(d, x, y, rows, step=78, width=320):
+    for i, (n, name, sub) in enumerate(rows):
+        ty = y + i * step
+        d.text(x, ty + 2, 24, 20, n, S_NUM, ACCENT, bold=True)
+        d.text(x + 30, ty, width, 24, name, S_NAME, TEXT, bold=True)
+        for k, ln in enumerate(sub.split("\n")):
+            d.text(x + 30, ty + 30 + k * 22, width, 20, ln, S_SUB, MUTED)
+
+
+def mini_sidebar(d, x, y, w, h, collapsed=False, items=6):
+    d.rect(x, y, w, h, fill=SURFACE, r=0)
+    if collapsed:
+        d.rect(x + w / 2 - 9, y + 16, 18, 18, fill=BAR_STRONG, r=5)
+        for i in range(items):
+            cy = y + 60 + i * 30
+            if i == 1:
+                d.rect(x + 6, cy - 12, w - 12, 24, fill=BAR, r=6)
+            d.rect(x + w / 2 - 6, cy - 6, 12, 12, fill=BAR_STRONG, r=3)
+        return
+    d.rect(x + 14, y + 16, 18, 18, fill=BAR_STRONG, r=5)
+    d.bar(x + 40, y + 21, w - 70, 8, fill=BAR_STRONG)
+    for i in range(items):
+        cy = y + 60 + i * 30
+        if i == 1:
+            d.rect(x + 8, cy - 12, w - 16, 24, fill=BAR, r=6)
+        d.rect(x + 16, cy - 6, 12, 12, fill=BAR_STRONG, r=3)
+        d.bar(x + 36, cy - 4, (w - 70) * (0.9 if i == 1 else 0.6 + 0.08 * (i % 3)), 8,
+              fill=BAR_STRONG if i == 1 else BAR)
+
+
+def nav_structure():
+    d = D()
+    W, H = 620, 440
+    d.rect(0, 0, W, H, fill="none", stroke=LINE, r=18, sw=1)
+    sw = 150
+    d.cells.append(
+        f'<mxCell id="{d.id()}" value="" style="rounded=1;absoluteArcSize=1;arcSize=36;html=0;fillColor={SURFACE};'
+        f'strokeColor=none;" vertex="1" parent="1"><mxGeometry x="0.75" y="0.75" width="{sw}" height="{H - 1.5}" as="geometry"/></mxCell>')
+    d.rect(sw - 20, 0.75, 20, H - 1.5, fill=SURFACE, r=0)
+    mini_sidebar(d, 0.75, 10, sw - 0.75, 260, items=7)
+    mx = sw + 28
+    # header: trigger + breadcrumb
+    d.rect(mx, 22, 22, 22, fill="none", stroke=BAR_STRONG, r=6, sw=1.5)
+    d.line([(mx + 36, 22), (mx + 36, 44)], color=BAR, arrow=False, sw=1)
+    d.bar(mx + 50, 29, 40, 8)
+    d.bar(mx + 100, 29, 60, 8)
+    d.bar(mx + 170, 29, 90, 8, fill=BAR_STRONG)
+    # page title + primary action
+    d.bar(mx, 84, 190, 20, fill=BAR_STRONG)
+    d.rect(W - 28 - 120, 78, 120, 34, fill=TEXT, r=10)
+    # toolbar
+    d.rect(mx, 140, 170, 32, fill="none", stroke=LINE, r=9, sw=1)
+    d.rect(mx + 184, 140, 110, 32, fill="none", stroke=LINE, r=9, sw=1)
+    # main content
+    cy0 = 200
+    for i in range(6):
+        y = cy0 + i * 36
+        d.bar(mx, y + 12, 120, 8, fill=BAR_STRONG if i == 0 else BAR)
+        d.bar(mx + 170, y + 12, 80, 8, fill=BAR_STRONG if i == 0 else BAR)
+        d.bar(mx + 290, y + 12, 100, 8, fill=BAR_STRONG if i == 0 else BAR)
+        if i < 5:
+            d.line([(mx, y + 32), (W - 28, y + 32)], color=BAR, arrow=False, sw=1)
+    num(d, "1", 24, H - 30)
+    num(d, "2", W - 30, 33)
+    num(d, "3", mx + 214, 94)
+    num(d, "4", W - 28 - 120 - 22, 95)
+    num(d, "5", mx + 318, 156)
+    num(d, "6", W - 30, cy0 + 100)
+    legend(d, 680, 0, [
+        ("1", "Sidebar", "主要な機能へのナビゲーション"),
+        ("2", "Header", "現在位置、Sidebar の開閉、共通の操作"),
+        ("3", "Page Title", "この画面の目的"),
+        ("4", "Primary Action", "この画面の主要な操作"),
+        ("5", "Toolbar", "検索、絞り込み、並び替え"),
+        ("6", "Main Content", "情報と操作の対象"),
+    ], step=74)
+    d.save("nav-structure")
+
+
+def sidebar_states():
+    d = D()
+    PW, PH = 280, 300
+    cols = [("展開", "幅 240px。初期状態"), ("折りたたみ", "幅 64px。アイコンと名前（支援技術）"),
+            ("モバイル（768px 未満）", "常に表示しない。ボタンで Sheet を開く")]
+    for i, (name, sub) in enumerate(cols):
+        x = i * (PW + 40)
+        if i < 2:
+            d.rect(x, 0, PW, PH, fill="none", stroke=LINE, r=16, sw=1)
+            w = 120 if i == 0 else 32
+            mini_sidebar(d, x + 0.75, 0.75 + 8, w, 230, collapsed=(i == 1))
+            d.rect(x + 0.75, 0.75, w, 8, fill=SURFACE, r=0)
+            d.rect(x + 0.75, 238, w, PH - 239.5, fill=SURFACE, r=0)
+            mx = x + w + 20
+            d.bar(mx, 26, 110, 14, fill=BAR_STRONG)
+            for k in range(5):
+                d.bar(mx, 66 + k * 26, PW - w - 50 - (k % 2) * 30, 8)
+            # width marker
+            d.line([(x + 0.75, PH + 18), (x + w, PH + 18)], color=ACCENT, arrow=False, sw=1.5)
+            d.line([(x + 0.75, PH + 12), (x + 0.75, PH + 24)], color=ACCENT, arrow=False, sw=1.5)
+            d.line([(x + w, PH + 12), (x + w, PH + 24)], color=ACCENT, arrow=False, sw=1.5)
+            d.text(x + w + 8, PH + 8, 80, 20, "240px" if i == 0 else "64px", S_SUB, ACCENT, bold=True)
+        else:
+            fx, fw = x + 60, 160
+            d.rect(fx, 0, fw, PH, fill="none", stroke=LINE, r=22, sw=1)
+            d.rect(fx + 1, 1, fw - 2, PH - 2, fill=BAR, r=21, opacity=60)
+            sw2 = 118
+            mini_sidebar(d, fx + 1, 9, sw2, 230, items=6)
+            d.rect(fx + 1, 1, sw2, 8, fill=SURFACE, r=0)
+            d.rect(fx + 1, 238, sw2, PH - 239, fill=SURFACE, r=0)
+            d.text(fx + sw2 - 24, 14, 20, 20, "×", 16, TEXT, bold=True, align="center", valign="middle")
+            d.text(fx - 60, PH + 8, 280, 20, "背景の操作を止める・Escape で閉じる", S_SUB, ACCENT, bold=True, align="center")
+        d.text(x, PH + 44, PW, 24, name, S_NAME, TEXT, bold=True, align="center")
+        d.text(x - 10, PH + 74, PW + 20, 20, sub, S_SUB, MUTED, align="center")
+    d.line([(PW + 4, PH / 2), (PW + 36, PH / 2)])
+    d.save("sidebar-states")
+
+
+def tabs_sidebar():
+    d = D()
+    # left: sidebar = different functions
+    d.text(0, 0, 380, 18, "Sidebar", S_LABEL, MUTED, bold=True)
+    d.text(0, 26, 380, 24, "別の機能へ移動する", S_NAME, TEXT, bold=True)
+    items = ["顧客", "契約", "請求書", "設定"]
+    for i, it in enumerate(items):
+        y = 70 + i * 52
+        if i == 0:
+            d.rect(0, y, 300, 44, fill=BAR, r=8)
+        else:
+            d.rect(0, y, 300, 44, fill=SURFACE, r=8)
+        d.rect(16, y + 14, 16, 16, fill=BAR_STRONG, r=4)
+        d.text(46, y, 200, 44, it, 16, TEXT, bold=(i == 0), valign="middle")
+    d.text(0, 290, 380, 20, "機能ごとに、別の画面になる", S_SUB, MUTED)
+    # right: tabs = same object
+    X = 400
+    d.text(X, 0, 460, 18, "Tabs", S_LABEL, MUTED, bold=True)
+    d.text(X, 26, 460, 24, "同じ対象の情報を切り替える", S_NAME, TEXT, bold=True)
+    d.rect(X, 70, 460, 214, fill="none", stroke=LINE, r=16, sw=1)
+    d.text(X + 24, 88, 400, 28, "株式会社山田商事", 20, TEXT, bold=True)
+    tabs = ["概要", "契約", "請求", "活動履歴"]
+    tx = X + 24
+    for i, t in enumerate(tabs):
+        w = tw(t, 15)
+        d.text(tx, 132, w + 4, 24, t, 15, TEXT if i == 0 else MUTED, bold=True)
+        if i == 0:
+            d.rect(tx, 160, w, 3, fill=TEXT, r=1)
+        tx += w + 24
+    d.line([(X + 24, 163), (X + 436, 163)], color=BAR, arrow=False, sw=1)
+    for k in range(3):
+        d.bar(X + 24, 188 + k * 26, 300 - k * 60, 8)
+    d.text(X, 290, 460, 20, "画面は同じ。対象（山田商事）は変わらない", S_SUB, MUTED)
+    d.save("tabs-sidebar")
+
+
+def chevron(d, x, cy, color=MUTED):
+    d.line([(x, cy - 5), (x + 5, cy), (x, cy + 5)], color=color, arrow=False, sw=1.5)
+
+
+def house(d, x, y, color=MUTED):
+    d.line([(x, y + 7), (x + 8, y), (x + 16, y + 7)], color=color, arrow=False, sw=1.5)
+    d.line([(x + 3, y + 5), (x + 3, y + 15), (x + 13, y + 15), (x + 13, y + 5)], color=color, arrow=False, sw=1.5)
+
+
+def crumb_row(d, x, y, parts, current):
+    house(d, x, y + 3)
+    cx = x + 30
+    for p in parts:
+        chevron(d, cx, y + 11)
+        cx += 16
+        if p == "…":
+            for k in range(3):
+                d.dot(cx + 4 + k * 7, y + 11, d=4, fill=MUTED, stroke="none")
+            cx += 34
+            continue
+        w = tw(p, 15) + 4
+        d.text(cx, y, w, 22, p, 15, MUTED, valign="middle")
+        cx += w + 12
+    chevron(d, cx, y + 11)
+    cx += 16
+    d.text(cx, y, tw(current, 15) + 8, 22, current, 15, TEXT, bold=True, valign="middle")
+
+
+def breadcrumb_hierarchy():
+    d = D()
+    d.text(0, 0, 360, 18, "情報の階層", S_LABEL, MUTED, bold=True)
+    levels = ["ホーム", "顧客", "株式会社山田商事", "契約", "C-2026-0142"]
+    for i, lv in enumerate(levels):
+        x, y = i * 28, 36 + i * 44
+        last = i == len(levels) - 1
+        if i > 0:
+            d.line([((i - 1) * 28 + 8, y - 26), ((i - 1) * 28 + 8, y + 11), (x - 4, y + 11)], arrow=False)
+        d.dot(x + 8, y + 11, d=12, fill=ACCENT if last else "none", stroke=ACCENT if last else LINE)
+        d.text(x + 22, y, 260, 22, lv + ("（現在位置）" if last else ""), 16, TEXT, bold=last, valign="middle")
+    X = 420
+    d.text(X, 0, 460, 18, "Breadcrumb", S_LABEL, MUTED, bold=True)
+    d.text(X, 36, 200, 20, "標準", S_SUB, MUTED)
+    crumb_row(d, X, 62, ["顧客", "株式会社山田商事", "契約"], "C-2026-0142")
+    d.text(X, 118, 300, 20, "深い階層：間を省略し、直近の親を残す", S_SUB, MUTED)
+    crumb_row(d, X, 144, ["…", "契約"], "C-2026-0142")
+    d.text(X, 200, 300, 20, "浅い階層：戻るリンクでもよい", S_SUB, MUTED)
+    d.line([(X + 14, 237), (X, 237)], color=MUTED, sw=1.5)
+    d.text(X + 24, 226, 200, 22, "顧客一覧へ戻る", 15, MUTED, valign="middle")
+    d.text(0, 272, 880, 20, "閲覧の履歴ではなく、情報の階層を表す。上位の階層はリンク、現在位置は文字（aria-current=\"page\"）", S_SUB, MUTED)
+    d.save("breadcrumb-hierarchy")
+
+
+def separation_order():
+    d = D()
+    names = [("1", "余白"), ("2", "文字の強弱"), ("3", "薄い境界線"), ("4", "背景色"), ("5", "Card")]
+    cw, g = 160, 20
+    total = 5 * cw + 4 * g
+    d.text(0, 0, 200, 18, "まず検討する", S_LABEL, MUTED, bold=True)
+    d.text(total - 200, 0, 200, 18, "最後に使う", S_LABEL, MUTED, bold=True, align="right")
+    d.line([(110, 9), (total - 100, 9)])
+    y0 = 40
+    for i, (n, name) in enumerate(names):
+        x = i * (cw + g)
+        d.rect(x, y0, cw, 170, fill="none", stroke=BAR, r=14, sw=1)
+        ix, iy = x + 20, y0 + 22
+        if i == 0:
+            for gy in (iy, iy + 74):
+                d.bar(ix, gy, 60, 8, fill=BAR_STRONG)
+                d.bar(ix, gy + 18, 110, 6)
+                d.bar(ix, gy + 32, 84, 6)
+        elif i == 1:
+            d.bar(ix, iy, 100, 16, fill=BAR_STRONG)
+            d.bar(ix, iy + 34, 110, 6)
+            d.bar(ix, iy + 48, 84, 6)
+            d.bar(ix, iy + 74, 60, 8, fill=BAR_STRONG)
+            d.bar(ix, iy + 92, 110, 6)
+        elif i == 2:
+            d.bar(ix, iy, 60, 8, fill=BAR_STRONG)
+            d.bar(ix, iy + 18, 110, 6)
+            d.line([(ix, iy + 50), (ix + 120, iy + 50)], color=LINE, arrow=False, sw=1)
+            d.bar(ix, iy + 74, 60, 8, fill=BAR_STRONG)
+            d.bar(ix, iy + 92, 110, 6)
+        elif i == 3:
+            for gy in (iy - 6, iy + 64):
+                d.rect(ix - 8, gy, 136, 58, fill=SURFACE, r=8)
+                d.bar(ix, gy + 12, 60, 8, fill=BAR_STRONG)
+                d.bar(ix, gy + 30, 100, 6)
+        else:
+            d.rect(ix - 4, iy - 4, 128, 120, fill="none", stroke=LINE, r=12, sw=1)
+            d.bar(ix + 10, iy + 12, 60, 6)
+            d.bar(ix + 10, iy + 36, 90, 18, fill=BAR_STRONG)
+            d.bar(ix + 10, iy + 70, 70, 6)
+        d.text(x, y0 + 186, cw, 22, f"{n} {name}", S_NAME, TEXT, bold=True, align="center")
+    d.text(0, y0 + 226, total, 20, "前の方法で区別できる場合は、次の方法を足さない。Card は独立して読まれる情報だけに使う", S_SUB, MUTED, align="center")
+    d.save("separation-order")
+
+
+def content_width():
+    d = D()
+    rows = [("データ一覧・テーブル", "制限なし", None), ("ダッシュボード", "1440px", 1440),
+            ("一般的な詳細画面", "960px", 960), ("入力フォーム・設定", "640px", 640), ("ログイン・認証", "400px", 400)]
+    scale = 0.36
+    LX, BX = 0, 230
+    for i, (name, val, px) in enumerate(rows):
+        y = i * 56
+        d.text(LX, y, 220, 36, name, S_NAME, TEXT, bold=True, valign="middle")
+        if px is None:
+            w = 1440 * scale + 120
+            d.rect(BX, y + 6, w - 40, 24, fill=BAR, r=6)
+            d.line([(BX + w - 40, y + 18), (BX + w, y + 18)], color=ACCENT, dashed=True)
+        else:
+            w = px * scale
+            d.rect(BX, y + 6, w, 24, fill=BAR, r=6)
+        d.text(BX + w + 12, y, 120, 36, val, S_SUB, ACCENT, bold=True, valign="middle")
+    d.text(0, 5 * 56 + 6, 900, 20, "初期の基準。読みやすさと作業の効率から、画面ごとに調整する", S_SUB, MUTED)
+    d.save("content-width")
 
 
 # ---------------------------------------------------------------- 18-22 overlays
@@ -1009,6 +1284,7 @@ def overlay_nesting():
 for f in (journey, principles, wording, layout, visual, process, architecture, site, tokens,
           button_anatomy, button_hierarchy, field_anatomy, form_choice, form_validation,
           feedback_choice, toast_timing, progress_states,
-          overlay_choice, sheet_modes, overlay_mobile, overlay_closing, overlay_nesting):
+          overlay_choice, sheet_modes, overlay_mobile, overlay_closing, overlay_nesting,
+          nav_structure, sidebar_states, tabs_sidebar, breadcrumb_hierarchy, separation_order, content_width):
     f()
 print("ok")

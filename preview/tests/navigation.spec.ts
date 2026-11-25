@@ -1,0 +1,827 @@
+import { join } from "node:path"
+
+import { expect, test, type Locator, type Page } from "@playwright/test"
+
+import { colorContrast, css, sameColor, token } from "./helpers"
+
+const pages = ["sidebar", "tabs", "breadcrumb", "card", "accordion", "separator"]
+
+async function open(page: Page, id: string) {
+  await page.goto(`/#/${id}`)
+  await page.getByRole("heading", { level: 1 }).first().waitFor()
+}
+
+const box = async (l: Locator) => (await l.boundingBox())!
+
+// WebKit（Safari）は、既定の設定では Tab でリンクに移動しない。Option + Tab でリンクにも移動する。
+const tabKey = (page: Page) => (page.context().browser()?.browserType().name() === "webkit" ? "Alt+Tab" : "Tab")
+
+async function tabTo(page: Page, target: Locator) {
+  const key = tabKey(page)
+  for (let i = 0; i < 150; i++) {
+    await page.keyboard.press(key)
+    if (await target.evaluate((el) => el === document.activeElement || el.contains(document.activeElement))) return
+  }
+  throw new Error("target was not reached with Tab")
+}
+
+async function expectFocusRing(page: Page, target: Locator) {
+  expect(await css(target, "outline-style")).toBe("solid")
+  expect(await css(target, "outline-width")).toBe("2px")
+  expect(sameColor(await css(target, "outline-color"), await token(page, "--ring"))).toBe(true)
+}
+
+const noOverflow = (l: Locator) => l.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+
+// ------------------------------------------------------------------ 共通
+
+test.describe("all navigation pages", { tag: "@webkit" }, () => {
+  for (const id of pages) {
+    test(`${id}: names, no horizontal scroll`, async ({ page }) => {
+      await open(page, id)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+      const main = page.locator("main").first()
+      const controls = main
+        .getByRole("button")
+        .or(main.getByRole("link"))
+        .or(main.getByRole("tab"))
+        .or(main.getByRole("textbox"))
+      const n = await controls.count()
+      expect(n).toBeGreaterThan(0)
+      for (let i = 0; i < n; i++) {
+        const c = controls.nth(i)
+        if (await c.isVisible()) await expect(c).toHaveAccessibleName(/\S/)
+      }
+    })
+  }
+
+  test("app: names, landmarks, no horizontal scroll", async ({ page }) => {
+    for (const p of ["home", "customers", "customer&id=yamada", "settings", "renewals"]) {
+      await page.goto(`/#/app?page=${p}`)
+      await page.getByRole("heading", { level: 1 }).waitFor()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+      await expect(page.getByRole("main")).toHaveCount(1)
+      const controls = page.getByRole("button").or(page.getByRole("link")).or(page.getByRole("tab"))
+      for (let i = 0; i < (await controls.count()); i++) {
+        const c = controls.nth(i)
+        if (await c.isVisible()) await expect(c).toHaveAccessibleName(/\S/)
+      }
+    }
+  })
+})
+
+// ------------------------------------------------------------------ Sidebar
+
+test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
+  test.skip(({ isMobile }) => isMobile, "デスクトップの表示")
+
+  const frame = (page: Page) => page.getByTestId("sidebar-basic")
+  const container = (l: Locator) => l.locator("[data-slot=sidebar-container]")
+
+  test("tokens: width, surface, items, current position", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = frame(page)
+    const c = container(f)
+    expect((await box(c)).width).toBe(240)
+    expect(sameColor(await css(c, "background-color"), await token(page, "--sidebar"))).toBe(true)
+    // 背景で区別するため、メインとの境界線を引かない
+    expect(await css(c, "border-right-width")).toBe("0px")
+    const nav = f.getByRole("navigation", { name: "メインメニュー" })
+    const current = nav.getByRole("link", { name: "顧客", exact: true })
+    await expect(current).toHaveAttribute("aria-current", "page")
+    expect((await box(current)).height).toBe(44)
+    expect(await css(current, "border-top-left-radius")).toBe("8px")
+    expect(await css(current, "font-size")).toBe("14px")
+    expect(await css(current, "font-weight")).toBe("600")
+    expect(await css(current, "padding-left")).toBe("12px")
+    expect(await css(current, "column-gap")).toBe("12px")
+    expect(await css(current, "box-shadow")).toBe("none")
+    expect(await css(current, "border-left-width")).toBe("0px")
+    expect((await box(current.locator("svg"))).width).toBe(20)
+    expect(sameColor(await css(current, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
+    expect(sameColor(await css(current, "color"), await token(page, "--sidebar-accent-foreground"))).toBe(true)
+    // 現在位置以外：muted-foreground、太さ 400、面なし
+    const other = nav.getByRole("link", { name: "ホーム" })
+    await expect(other).not.toHaveAttribute("aria-current")
+    expect(await css(other, "font-weight")).toBe("400")
+    expect(sameColor(await css(other, "color"), await token(page, "--muted-foreground"))).toBe(true)
+    expect(await css(other, "background-color")).toBe("rgba(0, 0, 0, 0)")
+    expect(
+      await colorContrast(page, await css(other, "color"), await token(page, "--sidebar"))
+    ).toBeGreaterThanOrEqual(4.5)
+    // 内側の余白 12px
+    const group = f.locator("[data-slot=sidebar-group]").first()
+    expect(await css(group, "padding-left")).toBe("12px")
+  })
+
+  test("hover, focus and current are distinguishable", async ({ page }) => {
+    await open(page, "sidebar")
+    const nav = frame(page).getByRole("navigation", { name: "メインメニュー" })
+    const other = nav.getByRole("link", { name: "請求書" })
+    await other.hover()
+    await page.waitForTimeout(200)
+    const hover = await css(other, "background-color")
+    const current = await css(nav.getByRole("link", { name: "顧客", exact: true }), "background-color")
+    expect(sameColor(hover, current)).toBe(false)
+    expect(sameColor(hover, await token(page, "--sidebar"))).toBe(false)
+    expect(sameColor(await css(other, "color"), await token(page, "--sidebar-accent-foreground"))).toBe(true)
+    expect(await colorContrast(page, await css(other, "color"), hover)).toBeGreaterThanOrEqual(4.5)
+    // 現在位置の項目は、ホバーしても現在位置の面のまま
+    const currentLink = nav.getByRole("link", { name: "顧客", exact: true })
+    await currentLink.hover()
+    await page.waitForTimeout(200)
+    expect(sameColor(await css(currentLink, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
+    await page.mouse.move(0, 0)
+    await tabTo(page, other)
+    await expectFocusRing(page, other)
+  })
+
+  test("page switching updates the current position", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = frame(page)
+    const nav = f.getByRole("navigation", { name: "メインメニュー" })
+    await nav.getByRole("link", { name: "入金" }).click()
+    await expect(nav.getByRole("link", { name: "入金" })).toHaveAttribute("aria-current", "page")
+    await expect(nav.getByRole("link", { name: "顧客", exact: true })).not.toHaveAttribute("aria-current")
+    await expect(f.getByTestId("frame-title")).toHaveText("入金")
+    // ルーティングはプレビュー（製品）が持つ。ページの URL は変えていない
+    expect(page.url()).toContain("#/sidebar")
+  })
+
+  test("collapse to 64px keeps every item reachable and named", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = frame(page)
+    const c = container(f)
+    const inset = f.locator("[data-slot=sidebar-inset]")
+    const headerBefore = (await box(f.getByTestId("frame-title"))).y
+    expect(await css(c, "transition-duration")).toBe("0.32s")
+    await f.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await expect(f.getByTestId("frame-state")).toHaveText("折りたたみ（64px）")
+    await expect.poll(async () => (await box(c)).width).toBe(64)
+    // メインは Sidebar の右端から始まり、縦の位置は変わらない
+    expect(Math.round((await box(inset)).x - (await box(f)).x)).toBe(64 + 1)
+    expect((await box(f.getByTestId("frame-title"))).y).toBe(headerBefore)
+    const nav = f.getByRole("navigation", { name: "メインメニュー" })
+    for (const name of ["ホーム", "顧客", "商談", "請求書", "入金", "レポート"]) {
+      const link = nav.getByRole("link", { name })
+      await expect(link).toBeVisible()
+      const b = await box(link)
+      expect(b.x + b.width).toBeLessThanOrEqual((await box(c)).x + 64)
+      // 名前は視覚的に隠す
+      expect((await box(link.locator("span"))).width).toBeLessThanOrEqual(1)
+    }
+    await expect(nav.getByRole("button", { name: "契約" })).toBeVisible()
+    await expect(f.getByRole("link", { name: "設定" })).toBeVisible()
+    // 折りたたんだまま移動できる
+    await nav.getByRole("link", { name: "レポート" }).click()
+    await expect(nav.getByRole("link", { name: "レポート" })).toHaveAttribute("aria-current", "page")
+    // 子を持つ項目を押すと、展開して子を表示する
+    await nav.getByRole("button", { name: "契約" }).click()
+    await expect.poll(async () => (await box(c)).width).toBe(240)
+    await expect(nav.getByRole("link", { name: "更新が近い契約" })).toBeVisible()
+  })
+
+  test("collapsed items show their name in a tooltip after 700ms", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = frame(page)
+    const nav = f.getByRole("navigation", { name: "メインメニュー" })
+    const item = nav.getByRole("link", { name: "請求書" })
+    // 展開時は名前が見えているため、Tooltip を表示しない
+    await item.hover()
+    await page.waitForTimeout(900)
+    await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
+    await f.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await expect.poll(async () => (await box(container(f))).width).toBe(64)
+    await page.mouse.move(0, 0)
+    await item.hover()
+    await page.waitForTimeout(300)
+    await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
+    const tip = page.locator("[data-slot=tooltip-content]")
+    await expect(tip).toBeVisible({ timeout: 2000 })
+    await expect(tip).toHaveText("請求書")
+    // 項目の右に表示し、名前は変わらない（Tooltip は視覚的な補助）
+    expect((await box(tip)).x).toBeGreaterThan((await box(item)).x + (await box(item)).width)
+    await expect(item).toHaveAccessibleName("請求書")
+    await page.mouse.move(0, 0)
+    await expect(tip).toBeHidden()
+    // キーボードのフォーカスでも表示する
+    await item.focus()
+    await page.keyboard.press(tabKey(page))
+    await expect(nav.getByRole("link", { name: "入金" })).toBeFocused()
+    await expect(page.locator("[data-slot=tooltip-content]")).toHaveText("入金", { timeout: 2000 })
+  })
+
+  test("loading skeleton keeps the item height and is hidden from assistive technology", async ({ page }) => {
+    await open(page, "sidebar")
+    const loading = page.getByTestId("sidebar-loading")
+    await expect(loading.locator("[aria-busy=true]")).toHaveCount(1)
+    const items = loading.locator("[data-slot=sidebar-menu-skeleton]")
+    expect(await items.count()).toBe(4)
+    expect((await box(items.first())).height).toBe(44)
+    for (const sk of await items.locator("[data-slot=skeleton]").all()) await expect(sk).toHaveAttribute("aria-hidden", "true")
+  })
+
+  test("two levels: parent toggles children, child carries the current position", async ({ page }) => {
+    await open(page, "sidebar")
+    const nav = frame(page).getByRole("navigation", { name: "メインメニュー" })
+    const parent = nav.getByRole("button", { name: "契約" })
+    await expect(parent).toHaveAttribute("aria-expanded", "false")
+    await parent.click()
+    await expect(parent).toHaveAttribute("aria-expanded", "true")
+    const child = nav.getByRole("link", { name: "更新が近い契約" })
+    await child.click()
+    await expect(child).toHaveAttribute("aria-current", "page")
+    expect(await css(child, "font-weight")).toBe("600")
+    // 子の文字は親の文字の位置にそろえる
+    const parentText = await box(parent.locator("span"))
+    const childBox = await box(child)
+    expect(Math.round(childBox.x + 12)).toBe(Math.round(parentText.x))
+    await parent.click()
+    await expect(parent).toHaveAttribute("aria-expanded", "false")
+    await expect(child).toBeHidden()
+  })
+
+  test("keyboard shortcut toggles, except inside text fields", async ({ page }) => {
+    await page.goto("/#/app?page=settings")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    const c = page.locator("[data-slot=sidebar-container]")
+    await page.evaluate(() => localStorage.removeItem("flow-design-preview:sidebar-open"))
+    await page.getByRole("heading", { level: 1 }).click()
+    const mod = process.platform === "darwin" ? "Meta" : "Control"
+    await page.keyboard.press(`${mod}+b`)
+    await expect.poll(async () => (await box(c)).width).toBe(64)
+    await page.keyboard.press(`${mod}+b`)
+    await expect.poll(async () => (await box(c)).width).toBe(240)
+    await page.getByRole("textbox", { name: "会社名" }).focus()
+    await page.keyboard.press(`${mod}+b`)
+    await page.waitForTimeout(400)
+    expect((await box(c)).width).toBe(240)
+  })
+
+  test("state is controlled and saved by the product", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = page.getByTestId("sidebar-controlled")
+    await page.getByTestId("controlled-collapse").click()
+    await expect.poll(async () => (await box(container(f))).width).toBe(64)
+    await expect(page.getByTestId("controlled-value")).toContainText("open = false")
+    await f.getByRole("button", { name: "メニューを展開する" }).click()
+    await expect(page.getByTestId("controlled-value")).toContainText("open = true")
+    // 業務アプリの例は、製品として localStorage に保存する
+    await page.goto("/#/app?page=home")
+    await page.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await page.reload()
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await expect.poll(async () => (await box(page.locator("[data-slot=sidebar-container]"))).width).toBe(64)
+    await page.evaluate(() => localStorage.removeItem("flow-design-preview:sidebar-open"))
+  })
+
+  test("long labels wrap inside 240px", async ({ page }) => {
+    await open(page, "sidebar")
+    const f = page.getByTestId("sidebar-long")
+    const link = f.getByRole("link", { name: "Contract renewals and cancellations" })
+    expect((await box(link)).height).toBeGreaterThan(44)
+    expect(await noOverflow(link)).toBe(true)
+    expect((await box(link)).width).toBeLessThanOrEqual(240 - 24)
+  })
+
+  test("reduced motion stops the width animation", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    await open(page, "sidebar")
+    expect(await css(container(frame(page)), "transition-duration")).toBe("0s")
+  })
+
+  test("brand color does not fill the current item", async ({ page }) => {
+    await open(page, "sidebar")
+    await page.getByRole("radio", { name: "青" }).check()
+    const current = frame(page).getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "顧客", exact: true })
+    expect(sameColor(await css(current, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
+    // 同じページのまま業務アプリの例へ移動し、ブランドカラーを保つ
+    await page.getByRole("link", { name: "業務アプリの例" }).first().click()
+    await page.getByTestId("app-dashboard").waitFor()
+    await page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "顧客", exact: true }).click()
+    const primary = page.getByRole("button", { name: "顧客を追加" })
+    await expect(primary).toBeVisible()
+    expect(sameColor(await css(primary, "background-color"), "#1e40af")).toBe(true)
+    const appCurrent = page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "顧客", exact: true })
+    await page.mouse.move(0, 0)
+    await page.waitForTimeout(300)
+    expect(sameColor(await css(appCurrent, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
+  })
+})
+
+test.describe("Sidebar (mobile)", { tag: "@webkit" }, () => {
+  test.skip(({ isMobile }) => !isMobile, "モバイルの表示")
+
+  test("menu opens as a sheet, traps focus, closes with Escape and after navigation", async ({ page }) => {
+    await page.goto("/#/app?page=customers")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    // 常時表示しない
+    await expect(page.getByRole("navigation", { name: "メインメニュー" })).toBeHidden()
+    const trigger = page.getByRole("button", { name: "メニューを開く" })
+    await expect(trigger).toHaveAttribute("aria-expanded", "false")
+    expect((await box(trigger)).height).toBeGreaterThanOrEqual(48)
+    await trigger.click()
+    const dialog = page.getByRole("dialog", { name: "メニュー" })
+    await expect(dialog).toBeVisible()
+    // 開いている間、背景は支援技術から隠れるため、属性は要素を直接確認する
+    await expect(page.locator("[data-slot=sidebar-trigger]")).toHaveAttribute("aria-expanded", "true")
+    // タッチ操作では 48px 以上
+    const item = dialog.getByRole("link", { name: "請求書" })
+    expect((await box(item)).height).toBeGreaterThanOrEqual(48)
+    await expect(dialog.getByRole("link", { name: "顧客", exact: true })).toHaveAttribute("aria-current", "page")
+    // フォーカスは Sheet の中にとどまる
+    // Base UI は、末尾に達したフォーカスを次の描画で先頭へ戻す。人の操作の間隔に近づけるため、少し待つ。
+    for (let i = 0; i < 25; i++) {
+      await page.keyboard.press(tabKey(page))
+      await page.waitForTimeout(50)
+      expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true)
+    }
+    // 背景は操作できない
+    expect(await page.evaluate(() => document.elementFromPoint(window.innerWidth - 8, 200)?.closest("[role=dialog]"))).toBeNull()
+    await page.keyboard.press("Escape")
+    await expect(dialog).toBeHidden()
+    await expect(trigger).toBeFocused()
+    // 移動したら閉じる
+    await trigger.click()
+    await page.getByRole("dialog", { name: "メニュー" }).getByRole("link", { name: "設定" }).click()
+    await expect(page.getByRole("dialog")).toBeHidden()
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("設定")
+  })
+
+  test("sheet respects the safe area and the closing button has a name", async ({ page }) => {
+    await page.goto("/#/app?page=home")
+    await page.getByRole("button", { name: "メニューを開く" }).click()
+    const dialog = page.getByRole("dialog", { name: "メニュー" })
+    await expect(dialog.getByRole("button", { name: "メニューを閉じる" })).toBeVisible()
+    const inner = dialog.locator("[data-slot=sidebar-header]").locator("..")
+    expect(await css(inner, "padding-top")).toMatch(/px$/)
+    expect((await box(dialog)).width).toBeLessThanOrEqual(page.viewportSize()!.width - 48)
+  })
+})
+
+// ------------------------------------------------------------------ Tabs
+
+test.describe("Tabs", { tag: "@webkit" }, () => {
+  test("line: tokens and relationships", async ({ page }) => {
+    await open(page, "tabs")
+    const root = page.getByTestId("tabs-line")
+    const list = root.getByRole("tablist")
+    const tabs = list.getByRole("tab")
+    const first = tabs.nth(0)
+    expect((await box(first)).height).toBe(48)
+    expect(await css(first, "font-size")).toBe("14px")
+    expect(await css(first, "font-weight")).toBe("500")
+    expect(await css(tabs.nth(1), "font-weight")).toBe("500")
+    expect(await css(first, "box-shadow")).toBe("none")
+    expect(await css(first, "transition-duration")).toBe("0.12s")
+    // 下線 2px、選択中だけ表示
+    const after = (l: Locator, p: string) => l.evaluate((el, q) => getComputedStyle(el, "::after").getPropertyValue(q), p)
+    expect(await after(first, "height")).toBe("2px")
+    expect(await after(first, "opacity")).toBe("1")
+    expect(await after(tabs.nth(1), "opacity")).toBe("0")
+    expect(sameColor(await css(first, "color"), await token(page, "--foreground"))).toBe(true)
+    expect(sameColor(await css(tabs.nth(1), "color"), await token(page, "--muted-foreground"))).toBe(true)
+    // タブの間 24px
+    const a = await box(tabs.nth(0))
+    const b = await box(tabs.nth(1))
+    expect(Math.round(b.x - (a.x + a.width))).toBe(24)
+    // 内容との間 24px（下線から内容まで）
+    const panel = root.getByRole("tabpanel")
+    expect(Math.round((await box(panel)).y - (a.y + a.height))).toBe(24)
+    // 関連付け
+    await expect(first).toHaveAttribute("aria-selected", "true")
+    const panelId = await first.getAttribute("aria-controls")
+    expect(panelId).toBeTruthy()
+    await expect(page.locator(`[id="${panelId}"]`)).toHaveAttribute("role", "tabpanel")
+    await expect(panel).toHaveAccessibleName("概要")
+    await expect(list).toHaveAccessibleName("山田商事の情報")
+  })
+
+  test("arrow keys select automatically, disabled tabs are skipped", async ({ page }) => {
+    await open(page, "tabs")
+    const root = page.getByTestId("tabs-line")
+    const tabs = root.getByRole("tab")
+    const widths = await tabs.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().width))
+    await tabTo(page, tabs.nth(0))
+    await expectFocusRing(page, tabs.nth(0))
+    await page.keyboard.press("ArrowRight")
+    await expect(tabs.nth(1)).toBeFocused()
+    await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true")
+    await expect(root.getByRole("tabpanel", { name: "契約" })).toContainText("スタンダードプラン")
+    await page.keyboard.press("ArrowRight")
+    await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true")
+    // 無効なタブは選ばれない（フォーカスは移り、無効であることを支援技術に伝える）
+    await page.keyboard.press("ArrowRight")
+    await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true")
+    await expect(tabs.nth(3)).toHaveAttribute("aria-selected", "false")
+    await page.keyboard.press("Home")
+    await expect(tabs.nth(0)).toBeFocused()
+    await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true")
+    // 選択の切り替えでタブの幅は変わらない
+    expect(await tabs.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().width))).toEqual(widths)
+    await expect(tabs.nth(3)).toHaveAttribute("aria-disabled", "true")
+  })
+
+  test("hidden panels are hidden from everyone and keep their input", async ({ page }) => {
+    await open(page, "tabs")
+    const root = page.getByTestId("tabs-line")
+    await expect(root.getByRole("tabpanel")).toHaveCount(1)
+    const hidden = root.locator("[data-slot=tabs-content][hidden]")
+    expect(await hidden.count()).toBe(3)
+    const keep = page.getByTestId("tabs-keep")
+    await page.getByTestId("tabs-keep-input").fill("株式会社山田商事")
+    await keep.getByRole("tab", { name: "請求先" }).click()
+    await expect(page.getByTestId("tabs-keep-input")).toBeHidden()
+    await keep.getByRole("tab", { name: "基本情報" }).click()
+    await expect(page.getByTestId("tabs-keep-input")).toHaveValue("株式会社山田商事")
+  })
+
+  test("manual activation waits for Enter", async ({ page }) => {
+    await open(page, "tabs")
+    const root = page.getByTestId("tabs-manual")
+    const tabs = root.getByRole("tab")
+    await tabTo(page, tabs.nth(0))
+    await page.keyboard.press("ArrowRight")
+    await expect(tabs.nth(1)).toBeFocused()
+    await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true")
+    await page.keyboard.press("Enter")
+    await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true")
+    await expect(root.getByRole("tabpanel", { name: "担当者別の集計" }).getByRole("status")).toHaveText(
+      "担当者別の集計を表示しました"
+    )
+  })
+
+  test("many tabs scroll horizontally without shrinking text", async ({ page }) => {
+    await open(page, "tabs")
+    const list = page.getByTestId("tabs-many").getByRole("tablist")
+    expect(await list.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+    expect(await css(list, "overflow-x")).toBe("auto")
+    const tabs = list.getByRole("tab")
+    expect(await css(tabs.last(), "font-size")).toBe("14px")
+    expect(await css(tabs.last(), "white-space")).toBe("nowrap")
+    // フォーカスの線が切れない余白（4px）
+    expect(await css(list, "padding-top")).toBe("4px")
+    expect(await css(list, "padding-left")).toBe("4px")
+    await tabTo(page, tabs.first())
+    await page.keyboard.press("End")
+    await expect(tabs.last()).toBeFocused()
+    const l = await box(list)
+    const t = await box(tabs.last())
+    expect(t.x + t.width).toBeLessThanOrEqual(l.x + l.width + 1)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  })
+
+  test("filled: compatibility variant", async ({ page }) => {
+    await open(page, "tabs")
+    const list = page.getByTestId("tabs-filled").getByRole("tablist")
+    expect(sameColor(await css(list, "background-color"), await token(page, "--muted"))).toBe(true)
+    const active = list.getByRole("tab", { name: "月" })
+    expect(sameColor(await css(active, "background-color"), await token(page, "--background"))).toBe(true)
+    expect(sameColor(await css(active, "border-top-color"), await token(page, "--input"))).toBe(true)
+    expect(await css(active, "box-shadow")).toBe("none")
+    expect((await box(list)).height).toBe(48)
+    const other = list.getByRole("tab", { name: "年" })
+    expect(await colorContrast(page, await css(other, "color"), await token(page, "--muted"))).toBeGreaterThanOrEqual(4.5)
+    await other.click()
+    await expect(other).toHaveAttribute("aria-selected", "true")
+  })
+
+  test("reduced motion keeps color changes only", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    await open(page, "tabs")
+    const first = page.getByTestId("tabs-line").getByRole("tab").first()
+    expect(await css(first, "transition-property")).not.toContain("transform")
+    expect(await css(first, "transition-property")).not.toContain("translate")
+  })
+})
+
+// ------------------------------------------------------------------ Breadcrumb
+
+test.describe("Breadcrumb", { tag: "@webkit" }, () => {
+  test("links, current position, home name, tokens", async ({ page }) => {
+    await open(page, "breadcrumb")
+    const nav = page.getByTestId("breadcrumb-basic")
+    await expect(nav).toHaveAccessibleName("パンくずリスト")
+    const home = nav.getByRole("link", { name: "ホーム" })
+    await expect(home).toHaveAttribute("href", /#/)
+    expect((await box(home.locator("svg"))).width).toBe(16)
+    await expect(nav.getByRole("link", { name: "顧客", exact: true })).toHaveAttribute("href", /#/)
+    const current = page.getByTestId("breadcrumb-current")
+    await expect(current).toHaveAttribute("aria-current", "page")
+    await expect(current).not.toHaveAttribute("role")
+    expect(await current.evaluate((el) => el.closest("a"))).toBeNull()
+    await expect(nav.getByRole("link")).toHaveCount(2)
+    expect(await css(current, "font-weight")).toBe("500")
+    expect(sameColor(await css(current, "color"), await token(page, "--foreground"))).toBe(true)
+    const link = nav.getByRole("link", { name: "顧客", exact: true })
+    expect(sameColor(await css(link, "color"), await token(page, "--muted-foreground"))).toBe(true)
+    expect(await css(link, "font-size")).toBe("14px")
+    expect(await css(nav.locator("ol"), "column-gap")).toBe("8px")
+    const sep = nav.locator("[data-slot=breadcrumb-separator]").first()
+    await expect(sep).toHaveAttribute("aria-hidden", "true")
+    expect((await box(sep.locator("svg"))).width).toBe(16)
+    for (const el of [nav, nav.locator("ol")]) {
+      expect(await css(el, "background-color")).toBe("rgba(0, 0, 0, 0)")
+      expect(await css(el, "box-shadow")).toBe("none")
+      expect(await css(el, "border-top-width")).toBe("0px")
+    }
+    await tabTo(page, link)
+    await expectFocusRing(page, link)
+  })
+
+  test("deep hierarchy: omitted levels can be shown", async ({ page }) => {
+    await open(page, "breadcrumb")
+    const nav = page.getByTestId("breadcrumb-deep")
+    // ホーム、直近の 2 階層、現在位置
+    await expect(nav.getByRole("link")).toHaveCount(3)
+    await expect(nav.getByRole("link", { name: "請求書" })).toBeVisible()
+    await expect(nav.locator("[aria-current=page]")).toHaveText("2026年11月分")
+    const expand = page.getByTestId("breadcrumb-expand")
+    await expect(expand).toHaveAccessibleName("省略した 3 つの階層を表示")
+    await expand.click()
+    await expect(nav.getByRole("link")).toHaveCount(6)
+    await expect(nav.getByRole("link", { name: "顧客", exact: true })).toBeFocused()
+  })
+
+  test("mobile layout stays inside the width", async ({ page, isMobile }) => {
+    await open(page, "breadcrumb")
+    const nav = page.getByTestId("breadcrumb-responsive")
+    const middle = nav.getByRole("link", { name: "株式会社山田商事" })
+    if (isMobile) {
+      await expect(middle).toBeHidden()
+      await expect(nav.getByText("省略した階層")).toBeAttached()
+    } else {
+      await expect(middle).toBeVisible()
+    }
+    for (const id of ["breadcrumb-responsive", "breadcrumb-long"]) {
+      const list = page.getByTestId(id).locator("ol")
+      expect(await noOverflow(list)).toBe(true)
+      const lb = await box(list)
+      const items = list.locator("li")
+      for (let i = 0; i < (await items.count()); i++) {
+        if (!(await items.nth(i).isVisible())) continue
+        const b = await box(items.nth(i))
+        expect(b.x + b.width).toBeLessThanOrEqual(lb.x + lb.width + 1)
+      }
+    }
+  })
+})
+
+// ------------------------------------------------------------------ Card
+
+test.describe("Card", { tag: "@webkit" }, () => {
+  test("tokens: radius, border, padding, title, no shadow", async ({ page }) => {
+    await open(page, "card")
+    const card = page.getByTestId("card-default")
+    expect(await css(card, "border-top-left-radius")).toBe("20px")
+    expect(await css(card, "border-top-width")).toBe("1px")
+    expect(sameColor(await css(card, "border-top-color"), await token(page, "--border"))).toBe(true)
+    expect(sameColor(await css(card, "background-color"), await token(page, "--card"))).toBe(true)
+    expect(await css(card, "padding-left")).toBe("24px")
+    expect(await css(card, "row-gap")).toBe("16px")
+    expect(await css(card, "box-shadow")).toBe("none")
+    const title = page.getByTestId("card-default-title")
+    expect(await css(title, "font-size")).toBe("20px")
+    expect(await css(title, "font-weight")).toBe("600")
+    expect(await css(page.getByTestId("card-sm"), "padding-left")).toBe("16px")
+    expect(await css(page.getByTestId("card-sm"), "border-top-left-radius")).toBe("20px")
+    expect(await css(page.getByTestId("card-lg"), "padding-left")).toBe("32px")
+    expect(await css(page.getByTestId("card-lg"), "border-top-left-radius")).toBe("24px")
+    // 大きさを指定しても、className で余白を上書きできる
+    expect(await css(page.getByTestId("card-sm-override"), "padding-left")).toBe("0px")
+    for (const c of await page.locator("[data-slot=card]").all()) expect(await css(c, "box-shadow")).toBe("none")
+  })
+
+  test("long content and responsive grid", async ({ page, isMobile }) => {
+    await open(page, "card")
+    const long = page.getByTestId("card-long")
+    expect(await noOverflow(long)).toBe(true)
+    expect(await noOverflow(long.locator("[data-slot=card-title]"))).toBe(true)
+    const cards = page.getByTestId("card-grid").locator("[data-slot=card]")
+    const xs = new Set(await cards.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().x))))
+    expect(xs.size).toBe(isMobile ? 1 : 2)
+    for (const c of await cards.all()) expect(await noOverflow(c)).toBe(true)
+  })
+
+  test("interactive card: whole card is the link, with hover and focus", async ({ page, isMobile }) => {
+    await open(page, "card")
+    const card = page.getByTestId("card-link").first()
+    await card.scrollIntoViewIfNeeded()
+    const b = await box(card)
+    const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest("a")?.textContent, [
+      b.x + b.width - 12,
+      b.y + b.height - 8,
+    ])
+    expect(hit).toBe("株式会社山田商事")
+    if (!isMobile) {
+      await card.hover()
+      await page.waitForTimeout(200)
+      expect(sameColor(await css(card, "background-color"), await token(page, "--accent"))).toBe(true)
+    }
+    await tabTo(page, card.getByRole("link"))
+    await expectFocusRing(page, card)
+  })
+})
+
+// ------------------------------------------------------------------ Accordion
+
+test.describe("Accordion", { tag: "@webkit" }, () => {
+  test("tokens and heading structure", async ({ page }) => {
+    await open(page, "accordion")
+    const root = page.getByTestId("accordion-multiple")
+    const trigger = root.getByRole("button").first()
+    expect((await box(trigger)).height).toBeGreaterThanOrEqual(48)
+    expect(await css(trigger, "font-size")).toBe("16px")
+    expect(await css(trigger, "font-weight")).toBe("500")
+    expect((await box(trigger.locator("svg"))).width).toBe(20)
+    await expect(root.getByRole("heading", { level: 3 })).toHaveCount(3)
+    await expect(root.getByRole("heading", { level: 3 }).first().getByRole("button")).toHaveCount(1)
+    const item = root.locator("[data-slot=accordion-item]").first()
+    expect(await css(item, "border-bottom-width")).toBe("1px")
+    expect(sameColor(await css(item, "border-bottom-color"), await token(page, "--border"))).toBe(true)
+    expect(await css(item, "background-color")).toBe("rgba(0, 0, 0, 0)")
+    expect(await css(item, "box-shadow")).toBe("none")
+    expect(await css(root.locator("[data-slot=accordion-item]").last(), "border-bottom-width")).toBe("0px")
+    const panel = root.locator("[data-slot=accordion-content]").first()
+    expect(await css(panel, "transition-duration")).toBe("0.24s")
+    expect(await css(panel.locator("[data-slot=accordion-content-inner]"), "padding-bottom")).toBe("16px")
+  })
+
+  test("multiple items open at the same time", async ({ page }) => {
+    await open(page, "accordion")
+    const root = page.getByTestId("accordion-multiple")
+    const [a, b] = [root.getByRole("button").nth(0), root.getByRole("button").nth(1)]
+    await a.click()
+    await b.click()
+    await expect(a).toHaveAttribute("aria-expanded", "true")
+    await expect(b).toHaveAttribute("aria-expanded", "true")
+    await expect(root.getByRole("region")).toHaveCount(2)
+    // アイコンの向き
+    expect(await css(a.locator("svg"), "rotate")).not.toBe("none")
+  })
+
+  test("single item mode closes the other item", async ({ page }) => {
+    await open(page, "accordion")
+    const root = page.getByTestId("accordion-single")
+    const [a, b] = [root.getByRole("button").nth(0), root.getByRole("button").nth(1)]
+    await expect(a).toHaveAttribute("aria-expanded", "true")
+    await b.click()
+    await expect(b).toHaveAttribute("aria-expanded", "true")
+    await expect(a).toHaveAttribute("aria-expanded", "false")
+  })
+
+  test("keyboard: Enter and Space toggle, focus ring", async ({ page }) => {
+    await open(page, "accordion")
+    const trigger = page.getByTestId("accordion-multiple").getByRole("button").first()
+    await tabTo(page, trigger)
+    await expectFocusRing(page, trigger)
+    await page.keyboard.press("Enter")
+    await expect(trigger).toHaveAttribute("aria-expanded", "true")
+    const panelId = await trigger.getAttribute("aria-controls")
+    await expect(page.locator(`[id="${panelId}"]`)).toBeVisible()
+    await page.keyboard.press("Space")
+    await expect(trigger).toHaveAttribute("aria-expanded", "false")
+    await expect(page.locator(`[id="${panelId}"]`)).toBeHidden()
+  })
+
+  test("dynamic height and kept input", async ({ page }) => {
+    await open(page, "accordion")
+    const root = page.getByTestId("accordion-dynamic")
+    const panel = root.locator("[data-slot=accordion-content]")
+    const before = (await box(panel)).height
+    await root.getByRole("button", { name: "さらに表示" }).click()
+    await root.getByRole("button", { name: "さらに表示" }).click()
+    await expect(page.getByTestId("accordion-dynamic-list").locator("li")).toHaveCount(3)
+    await expect.poll(async () => (await box(panel)).height).toBeGreaterThan(before)
+    expect(await panel.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
+
+    const keep = page.getByTestId("accordion-keep")
+    const trigger = keep.getByRole("button", { name: "社内メモ" })
+    await trigger.click()
+    // 中の入力欄のフォーカスの線（外側 4px）が、内容の領域で切れない
+    const keepPanel = keep.locator("[data-slot=accordion-content]")
+    expect(await css(keepPanel, "padding-left")).toBe("4px")
+    expect(await css(keepPanel.locator("[data-slot=accordion-content-inner]"), "padding-top")).toBe("4px")
+    await page.getByTestId("accordion-keep-input").fill("決裁は4月")
+    await trigger.click()
+    await expect(page.getByTestId("accordion-keep-input")).toBeHidden()
+    await trigger.click()
+    await expect(page.getByTestId("accordion-keep-input")).toHaveValue("決裁は4月")
+  })
+
+  test("reduced motion removes the height animation", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    await open(page, "accordion")
+    const root = page.getByTestId("accordion-multiple")
+    expect(await css(root.locator("[data-slot=accordion-content]").first(), "transition-duration")).toBe("0s")
+    expect(await css(root.getByRole("button").first().locator("svg"), "transition-duration")).toBe("0s")
+  })
+
+  test("long labels wrap", async ({ page }) => {
+    await open(page, "accordion")
+    for (const t of await page.getByTestId("accordion-long").getByRole("button").all()) {
+      expect(await noOverflow(t)).toBe(true)
+    }
+  })
+})
+
+// ------------------------------------------------------------------ Separator
+
+test.describe("Separator", { tag: "@webkit" }, () => {
+  test("orientation, thickness, color", async ({ page }) => {
+    await open(page, "separator")
+    const h = page.getByTestId("separator-horizontal")
+    expect((await box(h)).height).toBe(1)
+    expect(sameColor(await css(h, "background-color"), await token(page, "--border"))).toBe(true)
+    expect(await css(h, "box-shadow")).toBe("none")
+    expect(await css(h, "background-image")).toBe("none")
+    const v = page.getByTestId("separator-vertical")
+    expect((await box(v)).width).toBe(1)
+    expect((await box(v)).height).toBe(24)
+    await expect(v).toHaveAttribute("aria-orientation", "vertical")
+  })
+
+  test("semantic and decorative", async ({ page }) => {
+    await open(page, "separator")
+    await expect(page.getByTestId("separator-semantic")).toHaveAttribute("role", "separator")
+    const d = page.getByTestId("separator-decorative")
+    await expect(d).toHaveAttribute("role", "none")
+    await expect(d).not.toHaveAttribute("aria-orientation")
+    const roles = await page.locator("main").getByRole("separator").evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))
+    expect(roles).not.toContain("separator-decorative")
+    expect(roles).toContain("separator-semantic")
+  })
+})
+
+// ------------------------------------------------------------------ 業務アプリケーション
+
+test.describe("Business app", { tag: "@webkit" }, () => {
+  test("content width follows the purpose of the page", async ({ page, isMobile }) => {
+    test.skip(isMobile, "幅の上限はデスクトップで確認する")
+    await page.setViewportSize({ width: 1920, height: 1000 })
+    const width = async (p: string) => {
+      await page.goto(`/#/app?page=${p}`)
+      await page.getByRole("heading", { level: 1 }).waitFor()
+      return (await box(page.getByTestId("app-main").locator(":scope > div").last())).width
+    }
+    expect(await width("home")).toBe(1440)
+    expect(await width("customer&id=yamada")).toBe(960)
+    expect(await width("settings")).toBe(640)
+    expect(await width("customers")).toBe(1920 - 240)
+  })
+
+  test("page padding and breadcrumb reflect the location", async ({ page, isMobile }) => {
+    await page.goto("/#/app?page=customer&id=yamada")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    const content = page.getByTestId("app-main").locator(":scope > div").last()
+    expect(await css(content, "padding-left")).toBe(isMobile ? "16px" : "24px")
+    const crumbs = page.getByRole("navigation", { name: "パンくずリスト" })
+    await expect(crumbs.locator("[aria-current=page]")).toHaveText("株式会社山田商事")
+    if (!isMobile) {
+      await crumbs.getByRole("link", { name: "顧客", exact: true }).click()
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText("顧客")
+      await expect(page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "顧客", exact: true })).toHaveAttribute(
+        "aria-current",
+        "page"
+      )
+    }
+  })
+})
+
+// ------------------------------------------------------------------ スクリーンショット
+
+test.describe("screenshots", () => {
+  test("capture", async ({ page, isMobile }, info) => {
+    const dir = join(info.project.testDir, "..", "screenshots", info.project.name)
+    for (const id of pages) {
+      await open(page, id)
+      await page.screenshot({ path: `${dir}/nav-${id}.png`, fullPage: true })
+    }
+    for (const p of ["home", "customers", "customer&id=yamada", "settings"]) {
+      await page.goto(`/#/app?page=${p}`)
+      await page.getByRole("heading", { level: 1 }).waitFor()
+      await page.screenshot({ path: `${dir}/app-${p.split("&")[0]}.png`, fullPage: true })
+    }
+    if (isMobile) {
+      await page.goto("/#/app?page=customers")
+      await page.getByRole("button", { name: "メニューを開く" }).click()
+      await page.getByRole("dialog").waitFor()
+      await page.waitForTimeout(400)
+      await page.screenshot({ path: `${dir}/app-sidebar-mobile-open.png` })
+      return
+    }
+    await page.goto("/#/app?page=customer&id=yamada")
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.screenshot({ path: `${dir}/app-sidebar-expanded.png` })
+    await page.getByRole("button", { name: "メニューを折りたたむ" }).click()
+    await page.waitForTimeout(500)
+    await page.screenshot({ path: `${dir}/app-sidebar-collapsed.png` })
+    await page.evaluate(() => localStorage.removeItem("flow-design-preview:sidebar-open"))
+    await open(page, "sidebar")
+    const nav = page.getByTestId("sidebar-basic")
+    await nav.getByRole("link", { name: "請求書" }).hover()
+    await page.waitForTimeout(200)
+    await nav.screenshot({ path: `${dir}/sidebar-hover.png` })
+    await page.mouse.move(0, 0)
+  })
+})
