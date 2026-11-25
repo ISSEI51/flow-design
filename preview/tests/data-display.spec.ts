@@ -176,7 +176,10 @@ test.describe("Table", { tag: "@webkit" }, () => {
       await normal.hover()
       expect(await bg(normal)).not.toBe(normalBg)
     }
-    // 選択中は交互の背景色より優先する（偶数行でも選択中の面）
+    // 選択中は交互の背景色より優先する（偶数行でも選択中の面）。
+    // ホバーを外し、背景色のトランジション（120ms）が終わってから比べる
+    await page.mouse.move(0, 0)
+    await page.waitForTimeout(250)
     expect(await bg(selected)).toBe(await bg(selectedEven))
     expect(await bg(selectedEven)).not.toBe(await bg(even))
     // 詳細を表示中：先頭のセルに 2px の線
