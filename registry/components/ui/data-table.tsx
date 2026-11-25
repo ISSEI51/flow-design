@@ -30,13 +30,15 @@ import {
   type RowData,
   type Table as TanstackTable,
 } from "@tanstack/react-table"
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronsUpDown, CircleAlert, LoaderCircle, Pin, PinOff, Search, X } from "lucide-react"
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronsUpDown, LoaderCircle, Pin, PinOff, Search, X } from "lucide-react"
 
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { PaginationControls } from "@/components/ui/pagination"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -63,6 +65,7 @@ import { cn } from "@/lib/utils"
 // - DataTableAppliedFilters：個別に表示していない条件と「すべて解除」
 // - DataTableColumnOptions：列の表示・非表示、並び替え、固定（Popover などの中に置く）
 // - DataTablePagination：Pagination を表の状態につなぐ
+// - DataTableMessage：データ未登録、検索結果なし、取得失敗（Feedback の Alert）。読み込み中は Feedback の Skeleton
 // 検索の処理、API 通信、権限、CSV 出力は持たない。製品の責務とする。
 // 定義は docs/web/components/data-table.md を参照。
 
@@ -270,7 +273,8 @@ function DataTable<TData extends RowData>({
       <TableRow key={`loading-${i}`} aria-hidden="true" data-slot="data-table-loading-row">
         {leafColumns.map((column) => (
           <TableCell key={column.id} style={pinStyle(column, false)} className={pinEdge(column)}>
-            <span className="block h-4 w-3/4 max-w-40 rounded-xs bg-muted motion-safe:animate-pulse" />
+            {/* 読み込み後の文字の行と同じ高さの Skeleton。行全体は aria-hidden にし、読み込み中は aria-busy と状態の文で伝える。 */}
+            <Skeleton className="h-4 w-3/4 max-w-40 rounded-sm" />
           </TableCell>
         ))}
       </TableRow>
@@ -843,6 +847,8 @@ function DataTablePagination<TData extends RowData>({
 }
 
 // 取得失敗、データ未登録、検索結果なしの表示。表の本文の中に置く。
+// 取得失敗は Feedback の Alert（destructive）で、原因と再試行の手段を示す。0 件の表示と混同させない。
+// データ未登録と検索結果なしは、見出しと説明と次の操作だけを置く（独立した Empty コンポーネントは対象外）。
 function DataTableMessage({
   title,
   description,
@@ -856,17 +862,20 @@ function DataTableMessage({
   tone?: "default" | "error"
   className?: string
 }) {
+  if (tone === "error") {
+    return (
+      <div data-slot="data-table-message-content" data-tone={tone} className={cn("py-6", className)}>
+        <Alert variant="destructive" role="alert">
+          <AlertTitle>{title}</AlertTitle>
+          {description && <AlertDescription>{description}</AlertDescription>}
+          {action && <AlertAction>{action}</AlertAction>}
+        </Alert>
+      </div>
+    )
+  }
   return (
-    <div
-      role={tone === "error" ? "alert" : undefined}
-      data-slot="data-table-message-content"
-      data-tone={tone}
-      className={cn("flex flex-col items-start gap-2 py-10", className)}
-    >
-      <p className="flex items-center gap-2 text-body font-medium">
-        {tone === "error" && <CircleAlert aria-hidden="true" className="size-5 shrink-0 text-destructive" />}
-        {title}
-      </p>
+    <div data-slot="data-table-message-content" data-tone={tone} className={cn("flex flex-col items-start gap-2 py-10", className)}>
+      <p className="text-body font-medium">{title}</p>
       {description && <p className="text-ui text-muted-foreground [word-break:auto-phrase]">{description}</p>}
       {action && <div className="mt-2 flex flex-wrap gap-2">{action}</div>}
     </div>

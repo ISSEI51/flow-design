@@ -6,7 +6,7 @@
 | --- | --- |
 | 実装 | [`registry/components/ui/data-table.tsx`](../../../registry/components/ui/data-table.tsx) |
 | 元にした実装 | shadcn/ui の Data Table の手順（TanStack Table を使う） |
-| 状態 | 初期実装（Overlay・Feedback の統合待ち） |
+| 状態 | 初期実装 |
 
 Data Display に共通する判断基準は [data-display.md](data-display.md) にまとめている。
 
@@ -112,10 +112,10 @@ const table = useTable({
 
 | 状態 | 指定 | 表示 |
 | --- | --- | --- |
-| 読み込み中 | `status="loading"` | `loadingRowCount` 行の仮の表示。表に `aria-busy="true"`、読み上げの領域に「読み込み中」 |
+| 読み込み中 | `status="loading"` | `loadingRowCount` 行の Skeleton（Feedback）。表に `aria-busy="true"`、読み上げの領域に「読み込み中」 |
 | データ未登録 | `status="ready"`、0 行、絞り込みなし | `empty` |
 | 検索結果なし | `status="ready"`、0 行、絞り込みあり | `noResults` |
-| 取得失敗 | `status="error"` | `error`。行を 0 件として表示しない |
+| 取得失敗 | `status="error"` | `error`。`DataTableMessage tone="error"` は Feedback の Alert（`destructive`、`role="alert"`）で原因と再試行を示す。行を 0 件として表示しない |
 | 再取得中 | `status="refreshing"` | 表示中の行を残す。表に `aria-busy="true"`。件数の行に `DataTableRefreshing` を置く |
 
 `empty`、`noResults`、`error` には `DataTableMessage` を使う。`title`、`description`、`action`（Button）を渡し、`tone="error"` ではアイコンと `role="alert"` が付く。表示は表の本文の 1 行で、横にスクロールしても表示中の範囲に残る（`sticky`）。
@@ -218,14 +218,19 @@ const table = useTable({
 | 列の並び替えと幅の変更をドラッグだけにする | キーボードとタッチで操作できない | ボタンと矢印キー |
 | 業務の一覧で無限スクロールを標準にする | 現在の位置と全体の量がわからない | Pagination |
 
-## 統合待ちのこと
+## 他のコンポーネントとの接続
 
-次のコンポーネントは並行して開発中で、main に入っていない。Data Table の部品は独自に実装せず、統合後に接続する。それまでのプレビューは、仮の表示で操作の流れを確かめている。
+Overlay と Feedback のコンポーネントが main に統合された後に接続した。Data Table の部品は、これらを独自に実装していない。
 
-| 用途 | 使うコンポーネント | 現在のプレビュー |
+| 用途 | 使うコンポーネント | 接続した場所 |
 | --- | --- | --- |
-| 行の詳細 | Sheet（`mode="view"`、非モーダル） | 表の横（狭い画面では下）に並べた領域 |
-| その他の条件、列の表示 | Popover | ボタンの下に開く領域（`aria-expanded`） |
-| 削除の確認 | Alert Dialog | 件数の行の中の確認 |
-| 行の操作 | Dropdown Menu | 行の中の Button |
-| 読み込み中 | Skeleton（Feedback） | `DataTable` の中の仮の表示（`bg-muted`、`animate-pulse`） |
+| 行の詳細 | Sheet（`mode="view"`、非モーダル） | プレビューの `CustomerDetail`。閉じた後は `finalFocus` で、開いた行の会社名のボタンにフォーカスを戻す |
+| その他の条件、列の表示 | Popover | プレビューの一覧の上の設定。閉じた後はボタンにフォーカスが戻る |
+| 危険な一括操作の確認 | Alert Dialog | プレビューの一括削除。件数を見出しに含め、実行のボタンに件数を書く |
+| 行の操作 | Dropdown Menu | プレビューの行の「…」。メニューの項目は Portal に描かれ、行の詳細を開かない |
+| 操作の結果 | Toast | プレビューの一括削除、メールの作成、ID のコピー |
+| 読み込み中 | Skeleton | `DataTable` の `status="loading"` |
+| 取得失敗 | Alert | `DataTableMessage` の `tone="error"` |
+
+- 閲覧の Sheet は一覧の右側を覆う。行の詳細を開いたまま別の行を押す操作は、Sheet に覆われていない左側の列（会社名など）で行う。主要な列を左に置き、固定する。
+- 狭い画面では Sheet が画面の幅になるため、別の行を見るときは詳細を閉じてから選ぶ。

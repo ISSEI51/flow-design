@@ -45,7 +45,7 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 | 折れ線 | 2px。データ点は通常は表示せず、ホバーとフォーカスで半径 4px の点を表示する | `chartStyles.line` |
 | 予測の線 | 2px の破線（6px と 4px の繰り返し） | `chartStyles.forecastLine` |
 | 棒 | 値の側の角を 4px 丸める | `chartStyles.barRadius` |
-| Tooltip | 角丸 12px、`popover` の面、1px の `border`、`shadow-popover`、文字 12px。数値は `tabular-nums` | Overlay の Popover と同じ面、線、影 |
+| Tooltip | 角丸 12px、`popover` の面、1px の `border`、`shadow-popover`、文字 12px、余白は縦 8px・横 12px。数値は `tabular-nums` | Overlay の Popover と同じ面、線、影。文字の大きさと余白は Feedback の Tooltip と同じ |
 | 凡例 | 文字 12px、`muted-foreground`。系列の印は Tooltip と同じ形 | `ChartLegendContent` |
 | 動き | 240ms、`ease-out` | `chartAnimation` |
 | 外枠、影 | なし | |
@@ -57,6 +57,8 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 | `ChartContainer` | `config` の色を `--color-<key>` として出力し、`ResponsiveContainer` で親の幅に合わせる。既定の縦横比は 16:9（`aspect-video`） |
 | `ChartConfig` | 系列ごとの `label`、`color`（または `theme`）、`icon`。Flow Design で `indicator`（`dot`、`line`、`dashed`）を追加した |
 | `ChartTooltip`、`ChartTooltipContent` | Tooltip。`valueFormatter` で単位を付ける（例：`(v) => \`${v}万円\``） |
+
+グラフの Tooltip は、Feedback の Tooltip（`foreground` の濃い面に `background` の文字）にしない。系列の色の印を濃い面に置くと、`chart-3`（#104e64）など濃い色の印が面と区別できなくなるためである。複数の系列の名前と値を並べる内容は、Popover と同じ明るい面で示す。
 | `ChartLegend`、`ChartLegendContent` | 凡例 |
 | `ChartDataTable` | グラフと同じ数値の表（Table の `compact`）。値がない場合は「—」と「データなし」 |
 | `chartAnimation`、`chartStyles` | 系列と軸に展開して使う値 |

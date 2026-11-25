@@ -5,7 +5,7 @@ Table、Data Table、Pagination、Chart に共通する判断基準。個別の�
 | コンポーネント | 資料 | 状態 |
 | --- | --- | --- |
 | Table | [table.md](table.md) | 初期実装 |
-| Data Table | [data-table.md](data-table.md) | 初期実装（Overlay・Feedback の統合待ち） |
+| Data Table | [data-table.md](data-table.md) | 初期実装 |
 | Pagination | [pagination.md](pagination.md) | 初期実装 |
 | Chart | [chart.md](chart.md) | 初期実装 |
 
@@ -109,7 +109,7 @@ Table、Data Table、Pagination、Chart に共通する判断基準。個別の�
 
 | 状態 | 表示 | 次の操作 |
 | --- | --- | --- |
-| 読み込み中 | Skeleton（行の形の仮の表示） | 待つ |
+| 読み込み中 | Skeleton（行の形） | 待つ |
 | データ未登録 | 登録されていないことと、登録した後に表示されるもの | 最初の登録 |
 | 検索結果なし | 条件に一致しないこと | 条件の変更、解除 |
 | 取得失敗 | 取得できなかったことと原因 | 再試行 |
@@ -169,8 +169,8 @@ Table、Data Table、Pagination、Chart に共通する判断基準。個別の�
 | --- | --- | --- |
 | Forms | Checkbox（行の選択、複数選択の条件、列の表示）、Select（単一選択の条件、表示件数）、Input（検索欄）、Field | 統合済み |
 | Button | 一括操作、再試行、ページ送り | 統合済み |
-| Overlay | Sheet（行の詳細、`mode="view"`）、Popover（その他の条件、列の表示）、Alert Dialog（危険な一括操作の確認）、Dropdown Menu（行の操作） | 並行して開発中。統合待ち |
-| Feedback | Skeleton（読み込み中）。データの状態の表示 | 統合待ち（main にも並行の作業にもない） |
-| Navigation & Layout | 業務ダッシュボードの画面の構成 | 並行して開発中。統合待ち |
+| Overlay | Sheet（行の詳細、`mode="view"`）、Popover（その他の条件、列の表示）、Alert Dialog（危険な一括操作の確認）、Dropdown Menu（行の操作） | 接続済み |
+| Feedback | Skeleton（読み込み中）、Alert（取得失敗）、Toast（操作の結果） | 接続済み |
+| Navigation & Layout | 業務ダッシュボードの画面の構成（カードで囲まず、余白と見出しで区切る方針） | 方針に従っている。Sidebar などの部品は使っていない |
 
-統合待ちのコンポーネントは独自に実装していない。統合までのプレビューの仮の表示は [data-table.md](data-table.md#統合待ちのこと) にまとめている。依存するコンポーネントを接続するまで、Data Table は初期実装の状態にとどめる。
+依存するコンポーネントは独自に実装していない。Overlay と Feedback が main に統合された後に接続した（[data-table.md](data-table.md#他のコンポーネントとの接続)）。

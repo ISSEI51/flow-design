@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useRef, type ReactNode, type RefObject } from "react"
+import { createContext, useContext, type ReactNode } from "react"
 import { createColumnHelper, type FilterFn } from "@tanstack/react-table"
-import { Mail, X } from "lucide-react"
+import { Copy, Ellipsis, Mail } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -10,7 +10,9 @@ import {
   DataTableRowTrigger,
   type DataTableFeatures,
 } from "@/components/ui/data-table"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Sheet, SheetBody, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { TableNoValue } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
@@ -126,7 +128,7 @@ export const customerColumns = helper.columns([
   helper.display({
     id: "actions",
     header: () => <span className="sr-only">操作</span>,
-    cell: ({ row }) => <ComposeButton customer={row.original} />,
+    cell: ({ row }) => <RowActions customer={row.original} />,
     size: 64,
     enableSorting: false,
     enableHiding: false,
@@ -137,21 +139,29 @@ export const customerColumns = helper.columns([
   }),
 ])
 
-// 行の中の操作。押しても行の詳細は開かない（DataTable が行の中の button を除く）。
-export const ComposeContext = createContext<(customer: Customer) => void>(() => {})
+// 行の中の操作（Dropdown Menu）。押しても行の詳細は開かない（DataTable が行の中の button と Portal を除く）。
+export const RowActionContext = createContext<(action: "compose" | "copy", customer: Customer) => void>(() => {})
 
-function ComposeButton({ customer }: { customer: Customer }) {
-  const compose = useContext(ComposeContext)
+function RowActions({ customer }: { customer: Customer }) {
+  const run = useContext(RowActionContext)
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      aria-label={`${customer.company}にメールを作成`}
-      onClick={() => compose(customer)}
-      className="pointer-coarse:size-12"
-    >
-      <Mail />
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<Button variant="ghost" size="icon-sm" aria-label={`${customer.company}の操作`} className="pointer-coarse:size-12" />}
+      >
+        <Ellipsis />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => run("compose", customer)}>
+          <Mail />
+          メールを作成
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => run("copy", customer)}>
+          <Copy />
+          顧客IDをコピー
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -197,71 +207,46 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   )
 }
 
-// 行の詳細。Overlay の Sheet（閲覧・非モーダル）が main に入るまでの、プレビュー専用の仮の表示。
-// Sheet を独自に実装しないため、一覧の横（狭い画面では下）に並べる。統合後は <Sheet mode="view"> に置き換える。
+// 行の詳細。閲覧の Sheet（非モーダル）で開く。一覧を操作しながら、別の行の詳細に切り替えられる。
+// 開くとフォーカスを Sheet に移し、閉じると開いた行の会社名のボタンに戻す。
 export function CustomerDetail({
   customer,
   onClose,
-  headingRef,
+  returnFocus,
 }: {
-  customer: Customer
+  customer: Customer | null
   onClose: () => void
-  headingRef: RefObject<HTMLHeadingElement | null>
+  /** 閉じた後にフォーカスを戻す要素 */
+  returnFocus: () => HTMLElement | null
 }) {
   return (
-    <aside
-      aria-labelledby="customer-detail-title"
-      data-testid="customer-detail"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose()
-      }}
-      className="min-w-0 border-t border-border pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6"
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-caption text-muted-foreground">{customer.id}</p>
-          <h3 id="customer-detail-title" ref={headingRef} tabIndex={-1} className="mt-1 text-heading [word-break:auto-phrase] outline-none">
-            {customer.company}
-          </h3>
-        </div>
-        <Button variant="ghost" size="icon-sm" aria-label="詳細を閉じる" onClick={onClose} className="pointer-coarse:size-12">
-          <X />
-        </Button>
-      </div>
-      <dl className="mt-6 grid gap-3 text-ui">
-        <DetailRow label="契約状況">
-          <StatusText status={customer.status} />
-        </DetailRow>
-        <DetailRow label="担当者">{customer.owner}</DetailRow>
-        <DetailRow label="地域">{customer.region}</DetailRow>
-        <DetailRow label="業種">{customer.industry}</DetailRow>
-        <DetailRow label="月額">{customer.monthlyFee === null ? <TableNoValue label="未設定" /> : formatYen(customer.monthlyFee)}</DetailRow>
-        <DetailRow label="利用者数">{customer.seats.toLocaleString("ja-JP")}人</DetailRow>
-        <DetailRow label="更新日">{customer.renewalDate ? formatDate(customer.renewalDate) : <TableNoValue label="未定" />}</DetailRow>
-        <DetailRow label="電話番号">{customer.phone}</DetailRow>
-        <DetailRow label="メール">{customer.email}</DetailRow>
-        <DetailRow label="備考">{customer.note ?? <TableNoValue label="なし" />}</DetailRow>
-      </dl>
-      <p className="mt-6 text-caption text-muted-foreground">仮の表示。Overlay の Sheet の統合後に、非モーダルの Sheet で表示する。</p>
-    </aside>
+    <Sheet mode="view" open={customer !== null} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent data-testid="customer-detail" closeLabel="詳細を閉じる" finalFocus={() => returnFocus() ?? true}>
+        {customer && (
+          <>
+            <SheetHeader>
+              <SheetTitle className="[word-break:auto-phrase]">{customer.company}</SheetTitle>
+              <SheetDescription>{customer.id}</SheetDescription>
+            </SheetHeader>
+            <SheetBody>
+              <dl className="grid gap-3 text-ui">
+                <DetailRow label="契約状況">
+                  <StatusText status={customer.status} />
+                </DetailRow>
+                <DetailRow label="担当者">{customer.owner}</DetailRow>
+                <DetailRow label="地域">{customer.region}</DetailRow>
+                <DetailRow label="業種">{customer.industry}</DetailRow>
+                <DetailRow label="月額">{customer.monthlyFee === null ? <TableNoValue label="未設定" /> : formatYen(customer.monthlyFee)}</DetailRow>
+                <DetailRow label="利用者数">{customer.seats.toLocaleString("ja-JP")}人</DetailRow>
+                <DetailRow label="更新日">{customer.renewalDate ? formatDate(customer.renewalDate) : <TableNoValue label="未定" />}</DetailRow>
+                <DetailRow label="電話番号">{customer.phone}</DetailRow>
+                <DetailRow label="メール">{customer.email}</DetailRow>
+                <DetailRow label="備考">{customer.note ?? <TableNoValue label="なし" />}</DetailRow>
+              </dl>
+            </SheetBody>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
   )
-}
-
-// 詳細を開いたら見出しにフォーカスを移し、閉じたら開いた行のボタンに戻す。
-export function useDetailFocus(openId: string | null) {
-  const headingRef = useRef<HTMLHeadingElement>(null)
-  const returnTo = useRef<string | null>(null)
-  const container = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (openId) {
-      returnTo.current = openId
-      headingRef.current?.focus({ preventScroll: true })
-      if (window.matchMedia("(max-width: 63.99rem)").matches) headingRef.current?.scrollIntoView({ block: "nearest" })
-    } else if (returnTo.current) {
-      const id = returnTo.current
-      returnTo.current = null
-      container.current?.querySelector<HTMLElement>(`[data-row-id="${id}"] [data-slot=data-table-row-trigger]`)?.focus()
-    }
-  }, [openId])
-  return { headingRef, container }
 }

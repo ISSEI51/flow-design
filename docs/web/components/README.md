@@ -33,7 +33,7 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Accordion | [accordion.md](accordion.md) | 初期実装 |
 | Separator | [separator.md](separator.md) | 初期実装 |
 | Table | [table.md](table.md) | 初期実装 |
-| Data Table | [data-table.md](data-table.md) | 初期実装（Overlay・Feedback の統合待ち） |
+| Data Table | [data-table.md](data-table.md) | 初期実装 |
 | Pagination | [pagination.md](pagination.md) | 初期実装 |
 | Chart | [chart.md](chart.md) | 初期実装 |
 

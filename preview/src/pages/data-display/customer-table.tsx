@@ -12,6 +12,16 @@ import {
 } from "@tanstack/react-table"
 import { ChevronDown, Columns3, Mail, SlidersHorizontal, Trash2 } from "lucide-react"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -30,6 +40,8 @@ import {
   type DataTableStatus,
 } from "@/components/ui/data-table"
 import { Field, FieldItem, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
+import { Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger } from "@/components/ui/popover"
+import { useToast } from "@/components/ui/toast"
 
 import {
   customers as allCustomers,
@@ -43,7 +55,7 @@ import {
   type CustomerPage,
   type CustomerQuery,
 } from "../../data/data-display/customers"
-import { ComposeContext, CustomerDetail, FilterSelect, customerColumns, useDetailFocus } from "./customer-parts"
+import { CustomerDetail, FilterSelect, RowActionContext, customerColumns } from "./customer-parts"
 
 // 顧客管理の画面。検索、絞り込み、並べ替え、行の選択と一括操作、列の設定、ページ送り、詳細の表示を組み合わせる。
 // mode="client" … 全件をブラウザに持ち、TanStack Table が絞り込み、並べ替え、ページ送りを行う
@@ -62,29 +74,37 @@ function useIsNarrow() {
   return narrow
 }
 
-// 開閉する設定の欄。Overlay の Popover が main に入るまでの仮の表示（ボタンの下に開く領域）。
-function Disclosure({
-  id,
+// 一覧の上の設定（その他の条件、列の表示）。Popover で開く。
+function SettingsPopover({
   label,
   icon,
   count,
-  open,
-  onOpenChange,
+  title,
+  testId,
+  children,
 }: {
-  id: string
   label: string
   icon: ReactNode
   count?: number
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  title: string
+  testId: string
+  children: ReactNode
 }) {
   return (
-    <Button variant="outline" aria-expanded={open} aria-controls={id} onClick={() => onOpenChange(!open)} className="text-ui">
-      {icon}
-      {label}
-      {count ? <span className="tabular-nums">（{count}）</span> : null}
-      <ChevronDown className="motion-safe:transition-transform motion-safe:duration-(--duration-normal) [[aria-expanded=true]_&]:rotate-180" />
-    </Button>
+    <Popover>
+      <PopoverTrigger render={<Button variant="outline" className="text-ui" data-testid={testId} />}>
+        {icon}
+        {label}
+        {count ? <span className="tabular-nums">（{count}）</span> : null}
+        <ChevronDown className="motion-safe:transition-transform motion-safe:duration-(--duration-normal) [[data-popup-open]_&]:rotate-180" />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[min(22.5rem,calc(100vw-2rem))]">
+        <PopoverHeader>
+          <PopoverTitle>{title}</PopoverTitle>
+        </PopoverHeader>
+        {children}
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -100,13 +120,11 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(narrow ? { company: 168 } : {})
   const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(initialPinning)
   const [openId, setOpenId] = useState<string | null>(null)
-  const [moreOpen, setMoreOpen] = useState(false)
-  const [columnsOpen, setColumnsOpen] = useState(false)
   const [allMatching, setAllMatching] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [notice, setNotice] = useState("")
   const [data, setData] = useState<Customer[]>(allCustomers)
-  const { headingRef, container } = useDetailFocus(openId)
+  const container = useRef<HTMLDivElement>(null)
+  const { toast } = useToast()
 
   // ---------------------------------------------------------------- server
   const [page, setPage] = useState<CustomerPage>({ rows: [], total: 0 })
@@ -201,7 +219,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
   const clearAll = () => updateFilters(noFilters)
   const anyFilter = Boolean(filters.search || filters.status || filters.owner || filters.regions.length)
 
-  // Popover（仮の表示）の中の条件だけを、解除できる形で一覧の上に示す。
+  // Popover の中の条件だけを、解除できる形で一覧の上に示す。
   const applied: AppliedFilter[] = filters.regions.map((r) => ({
     id: `region-${r}`,
     label: "地域",
@@ -230,14 +248,35 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
       if (openId && ids.has(openId)) setOpenId(null)
     }
     clearSelection()
-    setNotice(mode === "client" ? `${count}件を削除しました（プレビューの中だけ）` : `${count}件の削除を要求しました（模擬。データは変わりません）`)
+    toast({
+      variant: "success",
+      title: mode === "client" ? `${count.toLocaleString("ja-JP")}件の顧客を削除しました` : `${count.toLocaleString("ja-JP")}件の顧客の削除を受け付けました`,
+      description: mode === "client" ? "プレビューの中だけで削除しています。" : "模擬のサーバーのため、データは変わりません。",
+    })
   }
+
+  // 閉じた後は、最後に開いた行の会社名のボタンにフォーカスを戻す。
+  // 閉じる時点では openId が null になっているため、開いた行の ID を別に覚えておく。
+  const lastOpenId = useRef<string | null>(null)
+  if (openId) lastOpenId.current = openId
+  const rowTrigger = () =>
+    lastOpenId.current
+      ? (container.current?.querySelector<HTMLElement>(`[data-row-id="${lastOpenId.current}"] [data-slot=data-table-row-trigger]`) ?? null)
+      : null
 
   const status_ = mode === "server" ? status : "ready"
   const isEmptyData = mode === "client" ? data.length === 0 : false
 
   return (
-    <ComposeContext.Provider value={(c) => setNotice(`${c.company}宛てのメールを作成します（プレビューでは送信しません）`)}>
+    <RowActionContext.Provider
+      value={(action, c) =>
+        toast(
+          action === "compose"
+            ? { title: `${c.company}宛てのメールを作成します`, description: "プレビューでは送信しません。" }
+            : { variant: "success", title: `顧客ID ${c.id} をコピーしました` }
+        )
+      }
+    >
       <div data-testid={testId} className="flex flex-col gap-4">
         <div role="search" aria-label="顧客の検索と絞り込み" className="flex flex-wrap items-center gap-3">
           <DataTableSearch
@@ -255,23 +294,17 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
             onChange={(v) => updateFilters({ status: v as ContractStatus | null })}
           />
           <FilterSelect label="担当者" testId={`${testId}-owner`} value={filters.owner} options={ownerOptions} onChange={(v) => updateFilters({ owner: v })} />
-          <Disclosure
-            id={`${testId}-more`}
+          <SettingsPopover
             label="その他の条件"
+            title="その他の条件"
             icon={<SlidersHorizontal />}
             count={filters.regions.length}
-            open={moreOpen}
-            onOpenChange={setMoreOpen}
-          />
-          <Disclosure id={`${testId}-columns`} label="列の表示" icon={<Columns3 />} open={columnsOpen} onOpenChange={setColumnsOpen} />
-        </div>
-
-        {moreOpen && (
-          <div id={`${testId}-more`} className="rounded-md border border-border p-4">
+            testId={`${testId}-more`}
+          >
             <Field>
             <FieldSet>
               <FieldLegend variant="label">地域</FieldLegend>
-              <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-x-4">
                 {regions.map((r) => (
                   <FieldItem key={r}>
                     <Checkbox
@@ -286,13 +319,11 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
               </div>
             </FieldSet>
             </Field>
-          </div>
-        )}
-        {columnsOpen && (
-          <div id={`${testId}-columns`} className="max-w-md rounded-md border border-border px-4 py-2">
+          </SettingsPopover>
+          <SettingsPopover label="列の表示" title="列の表示" icon={<Columns3 />} testId={`${testId}-columns`}>
             <DataTableColumnOptions table={table} />
-          </div>
-        )}
+          </SettingsPopover>
+        </div>
 
         {(applied.length > 0 || anyFilter) && (
           <DataTableAppliedFilters filters={applied} onClearAll={anyFilter ? clearAll : undefined} />
@@ -301,17 +332,6 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
         {/* 件数と一括操作は同じ行に置き、選択しても表の位置を動かさない。 */}
         <div className="flex min-h-12 flex-wrap items-center gap-x-4 gap-y-2" data-testid={`${testId}-status-row`}>
           {effectiveSelected > 0 ? (
-            confirmDelete ? (
-              <div role="alert" className="flex flex-wrap items-center gap-x-4 gap-y-2" data-testid={`${testId}-confirm`}>
-                <p className="text-ui font-medium">{effectiveSelected.toLocaleString("ja-JP")}件の顧客を削除しますか？削除すると元に戻せません。</p>
-                <Button variant="destructive" size="sm" onClick={deleteSelected}>
-                  削除する
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
-                  キャンセル
-                </Button>
-              </div>
-            ) : (
               <DataTableSelectionBar
                 className="flex-1"
                 selectedCount={summary.selectedCount}
@@ -326,7 +346,11 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
                   onSelectAll: () => (mode === "client" ? table.toggleAllRowsSelected(true) : setAllMatching(true)),
                 }}
               >
-                <Button variant="outline" size="sm" onClick={() => setNotice(`${effectiveSelected}件にお知らせメールを送ります（プレビューでは送信しません）`)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => toast({ title: `${effectiveSelected.toLocaleString("ja-JP")}件にお知らせメールを送ります`, description: "プレビューでは送信しません。" })}
+                >
                   <Mail />
                   <span className="max-sm:sr-only">メールを送信</span>
                 </Button>
@@ -335,7 +359,6 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
                   <span className="max-sm:sr-only">削除</span>
                 </Button>
               </DataTableSelectionBar>
-            )
           ) : (
             <p className="text-ui tabular-nums" aria-live="polite" data-testid={`${testId}-count`}>
               {status_ === "loading" ? "読み込み中" : status_ === "error" ? "件数を取得できませんでした" : `${totalShown.toLocaleString("ja-JP")}件`}
@@ -343,11 +366,23 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
           )}
           {status_ === "refreshing" && <DataTableRefreshing className="ms-auto" />}
         </div>
-        <p role="status" className="text-ui text-muted-foreground empty:hidden" data-testid={`${testId}-notice`}>
-          {notice}
-        </p>
+        {/* 危険な一括操作は Alert Dialog で確かめる。 */}
+        <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+          <AlertDialogContent data-testid={`${testId}-confirm`}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{effectiveSelected.toLocaleString("ja-JP")}件の顧客を削除しますか？</AlertDialogTitle>
+              <AlertDialogDescription>削除すると元に戻せません。契約と請求の履歴も表示できなくなります。</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>キャンセル</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={deleteSelected}>
+                {effectiveSelected.toLocaleString("ja-JP")}件を削除する
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
-        <div ref={container} className={openCustomer ? "grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" : undefined}>
+        <div ref={container}>
           <DataTable
             table={table}
             layout="fixed"
@@ -391,7 +426,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
               />
             }
           />
-          {openCustomer && <CustomerDetail customer={openCustomer} onClose={() => setOpenId(null)} headingRef={headingRef} />}
+          <CustomerDetail customer={openCustomer} onClose={() => setOpenId(null)} returnFocus={rowTrigger} />
         </div>
 
         <DataTablePagination table={table} disabled={status_ === "loading"} className="mt-2" />
@@ -416,7 +451,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
           </div>
         )}
       </div>
-    </ComposeContext.Provider>
+    </RowActionContext.Provider>
   )
 }
 

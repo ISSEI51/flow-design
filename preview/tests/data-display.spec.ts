@@ -231,8 +231,15 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     // 個別に表示している Select の値は、適用中の条件として重複して並べない
     await expect(c.getByRole("group", { name: "適用中の条件" }).getByRole("button", { name: /契約状況/ })).toHaveCount(0)
     // その他の条件（地域）は解除できる形で示す
+    // その他の条件は Popover の中に置く
     await c.getByRole("button", { name: /その他の条件/ }).click()
-    await c.getByRole("checkbox", { name: "関東" }).click()
+    const popover = page.locator("[data-slot=popover-content]")
+    await expect(popover.getByRole("heading", { name: "その他の条件" })).toBeVisible()
+    await popover.getByRole("checkbox", { name: "関東" }).click()
+    await page.keyboard.press("Escape")
+    await expect(popover).toHaveCount(0)
+    await expect(c.getByRole("button", { name: /その他の条件/ })).toBeFocused()
+    await expect(c.getByRole("button", { name: /その他の条件/ })).toContainText("（1）")
     const chip = c.getByRole("button", { name: "地域：関東の条件を解除" })
     await expect(chip).toBeVisible()
     await expect(count(c, "client")).toHaveText(`${fmt(total({ search: "青葉", status: "active", owner: "佐藤 美咲", regions: ["関東"] }))}件`)
@@ -364,13 +371,17 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     await bodyRows(c).nth(1).getByRole("checkbox").click()
     // 一括操作は 1 件以上選んだときだけ表示する
     await expect(c.getByRole("region", { name: "選択した行の操作" })).toBeVisible()
+    // 危険な一括操作は Alert Dialog で確かめる
     await c.getByRole("button", { name: "削除" }).click()
-    await expect(c.getByTestId("client-confirm")).toContainText("2件の顧客を削除しますか")
-    await c.getByRole("button", { name: "キャンセル" }).click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toHaveAccessibleName("2件の顧客を削除しますか？")
+    await dialog.getByRole("button", { name: "キャンセル" }).click()
+    await expect(dialog).toHaveCount(0)
     await expect(c.getByText("2件を選択中")).toBeVisible()
     await c.getByRole("button", { name: "削除" }).click()
-    await c.getByRole("button", { name: "削除する" }).click()
+    await page.getByRole("alertdialog").getByRole("button", { name: "2件を削除する" }).click()
     await expect(count(c, "client")).toHaveText(`${fmt(customers.length - 2)}件`)
+    await expect(page.getByText("2件の顧客を削除しました")).toBeVisible()
     await expect(c.getByRole("region", { name: "選択した行の操作" })).toHaveCount(0)
   })
 
@@ -378,17 +389,16 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     await open(page, "data-table")
     const c = client(page)
     const cell = bodyRows(c).nth(1).locator("td").first()
-    await cell.scrollIntoViewIfNeeded()
     const b = await box(cell)
-    // セルの端を押しても、その行だけが切り替わる
-    const at = (x: number, y: number) => (isMobile ? page.touchscreen.tap(x, y) : page.mouse.click(x, y))
-    await at(b.x + 3, b.y + 3)
+    // セルの端を押しても、その行だけが切り替わる。座標は操作の時点で求める（position）
+    const at = (x: number, y: number) => (isMobile ? cell.tap({ position: { x, y } }) : cell.click({ position: { x, y } }))
+    await at(3, 3)
     await expect(bodyRows(c).nth(1)).toHaveAttribute("data-state", "selected")
     await expect(c.locator("tr[data-state=selected]")).toHaveCount(1)
-    await at(b.x + b.width - 3, b.y + b.height - 3)
+    await at(b.width - 3, b.height - 3)
     await expect(c.locator("tr[data-state=selected]")).toHaveCount(0)
     // 詳細は開かない
-    await expect(c.getByTestId("customer-detail")).toHaveCount(0)
+    await expect(page.getByTestId("customer-detail")).toHaveCount(0)
   })
 
   test("row click opens details; inner controls and text selection do not", async ({ page, isMobile }) => {
@@ -396,10 +406,14 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     const c = client(page)
     const row = bodyRows(c).nth(2)
     const company = (await row.locator("td").nth(1).textContent())!.trim()
-    // 行の中の操作（メールのボタン）
-    await row.getByRole("button", { name: `${company}にメールを作成` }).click()
-    await expect(c.getByTestId("client-notice")).toContainText(company)
-    await expect(c.getByTestId("customer-detail")).toHaveCount(0)
+    // 行の中の操作（Dropdown Menu）。メニューの項目は Portal に描かれる
+    await row.getByRole("button", { name: `${company}の操作` }).click()
+    await page.getByRole("menuitem", { name: "メールを作成" }).click()
+    await expect(page.getByText(`${company}宛てのメールを作成します`)).toBeVisible()
+    await expect(page.getByTestId("customer-detail")).toHaveCount(0)
+    // メニューが閉じ、フォーカスが操作のボタンに戻ってから次へ進む
+    await expect(page.getByRole("menu")).toHaveCount(0)
+    await expect(row.getByRole("button", { name: `${company}の操作` })).toBeFocused()
     // 文字の選択
     if (!isMobile) {
       const cell = row.locator("td").nth(3)
@@ -410,19 +424,28 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
         getSelection()!.addRange(r)
       })
       await cell.dispatchEvent("click", { button: 0 })
-      await expect(c.getByTestId("customer-detail")).toHaveCount(0)
+      await expect(page.getByTestId("customer-detail")).toHaveCount(0)
       await page.evaluate(() => getSelection()!.removeAllRanges())
     }
     // 行の空いている所を押すと開く
     await row.locator("td").nth(4).click()
-    const detail = c.getByTestId("customer-detail")
+    const detail = page.getByTestId("customer-detail")
     await expect(detail).toBeVisible()
-    await expect(detail.getByRole("heading", { name: company })).toBeFocused()
+    await expect(page.getByRole("dialog", { name: company, exact: true })).toBeVisible()
+    // 開くとフォーカスを Sheet に移す
+    await expect.poll(() => detail.evaluate((el) => el.contains(document.activeElement))).toBe(true)
+    // 非モーダル：背景を暗くしない
+    await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(0)
     await expect(row).toHaveAttribute("data-active", "true")
     await expect(row).toHaveAttribute("aria-current", "true")
-    // 非モーダル：開いたまま別の行を選べる
+    // 非モーダル：開いたまま別の行を選べる。狭い画面では Sheet が画面の幅になるため、閉じてから選ぶ
     const other = bodyRows(c).nth(4)
-    await other.locator("td").nth(4).click()
+    if (isMobile) {
+      await detail.getByRole("button", { name: "詳細を閉じる" }).click()
+      await expect(detail).toHaveCount(0)
+    }
+    // Sheet に重ならない左側の列を押す
+    await other.locator("td").nth(2).click()
     await expect(other).toHaveAttribute("data-active", "true")
     await expect(row).not.toHaveAttribute("data-active")
     // 閉じると、開いた行のボタンにフォーカスが戻る
@@ -438,10 +461,11 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     await trigger.focus()
     await expect(trigger).toHaveAttribute("aria-expanded", "false")
     await page.keyboard.press("Enter")
-    await expect(c.getByTestId("customer-detail")).toBeVisible()
+    await expect(page.getByTestId("customer-detail")).toBeVisible()
     await expect(trigger).toHaveAttribute("aria-expanded", "true")
+    await expect.poll(() => page.getByTestId("customer-detail").evaluate((el) => el.contains(document.activeElement))).toBe(true)
     await page.keyboard.press("Escape")
-    await expect(c.getByTestId("customer-detail")).toHaveCount(0)
+    await expect(page.getByTestId("customer-detail")).toHaveCount(0)
     await expect(trigger).toBeFocused()
   })
 
@@ -450,7 +474,7 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     const c = client(page)
     const headers = () => c.locator("[data-slot=data-table] thead th").allTextContents()
     await c.getByRole("button", { name: /列の表示/ }).click()
-    const options = c.getByRole("list", { name: "列の設定" })
+    const options = page.getByRole("list", { name: "列の設定" })
     // 識別に必要な列は隠せない
     await expect(options.getByRole("checkbox", { name: /会社名/ })).toBeDisabled()
     await options.getByRole("checkbox", { name: "地域" }).click()
@@ -464,7 +488,8 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     const after = await headers()
     expect(after.indexOf("担当者")).toBe(before.indexOf("担当者") + 1)
     await expect(move).toBeFocused()
-    // 列幅：キーボードで 16px ずつ
+    // 列幅：キーボードで 16px ずつ（Popover を閉じてから操作する）
+    await page.keyboard.press("Escape")
     const sep = c.getByRole("separator", { name: "会社名の列幅" })
     const th = c.locator("th", { hasText: "会社名" })
     const w = (await box(th)).width
@@ -492,6 +517,7 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     const firstName = bodyRows(c).first().locator("td").nth(1)
     expect(await css(firstName, "position")).toBe("sticky")
     // 固定を外す
+    await c.getByRole("button", { name: /列の表示/ }).click()
     await options.getByRole("button", { name: "会社名を左端に固定" }).click()
     await expect(options.getByRole("button", { name: "会社名を左端に固定" })).toHaveAttribute("aria-pressed", "false")
     expect(await css(firstName, "position")).not.toBe("sticky")
@@ -531,8 +557,8 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
       expect(await cell.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
     // 隠した列の情報は詳細で確認できる
     await bodyRows(c).first().locator("[data-slot=data-table-row-trigger]").click()
-    await expect(c.getByTestId("customer-detail")).toContainText("電話番号")
-    await expect(c.getByTestId("customer-detail")).toContainText("利用者数")
+    await expect(page.getByTestId("customer-detail")).toContainText("電話番号")
+    await expect(page.getByTestId("customer-detail")).toContainText("利用者数")
   })
 })
 
@@ -988,13 +1014,22 @@ test.describe("screenshots", () => {
     await open(page, "data-table")
     const c = client(page)
     await c.getByRole("button", { name: /その他の条件/ }).click()
-    await c.getByRole("checkbox", { name: "関東" }).click()
+    await page.locator("[data-slot=popover-content]").getByRole("checkbox", { name: "関東" }).click()
+    await page.keyboard.press("Escape")
     await c.locator("th", { hasText: "月額" }).getByRole("button").click()
     await bodyRows(c).nth(1).getByRole("checkbox").click()
     await bodyRows(c).nth(2).getByRole("checkbox").click()
-    await bodyRows(c).nth(4).locator("td").nth(3).click()
     await page.mouse.move(0, 0)
     await c.screenshot({ path: `${dir}/data-table-operation.png` })
+    await bodyRows(c).nth(4).locator("td").nth(3).click()
+    await page.getByTestId("customer-detail").waitFor()
+    await page.waitForTimeout(400)
+    await page.screenshot({ path: `${dir}/data-table-sheet.png` })
+    await page.keyboard.press("Escape")
+    await c.getByRole("button", { name: /列の表示/ }).click()
+    await page.waitForTimeout(300)
+    await page.screenshot({ path: `${dir}/data-table-columns.png` })
+    await page.keyboard.press("Escape")
     await page.getByTestId("state-loading").locator("xpath=..").screenshot({ path: `${dir}/data-table-states.png` })
     await open(page, "chart")
     await page.waitForTimeout(800)
