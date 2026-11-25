@@ -1,5 +1,14 @@
 import type { ComponentType } from "react"
 
+import { CalendarPage } from "./pages/advanced/calendar-page"
+import { ComboboxPage } from "./pages/advanced/combobox-page"
+import { CommandPage } from "./pages/advanced/command-page"
+import { CsvImportPage } from "./pages/advanced/csv-import-page"
+import { DatePickerPage } from "./pages/advanced/date-picker-page"
+import { EmptyPage } from "./pages/advanced/empty-page"
+import { FileUploadPage } from "./pages/advanced/file-upload-page"
+import { MultiSelectPage } from "./pages/advanced/multi-select-page"
+import { ReportFilterPage } from "./pages/advanced/report-filter-page"
 import { ButtonPage } from "./pages/button-page"
 import { ChartPage } from "./pages/data-display/chart-page"
 import { DashboardPage } from "./pages/data-display/dashboard-page"
@@ -71,6 +80,15 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "accordion", name: "Accordion", page: AccordionPage },
   { id: "separator", name: "Separator", page: SeparatorPage },
   { id: "app", name: "業務アプリの例", page: AppPage, fullscreen: true },
+  { id: "combobox", name: "Combobox", page: ComboboxPage },
+  { id: "multi-select", name: "Multi Select", page: MultiSelectPage },
+  { id: "command", name: "Command", page: CommandPage },
+  { id: "calendar", name: "Calendar", page: CalendarPage },
+  { id: "date-picker", name: "Date Picker", page: DatePickerPage },
+  { id: "file-upload", name: "File Upload", page: FileUploadPage },
+  { id: "empty", name: "Empty", page: EmptyPage },
+  { id: "report-filter", name: "集計条件の例", page: ReportFilterPage },
+  { id: "csv-import", name: "CSV 取り込みの例", page: CsvImportPage },
   { id: "table", name: "Table", page: TablePage },
   { id: "data-table", name: "Data Table", page: DataTablePage },
   { id: "pagination", name: "Pagination", page: PaginationPage },
