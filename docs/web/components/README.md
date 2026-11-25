@@ -20,8 +20,14 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | Toast | [toast.md](toast.md) | v0.1 確定 |
 | Skeleton | [skeleton.md](skeleton.md) | v0.1 確定 |
 | Progress | [progress.md](progress.md) | v0.1 確定 |
+| Dialog | [dialog.md](dialog.md) | 初期実装 |
+| Alert Dialog | [alert-dialog.md](alert-dialog.md) | 初期実装 |
+| Popover | [popover.md](popover.md) | 初期実装 |
+| Dropdown Menu | [dropdown-menu.md](dropdown-menu.md) | 初期実装 |
+| Sheet | [sheet.md](sheet.md) | 初期実装 |
+| Drawer | [drawer.md](drawer.md) | 初期実装 |
 
-入力系コンポーネントに共通する判断基準は [forms.md](forms.md)、Feedback コンポーネントの判断基準は [feedback.md](feedback.md) にまとめている。
+入力系コンポーネントに共通する判断基準は [forms.md](forms.md)、Feedback コンポーネントの判断基準は [feedback.md](feedback.md)、Overlay コンポーネントの判断基準は [overlays.md](overlays.md) にまとめている。
 
 ## ファイルの配置
 
@@ -75,6 +81,7 @@ Flow Design のコンポーネントを、設計、実装、資料、検品の�
 | 押せる範囲（入力系） | Checkbox、Radio、Switch の行が 48px 以上 |
 | 押せる範囲の重なり（入力系） | 本体、ラベル、行のどこを押しても、その項目だけが切り替わる。隣の項目と重ならない |
 | フォーム全体 | 検証のタイミング、エラーの概要、エラーの読み上げ、送信される値、IME の変換中の扱い |
+| 開閉（Overlay） | 初期フォーカス、フォーカスの閉じ込めと復帰、Escape、外側のクリック、背景の操作とスクロール、未保存の変更、入れ子、重なり順、画面の端 |
 
 ## プレビュー
 

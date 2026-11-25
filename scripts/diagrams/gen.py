@@ -762,8 +762,253 @@ def progress_states():
     d.save("progress-states")
 
 
+# ---------------------------------------------------------------- 18-22 overlays
+SCRIM = "#000000"
+
+
+def screen(d, x, y, w, h, kind):
+    """small screen glyph used by the overlay diagrams"""
+    d.rect(x, y, w, h, fill="none", stroke=LINE, r=8, sw=1.5)
+    if kind in ("dialog", "alert"):
+        d.rect(x + 1, y + 1, w - 2, h - 2, fill=SCRIM, r=7, opacity=18)
+        bw, bh = w * 0.6, h * 0.6
+        bx, by = x + (w - bw) / 2, y + (h - bh) / 2
+        d.rect(bx, by, bw, bh, fill="light-dark(#FFFFFF,#0D1117)", stroke=LINE, r=6, sw=1)
+        d.bar(bx + 7, by + 7, bw * 0.5, 5, fill=BAR_STRONG)
+        d.bar(bx + bw - 25, by + bh - 11, 18, 6, fill=DANGER if kind == "alert" else TEXT)
+    elif kind == "popover":
+        d.bar(x + 10, y + 8, 26, 7, fill=BAR_STRONG)
+        d.rect(x + 10, y + 20, w * 0.52, h - 28, fill="none", stroke=LINE, r=5, sw=1)
+        d.bar(x + 17, y + 28, w * 0.3, 5)
+        d.bar(x + 17, y + 38, w * 0.24, 5)
+    elif kind == "menu":
+        d.bar(x + w - 30, y + 8, 20, 7, fill=BAR_STRONG)
+        mx = x + w - 10 - w * 0.46
+        d.rect(mx, y + 20, w * 0.46, h - 26, fill="none", stroke=LINE, r=5, sw=1)
+        for k in range(3):
+            d.bar(mx + 6, y + 27 + k * 9, w * 0.28, 4, fill=DANGER if k == 2 else BAR)
+    elif kind == "sheet":
+        for k in range(4):
+            d.bar(x + 8, y + 10 + k * 11, w * 0.4, 5)
+        d.line([(x + w * 0.56, y + 1), (x + w * 0.56, y + h - 1)], color=LINE, arrow=False, sw=1)
+        d.bar(x + w * 0.56 + 7, y + 10, w * 0.26, 6, fill=BAR_STRONG)
+        d.bar(x + w * 0.56 + 7, y + 22, w * 0.3, 5)
+    elif kind == "drawer":
+        d.rect(x + 1, y + 1, w - 2, h - 2, fill=SCRIM, r=7, opacity=18)
+        d.rect(x + 1, y + h * 0.5, w - 2, h * 0.5 - 1, fill="light-dark(#FFFFFF,#0D1117)", stroke=LINE, r=7, sw=1)
+        d.bar(x + w / 2 - 8, y + h * 0.5 + 5, 16, 3, fill=BAR_STRONG)
+        d.bar(x + 8, y + h * 0.5 + 14, w * 0.4, 5, fill=BAR_STRONG)
+    else:  # page
+        d.bar(x + 8, y + 9, w * 0.5, 7, fill=BAR_STRONG)
+        for k in range(3):
+            d.bar(x + 8, y + 24 + k * 10, w * (0.8 - k * 0.15), 5)
+
+
+def overlay_choice():
+    d = D()
+    d.text(0, 0, 400, 18, "目的", S_LABEL, MUTED, bold=True)
+    d.text(520, 0, 300, 18, "使うもの", S_LABEL, MUTED, bold=True)
+    rows = [("短い入力・編集", "数項目で終わる", "Dialog", "dialog"),
+            ("重要な判断・危険な操作", "取り消せない削除など", "Alert Dialog", "alert"),
+            ("補足の情報・小さな複合操作", "絞り込み、連絡先の確認", "Popover", "popover"),
+            ("実行する操作を選ぶ", "値を選ぶときは Select", "Dropdown Menu", "menu"),
+            ("一覧からの詳細の確認・編集", "一覧を見ながら切り替える", "Sheet", "sheet"),
+            ("モバイルでの短い補助操作", "選ぶとすぐに閉じる", "Drawer", "drawer"),
+            ("長い作業・複雑な編集", "URL で戻れる", "専用のページ", "page")]
+    for i, (q, sub, comp, kind) in enumerate(rows):
+        y = 32 + i * 88
+        last = kind == "page"
+        d.text(0, y + 12, 440, 24, q, S_NAME, TEXT, bold=True)
+        d.text(0, y + 42, 440, 20, sub, S_SUB, MUTED)
+        d.line([(452, y + 36), (508, y + 36)])
+        d.rect(520, y, 380, 72, fill="none" if last else SURFACE, stroke=LINE if last else "none", dashed=last)
+        screen(d, 538, y + 6, 92, 60, kind)
+        d.text(652, y, 230, 72, comp, S_NAME, TEXT, bold=True, valign="middle")
+    d.save("overlay-choice")
+
+
+def sheet_modes():
+    d = D()
+    W, G = 900, 60
+    cw = (W - G) / 2
+    cols = [("閲覧", 'mode="view"', False,
+             ["非モーダル。背景を暗くしない", "一覧を操作でき、別の行を選ぶと\n表示が切り替わる",
+              "フォーカスを閉じ込めない", "外側のクリックでは閉じない"]),
+            ("編集", 'mode="edit"', True,
+             ["モーダル。背景を黒 40% で暗くする", "背景の操作を止め、フォーカスを\nSheet の中に閉じ込める",
+              "未保存の変更は、閉じる前に\n破棄を確かめる", "完了、キャンセル、破棄を分ける"])]
+    for i, (name, code, edit, notes) in enumerate(cols):
+        x = i * (cw + G)
+        d.text(x, 0, 200, 24, name, S_NAME, TEXT, bold=True)
+        d.text(x + 60, 2, 240, 20, code, S_SUB, MUTED)
+        sy, sw, sh = 40, cw, 240
+        d.rect(x, sy, sw, sh, fill="none", stroke=LINE, r=12, sw=1.5)
+        # list
+        for k in range(6):
+            ry = sy + 24 + k * 34
+            if not edit and k == 1:
+                d.rect(x + 12, ry - 8, sw * 0.52, 26, fill=ACCENT_SURFACE, r=6)
+            d.bar(x + 24, ry, 110, 8, fill=BAR_STRONG)
+            d.bar(x + 150, ry, 50, 8)
+        px = x + sw * 0.58
+        if edit:
+            d.rect(x + 1, sy + 1, px - x - 1, sh - 2, fill=SCRIM, r=11, opacity=40)
+        # sheet
+        d.rect(px, sy + 1, x + sw - px - 1, sh - 2, fill="light-dark(#FFFFFF,#0D1117)", stroke="none", r=0)
+        d.line([(px, sy + 1), (px, sy + sh - 1)], color=LINE, arrow=False, sw=1.5)
+        d.bar(px + 18, sy + 22, 90, 10, fill=TEXT)
+        d.text(x + sw - 34, sy + 14, 20, 20, "×", 16, TEXT, align="center")
+        if edit:
+            for k in range(3):
+                d.rect(px + 18, sy + 50 + k * 42, x + sw - px - 40, 28, fill="none", stroke=LINE, r=8, sw=1)
+            d.line([(px, sy + sh - 52), (x + sw - 1, sy + sh - 52)], color=BAR, arrow=False, sw=1)
+            d.rect(x + sw - 150, sy + sh - 40, 62, 28, fill=SURFACE, r=8)
+            d.rect(x + sw - 80, sy + sh - 40, 62, 28, fill=TEXT, r=8)
+        else:
+            for k in range(4):
+                d.bar(px + 18, sy + 56 + k * 40, 60, 6)
+                d.bar(px + 18, sy + 70 + k * 40, 110, 8, fill=BAR_STRONG)
+        ny = sy + sh + 28
+        for k, n in enumerate(notes):
+            lines = n.split("\n")
+            d.dot(x + 6, ny + 10, d=6, fill=ACCENT if edit else BAR_STRONG, stroke="none")
+            for j, ln in enumerate(lines):
+                d.text(x + 22, ny + j * 24, cw - 22, 20, ln, S_SUB, TEXT)
+            ny += 24 * len(lines) + 14
+    ax = cw + 8
+    d.line([(ax, 140), (ax + G - 16, 140)], color=ACCENT)
+    d.text(ax - 10, 112, G + 4, 18, "編集", 14, MUTED, align="center")
+    d.line([(ax + G - 16, 190), (ax, 190)], color=ACCENT)
+    d.text(ax - 10, 198, G + 4, 18, "保存", 14, MUTED, align="center")
+    d.text(0, ny + 6, W, 20, "閲覧と編集の切り替えは、画面が mode で指定する。Sheet は推測しない", S_SUB, MUTED)
+    d.save("sheet-modes")
+
+
+def overlay_mobile():
+    d = D()
+    items = [("短い確認", "中央の Dialog", "alert"), ("短い補助操作", "下からの Drawer", "drawer"),
+             ("長い詳細・フォーム", "全画面の Sheet", "fullsheet"), ("複雑な業務", "専用のページ", "page")]
+    pw, ph, G = 180, 330, 60
+    for i, (q, a, kind) in enumerate(items):
+        x = i * (pw + G)
+        d.rect(x, 0, pw, ph, fill="none", stroke=LINE, r=22, sw=1.5)
+        ix, iy, iw, ih = x + 10, 24, pw - 20, ph - 48
+        for k in range(6):
+            d.bar(ix + 10, iy + 34 + k * 26, iw * 0.7 - (k % 3) * 18, 7)
+        if kind == "alert":
+            d.rect(x + 1, 1, pw - 2, ph - 2, fill=SCRIM, r=21, opacity=40)
+            bw, bh = iw - 16, 116
+            bx, by = x + (pw - bw) / 2, (ph - bh) / 2
+            d.rect(bx, by, bw, bh, fill="light-dark(#FFFFFF,#0D1117)", r=14)
+            d.bar(bx + 14, by + 18, 100, 9, fill=TEXT)
+            d.bar(bx + 14, by + 38, 120, 6)
+            hw = (bw - 36) / 2
+            d.rect(bx + 14, by + bh - 40, hw, 26, fill=SURFACE, r=8)
+            d.rect(bx + 22 + hw, by + bh - 40, hw, 26, fill=DANGER, r=8)
+        elif kind == "drawer":
+            d.rect(x + 1, 1, pw - 2, ph - 2, fill=SCRIM, r=21, opacity=40)
+            top = ph - 150
+            d.rect(x + 1, top, pw - 2, ph - top - 1, fill="light-dark(#FFFFFF,#0D1117)", r=20)
+            d.bar(x + pw / 2 - 14, top + 8, 28, 4, fill=BAR_STRONG)
+            d.bar(x + 18, top + 26, 90, 9, fill=TEXT)
+            for k in range(3):
+                d.bar(x + 18, top + 56 + k * 26, 110, 7, fill=BAR_STRONG)
+        elif kind == "fullsheet":
+            d.rect(x + 1, 1, pw - 2, ph - 2, fill="light-dark(#FFFFFF,#0D1117)", r=21)
+            d.bar(x + 18, 34, 100, 10, fill=TEXT)
+            d.text(x + pw - 34, 28, 20, 20, "×", 16, TEXT, align="center")
+            for k in range(5):
+                d.bar(x + 18, 70 + k * 40, 50, 6)
+                d.bar(x + 18, 84 + k * 40, 120, 8, fill=BAR_STRONG)
+            d.line([(x + 1, ph - 58), (x + pw - 1, ph - 58)], color=BAR, arrow=False, sw=1)
+            d.rect(x + 18, ph - 46, (pw - 44) / 2, 28, fill=SURFACE, r=8)
+            d.rect(x + 26 + (pw - 44) / 2, ph - 46, (pw - 44) / 2, 28, fill=TEXT, r=8)
+        else:
+            d.bar(ix + 10, iy + 4, 90, 10, fill=TEXT)
+        d.text(x - 20, ph + 22, pw + 40, 24, q, S_NAME, TEXT, bold=True, align="center")
+        d.text(x - 20, ph + 52, pw + 40, 20, a, S_SUB, MUTED, align="center")
+    d.text(0, ph + 96, 900, 20, "モバイルだからという理由だけで、Dialog を Drawer に変えない", S_SUB, MUTED)
+    d.save("overlay-mobile")
+
+
+def overlay_closing():
+    d = D()
+    W = 900
+    c0, c1, c2 = 0, 330, 620
+    d.text(c0, 0, 300, 18, "閉じる操作", S_LABEL, MUTED, bold=True)
+    d.text(c1, 0, 280, 18, "未保存の変更なし", S_LABEL, MUTED, bold=True)
+    d.text(c2, 0, 280, 18, "未保存の変更あり", S_LABEL, MUTED, bold=True)
+    rows = [("外側のクリック", "Dialog、Sheet（編集）、Drawer", "閉じる", "閉じない"),
+            ("Escape", "最前面の Overlay だけが反応する", "閉じる", "破棄を確かめる"),
+            ("閉じるボタン、キャンセル", "", "閉じる", "破棄を確かめる"),
+            ("スワイプ", "Drawer", "閉じる", "破棄を確かめる")]
+    for i, (op, sub, a, b) in enumerate(rows):
+        y = 32 + i * 76
+        if i:
+            d.line([(0, y - 8), (W, y - 8)], color=BAR, arrow=False, sw=1)
+        d.text(c0, y + (8 if sub else 20), 320, 24, op, S_NAME, TEXT, bold=True)
+        if sub:
+            d.text(c0, y + 36, 320, 20, sub, S_SUB, MUTED)
+        d.text(c1, y, 260, 60, a, 16, TEXT, valign="middle")
+        if b == "破棄を確かめる":
+            d.rect(c2, y + 10, 200, 40, fill=ACCENT_SURFACE, r=10)
+            d.text(c2, y + 10, 200, 40, b, 16, ACCENT, bold=True, align="center", valign="middle")
+        else:
+            d.text(c2, y, 260, 60, b, 16, TEXT, valign="middle")
+    fy = 32 + 4 * 76 + 24
+    d.text(0, fy, 600, 18, "破棄を確かめる Alert Dialog", S_LABEL, MUTED, bold=True)
+    bx, by, bw, bh = 0, fy + 28, 380, 150
+    d.rect(bx, by, bw, bh, fill="none", stroke=LINE, r=20, sw=1.5)
+    d.text(bx + 24, by + 22, bw - 48, 24, "変更を破棄しますか？", S_NAME, TEXT, bold=True)
+    d.text(bx + 24, by + 52, bw - 48, 20, "入力した内容は保存されません。", S_SUB, MUTED)
+    d.rect(bx + bw - 276, by + bh - 58, 126, 36, fill=SURFACE, stroke=ACCENT, r=12, sw=2)
+    d.text(bx + bw - 276, by + bh - 58, 126, 36, "編集を続ける", 15, TEXT, bold=True, align="center", valign="middle")
+    d.rect(bx + bw - 140, by + bh - 58, 116, 36, fill=DANGER, r=12)
+    d.text(bx + bw - 140, by + bh - 58, 116, 36, "変更を破棄", 15, "#FFFFFF", bold=True, align="center", valign="middle")
+    rx = 440
+    for k, (t, s2) in enumerate((("編集を続ける・Escape", "Alert Dialog だけを閉じ、入力を残す"),
+                                 ("変更を破棄", "元の Overlay も閉じる（Sheet はキャンセルなら閲覧に戻る）"))):
+        y = by + 8 + k * 64
+        d.text(rx, y, W - rx, 24, t, S_NAME, TEXT, bold=True)
+        d.text(rx, y + 30, W - rx, 20, s2, S_SUB, MUTED)
+    d.text(0, by + bh + 24, W, 20, "初期フォーカスは「編集を続ける」。未保存かどうかは製品が判断し、unsavedChanges で渡す", S_SUB, MUTED)
+    d.save("overlay-closing")
+
+
+def overlay_nesting():
+    d = D()
+    # stacked layers
+    layers = [("ページ", "トリガー"), ("Dialog", "入力欄"), ("Alert Dialog", "最前面")]
+    for i, (name, sub) in enumerate(layers):
+        x, y = i * 44, i * 76
+        fill = ACCENT_SURFACE if i == 2 else SURFACE
+        d.rect(x, y, 300, 150, fill=fill, stroke=ACCENT if i == 2 else LINE, sw=1.5)
+        d.text(x + 22, y + 18, 220, 24, name, S_NAME, TEXT, bold=True)
+        d.text(x + 22, y + 48, 220, 20, sub, S_SUB, MUTED)
+    rx = 440
+    d.text(rx, 0, 460, 18, "Escape とフォーカスの復帰", S_LABEL, MUTED, bold=True)
+    steps = [("1", "Escape", "Alert Dialog だけが閉じる", "フォーカスは Dialog の中の元の要素に戻る"),
+             ("2", "Escape", "Dialog が閉じる", "フォーカスはページのトリガーに戻る")]
+    for k, (n, key, what, focus) in enumerate(steps):
+        y = 32 + k * 96
+        d.text(rx, y + 2, 24, 20, n, S_NUM, ACCENT, bold=True)
+        d.rect(rx + 30, y, 74, 26, fill="none", stroke=LINE, r=6, sw=1.5)
+        d.text(rx + 30, y, 74, 26, key, 14, TEXT, bold=True, align="center", valign="middle")
+        d.text(rx + 118, y + 2, 340, 24, what, S_NAME, TEXT, bold=True)
+        d.text(rx + 118, y + 34, 340, 20, focus, S_SUB, MUTED)
+    oy = 250
+    d.text(rx, oy, 460, 18, "認める組み合わせ", S_LABEL, MUTED, bold=True)
+    for k, t in enumerate(("Dialog の中の Select、Popover", "Sheet の中の Dropdown Menu",
+                           "編集中の変更の破棄を確かめる Alert Dialog")):
+        d.dot(rx + 6, oy + 38 + k * 30, d=6, fill=BAR_STRONG, stroke="none")
+        d.text(rx + 22, oy + 28 + k * 30, 440, 20, t, S_SUB, TEXT)
+    d.text(0, 324, 400, 20, "z-index は共通の 1 つ。開いた順に前面に重なる", S_SUB, MUTED)
+    d.save("overlay-nesting")
+
+
 for f in (journey, principles, wording, layout, visual, process, architecture, site, tokens,
           button_anatomy, button_hierarchy, field_anatomy, form_choice, form_validation,
-          feedback_choice, toast_timing, progress_states):
+          feedback_choice, toast_timing, progress_states,
+          overlay_choice, sheet_modes, overlay_mobile, overlay_closing, overlay_nesting):
     f()
 print("ok")
