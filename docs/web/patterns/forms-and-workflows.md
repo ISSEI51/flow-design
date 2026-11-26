@@ -270,7 +270,9 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 | README | 初期実装：進捗の表、Patterns の表、資料と図の生成の案内に Forms & Workflows を加えた。v0.1：状態を「v0.1 確定候補」にした | |
 | プレビュー | 初期実装：`catalog.ts` に分類「Patterns：Forms & Workflows」と 7 ページ（資料の 6 ページと検証画面）を追加した。`package.json` の `test:patterns` に `forms-workflows` を追加した。v0.1：`catalog.ts` に検品用の画面（`forms-checks`、`hidden`）を追加した | 既存のページの id と URL は変わらない |
 | 図の生成 | 初期実装：`scripts/diagrams/build.sh` に `gen_forms_workflows.py` を追加した。v0.1：変更なし | 既存の図の生成は変わらない |
-| 既存の検品 | 初期実装：`preview/tests/button.spec.ts` の Tab を押す回数の上限を、ページのフォーカスできる要素の数にした（「初期実装の検証の結果」）。v0.1：変更なし | 判定と期待する値は変えていない |
+| 既存の検品 | 初期実装：`preview/tests/button.spec.ts` の Tab を押す回数の上限を、ページのフォーカスできる要素の数にした（「初期実装の検証の結果」）。v0.1：`preview/tests/data-browsing.spec.ts` の 2 件（「a run started in A and finished after A → B → A …」「unmounting the list during a run …」）の模擬のサーバーの遅延（`latency.bulk`）を 1600 から 6400、1500 から 6000 にした。下の注を参照 | 判定と期待する値は変えていない |
+
+- `data-browsing.spec.ts` の 2 件の変更の理由：Data Browsing の模擬のサーバーは、一括の操作を `latency.bulk / 4` の間隔で 4 分の 1 ずつ処理する。2 件の検品は 1 行だけを選ぶため、処理は 1 回の間隔（400ms、375ms）で終わり、検品が前提にしていた 1600ms、1500ms より早く結果が届いていた。v0.1 の最終の統合の候補での全件の検品（4 ワーカー）で、ワークスペースの切り替えが 400ms を超えた場合に、切り替えの前に元のワークスペースで操作が完了し、「完了しました」の通知が出て失敗した（6 回の全件の検品のうち 3 回。8 ワーカーで 24 回の繰り返しでは 5 回）。製品のコード（`useBulkAction`）の不具合ではなく、検品の時間の前提の誤りである。1 回の間隔を検品が意図した時間にし、結果がスコープの変更とアンマウントの後に届くようにした。変更の後は、8 ワーカーで 16 回の繰り返しで失敗 0 件。Data Browsing の Registry、資料、検証画面は変えていない。
 
 プレビューのページは、Data Browsing の資料のページの部品（`../data-browsing/doc-parts` の `Mock`、`AppLink`、`DemoFrame`、`Rules`、`DemoControls`、`Radio`）と、App Structure の `StructureSidebar`、`ProductMark`、`PlaceholderScreen`、`structureNav`、`structureLabels`、`structureSettingsItem`、`structureUser`、`../app-structure/parts` の `Bullets` を読み込んで使う（複製も変更もしない）。
 

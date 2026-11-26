@@ -284,6 +284,14 @@ function InlineNote({ value, onSave }: { value: string; onSave: (v: string) => P
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const editRef = useRef<HTMLButtonElement>(null)
+  // 編集を終えた後に「メモを編集」へフォーカスを戻す。ボタンが描画された後（コミットの後）に移す
+  // （requestAnimationFrame では、負荷が高いと描画の前に実行され、フォーカスが失われる）
+  const [restoreFocus, setRestoreFocus] = useState(false)
+  useEffect(() => {
+    if (editing || !restoreFocus) return
+    setRestoreFocus(false)
+    editRef.current?.focus()
+  }, [editing, restoreFocus])
   useUnsavedChanges({ dirty: editing && draft !== value, saving, label: "社内のメモ", onDiscard: () => setEditing(false) })
   if (!editing)
     return (
@@ -308,7 +316,7 @@ function InlineNote({ value, onSave }: { value: string; onSave: (v: string) => P
     )
   const finish = () => {
     setEditing(false)
-    requestAnimationFrame(() => editRef.current?.focus())
+    setRestoreFocus(true)
   }
   return (
     <form

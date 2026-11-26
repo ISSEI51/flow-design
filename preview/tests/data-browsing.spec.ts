@@ -967,7 +967,10 @@ test.describe("v0.1: scope boundaries and races", () => {
 
   test("a run started in A and finished after A → B → A does not change state or show a toast", async ({ page }) => {
     await openApp(page)
-    await server(page, (s) => (s.latency.bulk = 1600))
+    // 模擬のサーバーは latency.bulk / 4 ごとに 4 分の 1 ずつ処理する。1 行では 1 回で終わるため、
+    // 1 回の間隔を 1600ms にして、結果が A → B → A の後に届くようにする（以前の 1600 では 400ms で終わり、
+    // 負荷が高いと切り替えの前に A で完了して通知が出ていた）
+    await server(page, (s) => (s.latency.bulk = 6400))
     await rowCheckbox(page, 0).click()
     await page.getByTestId("app-list-bulk-owner").click()
     await page.getByRole("menuitem", { name: "田中 翔" }).click()
@@ -984,7 +987,8 @@ test.describe("v0.1: scope boundaries and races", () => {
 
   test("unmounting the list during a run: the late result does not show a toast or a result", async ({ page }) => {
     await openApp(page)
-    await server(page, (s) => (s.latency.bulk = 1500))
+    // 1 行では latency.bulk / 4 の 1 回で終わる。結果がアンマウントの後に届くように、1 回の間隔を 1500ms にする
+    await server(page, (s) => (s.latency.bulk = 6000))
     await rowCheckbox(page, 0).click()
     await page.getByTestId("app-list-bulk-owner").click()
     await page.getByRole("menuitem", { name: "田中 翔" }).click()
