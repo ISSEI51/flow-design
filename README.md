@@ -193,7 +193,7 @@ Natural Motion
 | --- | --- |
 | 思想、原則、デザイントークン v0.1 | 完了 |
 | Components v0.1（39 種） | 完了 |
-| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：初期実装） |
+| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：初期実装、Forms & Workflows：初期実装） |
 | Registry & Gallery、Agent Skills | 予定 |
 
 今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
@@ -206,12 +206,12 @@ Components が個々の UI の部品であるのに対し、Patterns はユー�
 | --- | --- | --- |
 | App Structure | App Shell、Navigation、Page Header、Page Layout、Section Layout（[app-structure.md](docs/web/patterns/app-structure.md)） | v0.1 確定 |
 | Data Browsing | Search & Filter、List & Detail、Bulk Actions、View Switching、Data States（[data-browsing.md](docs/web/patterns/data-browsing.md)） | 初期実装（レビュー前） |
-| Forms & Workflows | 登録・編集のフォーム、複数の手順の操作、未保存の変更の確認など | 未着手 |
+| Forms & Workflows | Form Layout、Create & Edit、Unsaved Changes、Confirmation、Multi-step Workflow、Import & Export（[forms-and-workflows.md](docs/web/patterns/forms-and-workflows.md)） | 初期実装（レビュー前） |
 | Data Analysis | ダッシュボード、レポートなど | 未着手 |
 | System & Account | 認証、アカウント、製品の設定など | 未着手 |
 
-Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md)、一覧の検索と閲覧の Patterns は [Data Browsing](docs/web/patterns/data-browsing.md) にまとめている。
+Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md)、一覧の検索と閲覧の Patterns は [Data Browsing](docs/web/patterns/data-browsing.md)、登録・編集と手続きの Patterns は [Forms & Workflows](docs/web/patterns/forms-and-workflows.md) にまとめている。
 
-図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py`（Advanced Components の図は `gen_advanced.py`、Data Display の図は `gen_data_display.py`、App Structure の図は `gen_app_structure.py`、Data Browsing の図は `gen_data_browsing.py`）で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
+図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py`（Advanced Components の図は `gen_advanced.py`、Data Display の図は `gen_data_display.py`、App Structure の図は `gen_app_structure.py`、Data Browsing の図は `gen_data_browsing.py`、Forms & Workflows の図は `gen_forms_workflows.py`）で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
 
 ライセンスは未定。

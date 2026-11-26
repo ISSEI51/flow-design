@@ -101,7 +101,9 @@ test.describe("contrast", () => {
 test.describe("keyboard and focus", () => {
   test("Tab reaches the button, focus-ring is shown, Enter and Space activate", async ({ page }) => {
     const target = page.getByTestId("state-default")
-    for (let i = 0; i < 80; i++) {
+    // Tab を押す回数の上限は、ページのフォーカスできる要素の数にする（プレビューの上部の一覧の項目が増えても届く）
+    const stops = await page.locator("a[href], button, input, select, textarea, [tabindex]").count()
+    for (let i = 0; i < stops + 1; i++) {
       await page.keyboard.press("Tab")
       if (await target.evaluate((el) => el === document.activeElement)) break
     }
