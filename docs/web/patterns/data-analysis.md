@@ -278,6 +278,48 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 スクリーンショット（Git の管理外）：検証画面の事業の状況、顧客維持の分析、Cross-filtering の選択、企業の詳細、処理の監視、資料の 5 ページ（Chromium 1280×900）、事業の状況（Pixel 7）を撮り、目視で確かめた。WebKit と実機での目視の確認は行っていない。
 
+### 検証の結果（v0.1 の最終調整の統合の候補）
+
+- 実施日：2026-11-26〜2026-11-27
+- 対象：932402c（`origin/main` の aa7e664 を統合済み。実行の時点の `origin/main` は aa7e664 のまま）
+- 手順：typecheck → preview:build → test:tokens → test:ssr → test:patterns → test:components を 1 回とし、続けて 2 回実行した。各回の開始の前に、1 分間の負荷平均が 20 未満になるまで待った。実行中は `caffeinate -i -s` でスリープを止めた。
+
+最後の 2 回の結果。
+
+| 確認 | 1 回目（23:44 開始） | 2 回目（00:47 開始） |
+| --- | --- | --- |
+| `npm run typecheck` | 成功（exit 0） | 成功（exit 0） |
+| `npm run preview:build` | 成功（exit 0） | 成功（exit 0） |
+| `npm run test:tokens` | 成功（exit 0） | 成功（exit 0） |
+| `npm run test:ssr` | 96 件成功 | 96 件成功 |
+| `npm run test:patterns` | 588 件成功、3 件失敗、147 件 skip（5.7 分） | 591 件成功、失敗 0 件、147 件 skip（3.2 分） |
+| `npm run test:components` | 2057 件成功、25 件失敗、296 件 skip、20 件未実行（34.2 分） | 2099 件成功、3 件失敗、296 件 skip（11.6 分） |
+
+2 回続けて失敗 0 件という条件を満たしていない。このため main へは統合していない。
+
+失敗の内訳：
+
+| テスト | 回 | 内容 | 確認の結果 |
+| --- | --- | --- | --- |
+| `data-browsing.spec.ts:968`（Data Browsing の既存のテスト。A → B → A の後に完了の通知を出さない） | 1 回目の patterns と components、2 回目の components | 2 秒の待機の後に、完了の通知が 1 件残る | desktop と mobile で 25 回ずつ、10 ワーカーで実行した。失敗は、この branch で 100 回中 42 回、`origin/main`（aa7e664）で 100 回中 45 回。この branch で発生率は変わらない。Data Browsing の作業の範囲のため変更していない |
+| `data-display.spec.ts:68`（Components の既存のテスト。data-table の操作の名前） | 両回 | 30 秒の制限時間の超過。370 個を超える操作の名前を 1 つずつ確かめる | 単独の実行（desktop と mobile、3 回ずつ）では、この branch で 8.9〜11.8 秒、`origin/main` で 8.9〜14.0 秒で、すべて成功。この branch では data-table のページと部品を変更していない |
+| `data-analysis.spec.ts:242`（期間の指定） | 1 回目の components | 30 秒の制限時間の超過（終了日の入力の待機中） | 単独で 30 回（desktop と mobile、6 ワーカー）実行して 30 回成功（中央値 2.2 秒） |
+| `data-browsing.spec.ts:1073`、SSR の `beforeAll`（Vite の起動、`transport was disconnected`）、overlays、forms、navigation、advanced、app-structure など、残りの 1 回目の失敗 | 1 回目 | すべて 30 秒の制限時間の超過 | 1 回目の開始の時点の 5 分間の負荷平均は 32.95 で、test:components に通常の約 3 倍（34.2 分）かかった |
+
+- 実行の間、同じマシンの別の worktree のセッションが Playwright と Vite を動かしていた（負荷平均 18〜49 を確認）。制限時間の超過が負荷による、というのは推測である。単独の実行で再現しないことは確かめた。
+- テストの制限時間の延長、skip の追加、既存のテストの変更はしていない。
+
+この前の試行（同じ 932402c、またはその前の候補の b630709）：
+
+| 試行 | 結果 |
+| --- | --- |
+| b630709 の 2 回 | 1 回目：patterns で 1 件失敗（Select の閉じる途中の選択肢の重複。テストの操作を直した）、components で Drawer の 1 件失敗。2 回目：components で `ssr-core.spec.ts:99`（WebKit のフォーカス）の 1 件失敗。どちらの失敗も `origin/main` で再現する |
+| 932402c の 1 組目 | 2 時間の制限で停止した（負荷平均 46〜49） |
+| 932402c の 2 組目 | 1 回目：components で `data-browsing.spec.ts:968` の 1 件失敗。2 回目：634 件失敗（`Could not connect to the server`。テスト用のサーバーが途中で応答しなくなった） |
+| 932402c の 3 組目 | 2 回目の途中の 22:20:22 に、バッテリーの残量 1% で Mac が低電力のスリープに入り、23:30:14 に電源の接続で復帰した（`pmset -g log`）。patterns に 1.3 時間かかり 16 件失敗した（`net::ERR_NETWORK_CHANGED` など）。1 回目の components の 288 件の失敗（`Could not connect to the server`）の原因は確定していない。途中で停止した |
+
+スクリーンショット（Git の管理外）：最終調整の後に、検証画面と資料のページを Desktop（1280×900）、Pixel 7、320px で撮り、目視で確かめた。ページの例外は 0 件、ページ全体の横スクロールは 0。320px では表の続きの方向の端に影が出る。
+
 ### 独立したレビュー
 
 別のエージェント（Opus）が、実装の結論を渡さずに、指示書、差分、資料、テスト、デスクトップとモバイルのスクリーンショットを、8 つの設計原則と 8 つの美的基準、分析として誤った解釈を生じさせないかで確かめた。指摘は高 5 件、中 10 件、低 7 件、検品の弱点 3 件。
