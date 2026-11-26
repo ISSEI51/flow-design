@@ -150,8 +150,14 @@ function useKeepFocus() {
     const active = document.activeElement as HTMLElement | null
     // 無効になったボタンは、ブラウザが後からフォーカスを外す（その時点ではまだ activeElement のことがある）。
     if (!root || (active && root.contains(active) && !active.matches(":disabled"))) return
+    // 表示していないボタン（狭い領域の並びで隠した番号）は、フォーカスを受け取れないため除く。
+    const visible = (el: HTMLElement) => el.getClientRects().length > 0
+    // 狭い領域の並び（番号を隠した状態）では、現在の位置の表示へ移す。表示中の最初のボタン（最初のページ）へ移すと、
+    // 続けて Enter を押したときに 1 ページ目へ戻ってしまう。
     const target =
-      root.querySelector<HTMLElement>("[aria-current=page]") ?? root.querySelector<HTMLElement>("button:not(:disabled), a[href]")
+      [...root.querySelectorAll<HTMLElement>("[aria-current=page]")].find(visible) ??
+      [...root.querySelectorAll<HTMLElement>("[data-slot=pagination-compact-current]")].find(visible) ??
+      [...root.querySelectorAll<HTMLElement>("button:not(:disabled), a[href]")].find(visible)
     target?.focus()
   })
   return { ref, mark }
@@ -181,6 +187,20 @@ const formatCount = (n: number) => numberFormat.format(n)
 // 表示件数を変えたとき、いま表示している先頭の項目が含まれるページへ移る。
 function pageForPageSize(page: number, pageSize: number, nextPageSize: number) {
   return Math.floor(((page - 1) * pageSize) / nextPageSize) + 1
+}
+
+// ボタンの数ごとの、並びに必要な幅（48px × 数 + 間 4px）の Container Query。Tailwind CSS が検出できるよう、文字列で列挙する。
+// [番号を隠すクラス, 狭い領域だけに表示するクラス]
+const compactThresholds: Record<number, [string, string]> = {
+  3: ["@max-[9.5rem]/pagination:hidden", "hidden @max-[9.5rem]/pagination:flex"],
+  4: ["@max-[12.75rem]/pagination:hidden", "hidden @max-[12.75rem]/pagination:flex"],
+  5: ["@max-[16rem]/pagination:hidden", "hidden @max-[16rem]/pagination:flex"],
+  6: ["@max-[19.25rem]/pagination:hidden", "hidden @max-[19.25rem]/pagination:flex"],
+  7: ["@max-[22.5rem]/pagination:hidden", "hidden @max-[22.5rem]/pagination:flex"],
+  8: ["@max-[25.75rem]/pagination:hidden", "hidden @max-[25.75rem]/pagination:flex"],
+  9: ["@max-[29rem]/pagination:hidden", "hidden @max-[29rem]/pagination:flex"],
+  10: ["@max-[32.25rem]/pagination:hidden", "hidden @max-[32.25rem]/pagination:flex"],
+  11: ["@max-[35.5rem]/pagination:hidden", "hidden @max-[35.5rem]/pagination:flex"],
 }
 
 // 640px 未満の幅か。サーバーでの描画と Hydration の間は false（広い画面の並び）にし、
@@ -312,10 +332,16 @@ function PaginationControls({
     rangeLabel = rangeText
   }
 
+  // ページ番号の並び（前後と最初・最後の移動を含む）が、置かれた領域に収まらない場合は、番号の代わりに「3 / 29」を示し、
+  // 最初と最後のページへの移動を置く。操作は減らさず、ボタンの大きさ（指で操作する端末の 48px）も変えない。
+  // 判断は画面の幅ではなく、Pagination が置かれた領域の幅（Container Query）で行う。必要な幅は、ボタンの数から
+  // 48px と間 4px で求める（compactThresholds）。
+  const buttonCount = items.length + 2 + (firstLast ? 2 : 0)
+  const [hideWhenCompact, compactOnly] = compactThresholds[Math.min(Math.max(buttonCount, 3), 11)]
   return (
     <div
       data-slot="pagination-controls"
-      className={cn("flex flex-wrap items-center justify-between gap-x-6 gap-y-3", className)}
+      className={cn("@container/pagination flex flex-wrap items-center justify-between gap-x-6 gap-y-3", className)}
     >
       <p data-slot="pagination-range" aria-live="polite" className="text-ui tabular-nums whitespace-nowrap">
         <span aria-hidden="true">{rangeText}</span>
@@ -333,8 +359,8 @@ function PaginationControls({
         )}
         <Pagination aria-label={ariaLabel} ref={keep.ref as React.Ref<HTMLElement>}>
           <PaginationContent>
-            {firstLast && (
-              <PaginationItem>
+            {(firstLast || (pageCount !== undefined && !empty)) && (
+              <PaginationItem className={firstLast ? undefined : compactOnly}>
                 <PaginationFirst disabled={!canPrev} onClick={() => go(1)} />
               </PaginationItem>
             )}
@@ -343,7 +369,7 @@ function PaginationControls({
             </PaginationItem>
             {items.map((item) =>
               typeof item === "number" ? (
-                <PaginationItem key={item}>
+                <PaginationItem key={item} className={hideWhenCompact}>
                   <PaginationLink
                     isActive={item === current}
                     disabled={disabled && item !== current}
@@ -354,16 +380,32 @@ function PaginationControls({
                   </PaginationLink>
                 </PaginationItem>
               ) : (
-                <PaginationItem key={item}>
+                <PaginationItem key={item} className={hideWhenCompact}>
                   <PaginationEllipsis />
                 </PaginationItem>
               )
             )}
+            {pageCount !== undefined && !empty && (
+              <PaginationItem className={compactOnly} data-slot="pagination-compact-position">
+                <span
+                  tabIndex={-1}
+                  data-slot="pagination-compact-current"
+                  className="flex min-h-10 items-center rounded-sm px-2 text-ui tabular-nums whitespace-nowrap outline-none focus-visible:focus-ring pointer-coarse:min-h-12"
+                >
+                  <span aria-hidden="true">
+                    {formatCount(current)} / {formatCount(pageCount)}
+                  </span>
+                  <span className="sr-only">
+                    {formatCount(pageCount)}ページ中 {formatCount(current)}ページ目
+                  </span>
+                </span>
+              </PaginationItem>
+            )}
             <PaginationItem>
               <PaginationNext disabled={!canNext} onClick={() => go(current + 1)} />
             </PaginationItem>
-            {firstLast && pageCount !== undefined && (
-              <PaginationItem>
+            {pageCount !== undefined && (firstLast || !empty) && (
+              <PaginationItem className={firstLast ? undefined : compactOnly}>
                 <PaginationLast disabled={!canNext} onClick={() => go(pageCount)} />
               </PaginationItem>
             )}

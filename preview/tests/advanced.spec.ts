@@ -424,6 +424,9 @@ test.describe("Select selected weight (regression)", { tag: "@webkit" }, () => {
     const others = page.getByRole("option", { selected: false })
     for (const o of await others.all()) expect(await css(o, "font-weight")).toBe("400")
     // キーで別の項目に移っても、太さは選択中の項目だけ（ハイライトは面と枠で示す）。年額プラン（最後）から月額プランへ移る
+    // 開いた直後、Base UI は選択中の項目へのフォーカスを次のフレームで移す。移る前（ポップアップの容器か trigger に
+    // フォーカスがある間）の ArrowUp は最後の項目（= 選択中の年額プラン）に留まるため、フォーカスが移ってから押す。
+    await expect(selected).toBeFocused()
     await page.keyboard.press("ArrowUp")
     const highlighted = page.locator("[data-slot=select-item][data-highlighted]")
     await expect(highlighted).toHaveAttribute("aria-selected", "false")

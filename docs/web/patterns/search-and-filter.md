@@ -2,7 +2,7 @@
 
 目的の情報を見つけるための検索、フィルター、ソート、ページ送り。
 
-状態：初期実装 ・ 実装：[`registry/patterns/browse-query.ts`](../../../registry/patterns/browse-query.ts) ・ 全体：[Data Browsing](data-browsing.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/browse-query.ts`](../../../registry/patterns/browse-query.ts) ・ 全体：[Data Browsing](data-browsing.md)
 
 ## 目的
 
@@ -100,8 +100,14 @@
 
 | 変更 | ページ番号 |
 | --- | --- |
-| 検索語、フィルター、ソート | 1 ページ目に戻す |
-| ページサイズ | 既定は、表示していた先頭の行を含むページへ移る（Pagination v0.1 と同じ）。`pageSizeChange: "first-page"` で 1 ページ目に戻す |
+| 検索語の変更 | 1 ページ目に戻す |
+| フィルターの変更 | 1 ページ目に戻す |
+| ソートの変更 | 1 ページ目に戻す |
+| ページサイズの変更 | 変更の前に表示していた先頭の行を含むページへ移り、閲覧の位置を保つ（`pageSizeChange: "keep-position"`、標準。Pagination v0.1 の `pageForPageSize`）。`pageSizeChange: "first-page"` は、1 ページ目に戻す必要がある例外の用途のために残す |
+| 同じ条件の再取得 | 現在のページを維持する（`useBrowseData` の `reload`。条件は変えない） |
+| 最終ページの行をすべて削除 | 存在する最後のページへ移る（製品側。[data-browsing.md](data-browsing.md#確定した仕様)） |
+
+この表は Data Browsing の確定した仕様であり、Pagination（[pagination.md](../components/pagination.md)）と Data Table（[data-table.md](../components/data-table.md)）の資料と同じである。
 
 - `sorting` と `pagination`、`onSortingChange` と `onPaginationChange` は、Data Table の `useTable` にそのまま渡す。Data Table の状態の仕組みを置き換えない。
 - 一覧から詳細に移動して戻ったときは、保存した値を `initialQuery`（または `query`）で渡して復元する（[list-and-detail.md](list-and-detail.md)）。

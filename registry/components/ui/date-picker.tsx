@@ -587,7 +587,7 @@ function DateRangePicker({
     const setText = side === "from" ? setFromText : setToText
     const invalid = errors[side] !== null || (side === "to" && rangeError !== null)
     return (
-      <div className="flex min-w-0 flex-1 basis-36 flex-col gap-2">
+      <div className={cn("flex min-w-0 flex-1 basis-36 flex-col gap-2", side === "to" && "col-start-1")}>
         <label htmlFor={inputId} className="text-caption text-muted-foreground">
           {side === "from" ? (labels?.start ?? "開始日") : (labels?.end ?? "終了日")}
         </label>
@@ -647,10 +647,15 @@ function DateRangePicker({
     </div>
   )
 
+  // 並べ方は、画面の幅ではなく、置かれた領域の幅（Container Query）で決める。Sheet や Popover の中でも、
+  // 開始日と終了日の入力欄の幅をそろえる。
+  //   領域が 24rem 以上：開始日 〜 終了日 カレンダーのボタン を 1 行に並べる
+  //   領域が 24rem 未満：開始日と終了日を同じ幅で縦に並べ、カレンダーのボタンを終了日の右に置く（「〜」は表示しない）
   return (
-    <div data-slot="date-range-picker" className={cn("relative flex w-full min-w-0 flex-wrap items-end gap-x-2 gap-y-4", className)}>
+    <div data-slot="date-range-picker" className={cn("@container/date-range w-full min-w-0", className)}>
+    <div className="relative grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-x-2 gap-y-4 @sm/date-range:flex">
       {field("from")}
-      <span aria-hidden="true" className="hidden h-control items-center text-muted-foreground sm:flex">
+      <span aria-hidden="true" className="hidden h-control items-center text-muted-foreground @sm/date-range:flex">
         〜
       </span>
       {field("to")}
@@ -711,6 +716,7 @@ function DateRangePicker({
           </CalendarOverlay>
         </div>
       )}
+    </div>
     </div>
   )
 }

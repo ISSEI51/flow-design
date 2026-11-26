@@ -14,6 +14,7 @@ const modes: [BulkMode, string][] = [
   ["unknown", "一部の結果が不明"],
   ["request-unknown", "通信が切れる"],
   ["request-fail", "要求を受け付けない"],
+  ["incomplete", "結果が足りない・重複する"],
 ]
 
 function BulkOptions() {

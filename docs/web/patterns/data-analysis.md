@@ -134,7 +134,7 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 ## 並行している作業との関係
 
 - Forms & Workflows は、この作業の開始の時点（origin/main 1882f2a）で main に統合されていない。検証画面の業務画面への移動（`page=work`）は、引き継いだ条件を示すだけの画面にし、Forms & Workflows の Patterns を再実装していない。統合の後に、登録・編集の流れとの接続を確かめる。
-- Data Browsing は初期実装（レビュー前）のまま main に統合されている。Data Browsing の部品は変更していない。最終調整で API が変わった場合は、`useBrowseData`、`useFilterDraft`、`getRecordNeighbors`、`DataTableAppliedFilters` の利用箇所を確かめる。
+- Data Browsing は、作業中に v0.1 確定候補（5dcd39a、aa7e664）が main に統合された。統合の候補で取り込み、検品した。`useBrowseData` の変更（`canOperate` の追加、取得しない間のスコープの変更、アンマウントの後の応答の破棄、`setData` の `guard`）は追加と修正だけで、Data Analysis の利用箇所（`status`、`data`、`isCurrent`、`reload`、`error`）の動作は変わらない。Data Analysis の画面には、データに依存する変更の操作（一括操作、削除）がないため、`canOperate` は使っていない。Data Browsing の部品は変更していない。
 - 共有のファイル（`catalog.ts`、`package.json`、`build.sh`、`README.md`）は、統合の時に双方の変更を残す。
 
 ## 独自に判断した事項

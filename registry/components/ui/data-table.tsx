@@ -176,6 +176,11 @@ type DataTableProps<TData extends RowData> = {
   error?: React.ReactNode
   /** 検索や絞り込みが適用中か。既定は表の状態（globalFilter、columnFilters）から判断する */
   filtered?: boolean
+  /**
+   * 表示中の行に依存する操作（行の選択、ページ内の全選択、行の中の操作）を受け付けない。既定は status !== "ready"。
+   * 同じ条件の再取得に失敗して前の行を表示している場合など、status が ready でも操作を止める場合に true を渡す。
+   */
+  locked?: boolean
   loadingRowCount?: number
   /**
    * fixed … 列の幅を TanStack Table の size で固定する。列幅の変更と列の固定で使う。
@@ -202,6 +207,7 @@ function DataTable<TData extends RowData>({
   noResults,
   error,
   filtered,
+  locked: lockedProp,
   loadingRowCount = 5,
   layout = "auto",
   variant,
@@ -234,7 +240,7 @@ function DataTable<TData extends RowData>({
   }, [sortKey])
 
   const openRow = React.useCallback((row: unknown) => onRowOpen?.(row as DataTableRow<TData>), [onRowOpen])
-  const locked = status !== "ready"
+  const locked = lockedProp ?? status !== "ready"
   const context = React.useMemo(
     () => ({ openRow: onRowOpen ? openRow : undefined, activeRowId, status, locked }),
     [onRowOpen, openRow, activeRowId, status, locked]
@@ -566,6 +572,8 @@ type DataTableSelectionBarProps = {
    * 選択の解除は、表示中の行に依存しないため残す。
    */
   disabled?: boolean
+  /** disabled の理由の文。既定は「更新が終わるまで操作できません」 */
+  disabledReason?: React.ReactNode
   className?: string
 }
 
@@ -582,6 +590,7 @@ function DataTableSelectionBar({
   selectAll,
   children,
   disabled = false,
+  disabledReason = "更新が終わるまで操作できません",
   className,
 }: DataTableSelectionBarProps) {
   if (selectedCount === 0 && !selectAll?.allSelected) return null
@@ -629,7 +638,7 @@ function DataTableSelectionBar({
       </Button>
       {disabled && (
         <span data-slot="data-table-selection-disabled" className="text-ui text-muted-foreground">
-          更新が終わるまで操作できません
+          {disabledReason}
         </span>
       )}
       {children && (
