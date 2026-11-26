@@ -34,6 +34,15 @@ type AppShellContextValue = {
   mainRef: React.RefObject<HTMLElement | null>
   /** <main> にフォーカスを移す（スキップリンク） */
   focusMain: () => void
+  /**
+   * 遅れて表示したページの見出し（h1）にフォーカスを移す。製品が見出しを表示した後で呼ぶ。
+   * 移すのは、直前のページの移動で h1 がなく main にフォーカスし、その後もフォーカスが main にある場合だけ。
+   * 最初の表示、focusOnNavigate が "heading" 以外の移動、利用者がフォーカスを移した後では移さない。
+   * 移した場合は true を返す
+   */
+  focusHeading: () => boolean
+  /** AppShellMain が使う。移動の後に h1 がなく main にフォーカスしたことの印 */
+  pendingHeading: React.RefObject<boolean>
 }
 
 const AppShellContext = React.createContext<AppShellContextValue | null>(null)
@@ -78,7 +87,21 @@ function AppShell({
     if (!main) return
     main.focus({ preventScroll: true })
   }, [])
-  const value = React.useMemo(() => ({ mainId, mainRef, focusMain }), [mainId, focusMain])
+  const pendingHeading = React.useRef(false)
+  const focusHeading = React.useCallback(() => {
+    const main = mainRef.current
+    // 移動の後に main へフォーカスし、そのまま main にある場合だけ移す。利用者の操作の位置を奪わない。
+    if (!main || !pendingHeading.current || document.activeElement !== main) return false
+    const heading = focusTargetIn(main, "heading")
+    if (!heading || heading === main) return false
+    pendingHeading.current = false
+    heading.focus({ preventScroll: true })
+    return true
+  }, [])
+  const value = React.useMemo(
+    () => ({ mainId, mainRef, focusMain, focusHeading, pendingHeading }),
+    [mainId, focusMain, focusHeading]
+  )
 
   return (
     <AppShellContext.Provider value={value}>
@@ -150,6 +173,13 @@ function AppShellHeader({ className, render, ...props }: useRender.ComponentProp
 
 type FocusTarget = "heading" | "main" | false
 
+// 移動の後に main の先頭へ戻す処理と、フォーカスの移動の関係
+// - scrollOnNavigate="top"：移動の描画の直後（effect）に main を先頭へ戻す。
+// - scrollOnNavigate={false}：スクロールの位置を変えない。製品が位置を復元する。AppShellMain はスクロールの位置に触れないため、
+//   製品の復元の処理が AppShellMain の effect の前でも後でもよい。
+// - フォーカスは preventScroll で移すため、製品が復元したスクロールの位置を変えない。
+// - 短い間に続けて移動した場合は、前の移動のフォーカスの処理を取り消し、最後のページにだけ移す。
+
 // 移動先のページの見出し（h1）。なければ <main>。
 function focusTargetIn(main: HTMLElement, target: FocusTarget) {
   if (target === false) return null
@@ -189,26 +219,46 @@ function AppShellMain({
 }: React.ComponentProps<"main"> & {
   /** 現在のページを表す値（パスなど）。変わったときに、スクロールの位置とフォーカスを移動先のページに合わせる */
   pageKey?: string
-  /** 移動の後にフォーカスを移す先。heading はページの h1（なければ <main>）。false は移さない */
+  /**
+   * 移動の後にフォーカスを移す先。heading はページの h1（なければ <main>）。main は <main>。false は移さない。
+   * h1 を探すのは移動の描画の後（モバイルのメニューを閉じた後）の 1 回だけ。遅れて表示する見出しは useAppShell().focusHeading で移す
+   */
   focusOnNavigate?: FocusTarget
   /** 移動の後のスクロール。top は先頭に戻す。false は製品が復元する */
   scrollOnNavigate?: "top" | false
 }) {
-  const { mainId, mainRef } = useAppShell()
+  const { mainId, mainRef, pendingHeading } = useAppShell()
   const previousKey = React.useRef(pageKey)
+  // 設定は最新の値を読む。effect は pageKey の変化だけで動かし、待っている間に設定が変わってもフォーカスの処理を取り消さない。
+  const options = React.useRef({ focusOnNavigate, scrollOnNavigate })
+  options.current = { focusOnNavigate, scrollOnNavigate }
 
   React.useEffect(() => {
     // 最初の表示ではフォーカスを動かさない（ブラウザの既定の位置から操作を始める）。
     if (previousKey.current === pageKey) return
     previousKey.current = pageKey
+    pendingHeading.current = false
     const main = mainRef.current
     if (!main) return
-    if (scrollOnNavigate === "top") main.scrollTo({ top: 0, left: 0 })
+    if (options.current.scrollOnNavigate === "top") main.scrollTo({ top: 0, left: 0 })
+    // 続けて移動した場合は、cleanup で前の移動の処理を取り消す
     return afterMobileMenuClosed(() => {
-      const target = focusTargetIn(main, focusOnNavigate)
-      target?.focus({ preventScroll: true })
+      const target = options.current.focusOnNavigate
+      const el = focusTargetIn(main, target)
+      el?.focus({ preventScroll: true })
+      // h1 を探したが、なかったため main にフォーカスした：遅れて表示する見出しを focusHeading で移せるようにする
+      pendingHeading.current = target === "heading" && el === main
     })
-  }, [pageKey, focusOnNavigate, scrollOnNavigate, mainRef])
+  }, [pageKey, mainRef, pendingHeading])
+
+  // フォーカスが main から離れたら、遅れて表示する見出しへの移動を取りやめる
+  React.useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      if (event.target !== mainRef.current) pendingHeading.current = false
+    }
+    document.addEventListener("focusin", onFocusIn)
+    return () => document.removeEventListener("focusin", onFocusIn)
+  }, [mainRef, pendingHeading])
 
   return (
     <main

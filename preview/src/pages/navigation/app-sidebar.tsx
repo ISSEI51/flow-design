@@ -22,7 +22,7 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { SidebarNav, type NavGroup as RegistryNavGroup } from "@/patterns/sidebar-nav"
+import { SidebarNav, type NavGroup as RegistryNavGroup, type NavItem as RegistryNavItem } from "@/patterns/sidebar-nav"
 
 // 顧客管理・契約管理の BtoB SaaS のナビゲーション。プレビュー（製品）側のコード。
 // 項目、現在位置、ユーザー情報は、コンポーネントではなくこの画面が持つ。
@@ -36,6 +36,8 @@ export type NavItem = {
   label: string
   icon: ComponentType<{ className?: string }>
   badge?: string
+  /** badge の意味。badge を付ける場合は必ず指定する（Registry の型と同じ） */
+  badgeLabel?: string
   /** 子の項目を持つ親が、自身のページも持つ場合のメニューの中での名前 */
   pageLabel?: string
   children?: NavChild[]
@@ -49,7 +51,7 @@ export const navGroups: NavGroup[] = [
     label: "営業",
     items: [
       { id: "customers", label: "顧客", icon: Building2 },
-      { id: "deals", label: "商談", icon: Handshake, badge: "18" },
+      { id: "deals", label: "商談", icon: Handshake, badge: "18", badgeLabel: "進行中 18 件" },
       {
         id: "contracts",
         label: "契約",
@@ -101,11 +103,15 @@ export type User = { name: string; email: string }
 function toRegistryGroups(groups: NavGroup[], hrefFor: (id: string) => string): RegistryNavGroup[] {
   return groups.map((g) => ({
     label: g.label,
-    items: g.items.map((i) => ({
-      ...i,
-      href: !i.children || i.pageLabel ? hrefFor(i.id) : undefined,
-      children: i.children?.map((c) => ({ ...c, href: hrefFor(c.id) })),
-    })),
+    items: g.items.map((i): RegistryNavItem => {
+      const { children, pageLabel, badge, badgeLabel, ...base } = i
+      if (!children) return badge && badgeLabel ? { ...base, href: hrefFor(i.id), badge, badgeLabel } : { ...base, href: hrefFor(i.id) }
+      const kids = children.map((c) => ({ ...c, href: hrefFor(c.id) }))
+      if (pageLabel) return { ...base, href: hrefFor(i.id), pageLabel, children: kids }
+      const [first, ...rest] = kids
+      // ページを持たない親は、子の項目が 1 つ以上必要。子がない場合は描画しない項目にせず、通常の項目にする
+      return first ? { ...base, children: [first, ...rest] } : { ...base, href: hrefFor(i.id) }
+    }),
   }))
 }
 

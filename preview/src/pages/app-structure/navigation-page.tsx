@@ -189,6 +189,9 @@ export function NavigationPatternPage() {
       <Section title="視覚表現">
         <Row label="主要な項目">アイコンと文字を併用する（アイコン 20px、文字 14px、高さ 44px、タッチ操作では 48px）。</Row>
         <Row label="子の項目">文字だけ。親の文字の位置にそろえる。</Row>
+        <Row label="子が現在地の親" note="上の例の「契約」で確かめる">
+          子を表示している間は、親は面なしで文字を太さ 500 にする。子を閉じると、親を太さ 600 で示し（面は付けない）、aria-current=&quot;true&quot; を付ける。親のページ自体が現在地の場合だけ、親を現在地の面（太さ 600、aria-current=&quot;page&quot;）にする。
+        </Row>
         <Compare
           bad={<MiniNav tone="bad" items={[{ label: "顧客", active: true }, { label: "商談" }, { label: "契約" }]} />}
           badNote="ブランドカラーで全面を塗ると、画面の中で最も強い要素になり、主要な操作（Primary のボタン）と区別できない。"

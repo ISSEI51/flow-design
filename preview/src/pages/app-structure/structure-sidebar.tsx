@@ -24,7 +24,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useToast } from "@/components/ui/toast"
-import { SidebarNav, SidebarNavItem, type NavGroup, type NavItem } from "@/patterns/sidebar-nav"
+import { SidebarNav, SidebarNavItem, type NavGroup, type NavLinkItem } from "@/patterns/sidebar-nav"
 import { cn } from "@/lib/utils"
 
 // 業務アプリの例の Sidebar（製品側のコード）。Registry の Sidebar と SidebarNav を組み合わせる。
@@ -59,7 +59,7 @@ export function StructureSidebar({
   className,
 }: {
   groups: NavGroup[]
-  settingsItem: NavItem
+  settingsItem: NavLinkItem
   currentId: string
   onNavigate: (id: string, event: MouseEvent) => void
   homeHref: string

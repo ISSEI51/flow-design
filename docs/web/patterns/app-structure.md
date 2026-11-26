@@ -2,7 +2,7 @@
 
 製品の画面全体の構造を決める Patterns のグループ。App Shell、Navigation、Page Header、Page Layout、Section Layout の 5 種類からなる。
 
-状態：初期実装（レビュー前。v0.1 確定ではない）
+状態：v0.1 確定（2026-11-26。初期実装 `09a7000` のレビューの後に最終調整を行った）
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/app-structure-dark.svg">
@@ -27,8 +27,8 @@ Patterns では、次を重視する。
 
 | Pattern | 目的 | 資料 | 再利用できるコード（`registry/patterns/`） |
 | --- | --- | --- | --- |
-| App Shell | 画面全体の骨組み、スクロールの領域 | [app-shell.md](app-shell.md) | `app-shell.tsx`：`AppShell`、`AppShellBody`、`AppShellHeader`、`AppShellMain`、`MinimalShell`、`useAppShell` |
-| Navigation | 主要な機能への移動 | [navigation.md](navigation.md) | `sidebar-nav.tsx`：`SidebarNav`、`SidebarNavItem`、`SidebarNavParent`、`findNavTrail`<br>`bottom-nav.tsx`：`BottomNav`、`BottomNavItem` |
+| App Shell | 画面全体の骨組み、スクロールの領域 | [app-shell.md](app-shell.md) | `app-shell.tsx`：`AppShell`、`AppShellBody`、`AppShellHeader`、`AppShellMain`、`MinimalShell`、`useAppShell`（`mainRef`、`focusMain`、`focusHeading`） |
+| Navigation | 主要な機能への移動 | [navigation.md](navigation.md) | `sidebar-nav.tsx`：`SidebarNav`、`SidebarNavItem`、`SidebarNavParent`、`findNavTrail`、`isNavParent`、型 `NavItem`（`NavLinkItem` / `NavParentItem`）<br>`bottom-nav.tsx`：`BottomNav`、`BottomNavItem` |
 | Page Header | ページの目的と、ページ全体の操作 | [page-header.md](page-header.md) | `page-header.tsx`：`PageHeader`、`PageHeaderContent`、`PageHeaderTitle`、`PageHeaderDescription`、`PageHeaderActions` |
 | Page Layout | 内容の最大幅、配置、余白、列 | [page-layout.md](page-layout.md) | `page-layout.tsx`：`PageLayout`、`PageColumns` |
 | Section Layout | 情報のまとまりの見出し、間隔、区切り方 | [section-layout.md](section-layout.md) | `section-layout.tsx`：`Section`、`SectionHeader`、`SectionHeading`、`SectionTitle`、`SectionDescription`、`SectionActions`、`SectionStack` |
@@ -100,6 +100,7 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 | Section Layout | `#/section-layout` | 区切り方の順序、見出しの階層、余白、Card、折りたたみ |
 | 営業管理の検証画面 | `#/structure-app?page=home` | 5 種類を組み合わせた業務アプリケーション。ダッシュボード（`home`）、顧客一覧（`customers`）、顧客詳細（`customer&id=C-00002`）、顧客登録（`customer-new`）、設定（`settings`）、ログイン（`login`）。`&long=1` で長いメニュー名とタイトル |
 | Shell の例 | `#/shell-examples?type=header` | `header`、`hybrid`、`minimal`、`bottom`（Bottom Navigation）、`layout`（ページ幅の切り替え） |
+| App Structure の検品 | `#/structure-checks?case=focus` | 検品用の画面（上部の一覧には表示しない）。`focus`（移動の後のフォーカス）、`nav`（複数の SidebarNav、通常のリンク、製品のルーター）、`sections`（見出しと名前と id）、`bottom`（入力欄の種類、5 項目）、`sticky`（Sticky の高さの変化と解除） |
 
 営業管理の検証画面は App Structure の検証のためのものであり、正式な Pages の実装ではない。業務の内容の画面（商談、見積もりなど）は、タイトルだけを置いている。
 
@@ -114,9 +115,9 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 - viewport の meta（`viewport-fit=cover`）
 - ページの移動の前の未保存の変更の確認（Forms & Workflows で扱う）
 
-## 独自に判断した事項
+## 確定した設計判断
 
-指示書に定めのない点を、次のように決めた。レビューで見直す。
+初期実装で独自に判断し、v0.1 のレビューで正式に採用した事項。Header Shell と Hybrid Shell は、部品ではなく組み合わせの例とすることも採用した。Sticky の Page Header を 1 つのスクロールの領域に 1 つまでとする仕様も採用した。
 
 | 事項 | 判断 | 理由 |
 | --- | --- | --- |
@@ -131,6 +132,21 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 | Safe Area | `--app-safe-top` などの CSS 変数を経由する（既定は `env(safe-area-inset-*)`） | 製品が値を調整でき、検品で擬似的な値を与えられる |
 | Bottom Navigation と入力 | タッチ操作の端末（`pointer: coarse`）で文字の入力欄にフォーカスがある間は隠す | ソフトウェアキーボードの上に固定の要素が残り、入力の領域が狭くなるのを防ぐ |
 | 子の項目の自動の展開 | 現在地がグループに入ったときに開く。グループの中で移動しても、利用者が閉じた状態は変えない | 「現在地を含むグループは自動展開」と「任意に開閉できる」を両立する |
+
+## v0.1 の最終調整
+
+初期実装のレビューを受けて、次を変えた。既存の視覚の仕様（寸法、余白、文字、色）は変えていない。
+
+| 対象 | 変更 |
+| --- | --- |
+| Navigation の現在地 | 子が現在地の親を、子を表示している（面なし、太さ 500）、子を閉じている（面なし、太さ 600、`aria-current="true"`）で区別した。親のページ自体が現在地の場合だけ `aria-current="page"` を付ける（[navigation.md](navigation.md#子の項目を持つ親の現在地)） |
+| Navigation の型 | 子の項目を持たない項目は `href` が必須。`href` を持たない親は子の項目が 1 つ以上ある場合だけ。`href="#"` への置き換えをやめた。`pageLabel` と `badge` を付けられる項目を型で限定し、`badge` には `badgeLabel` を必須にした |
+| Navigation の badge | 数字の意味（`badgeLabel`）を、項目の名前ではなく説明（`aria-describedby`）で伝える。名前（「商談」）は変えない |
+| Navigation の id | 子の項目の領域の id を `useId` で作り、複数の `SidebarNav` で重複しないようにした（以前は項目の id から作っていた） |
+| App Shell | 遅れて表示する見出しのための `useAppShell().focusHeading()` を追加した（直前の移動で main にフォーカスした場合だけ動く）。移動の後のフォーカスの処理は `pageKey` の変化だけで動き、待っている間に設定が変わっても取り消さない。移動の後のフォーカスの条件を資料に整理した |
+| Bottom Navigation | 隠す判定から、読み取り専用と無効の入力欄、日付と時刻の入力欄、`role="combobox"` のボタン（Select のトリガー）を除いた。判定が推定であることを資料に書いた |
+| Section Layout | 見出しの id を `Section` の `titleId` で指定するようにした（`SectionTitle` は id を受け取らない）。`SectionTitle` が自分の有無を Section に知らせ、`landmark` で見出しも `aria-label` もない場合は `aria-labelledby` を外す（後から表示・削除する見出しにも追従する） |
+| 検品 | `app-structure-checks.spec.ts`（境界の条件）と `sidebar-nav-types.ts`（型の検品）を追加した |
 
 ## 検品
 
@@ -148,15 +164,48 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 | Section Layout | 見出しの階層と大きさ、`aria-labelledby`。見出しと内容 24px、セクションの間 48px。閉じても入力値が残ること、エラーの表示とフォーカス |
 | Bottom Navigation | 4 項目、現在地、48px 以上、ブランドカラーで塗らない、最後の内容が隠れない、Safe Area（擬似的な値 34px）、入力中に隠れる。デスクトップで表示しない |
 | Shell の例 | Header Shell（上部のナビゲーションとモバイルの Sheet）、Hybrid Shell（機能群の切り替え、Sidebar の高さ）、Minimal Shell（ナビゲーションなし、中央寄せ） |
+| 境界の条件（v0.1） | `app-structure-checks.spec.ts`：親の現在地の 5 つの状態と `aria-current`、複数の `SidebarNav` の id と `aria-controls`、通常のリンク、製品のルーター（`renderLink`）、キーボード、修飾キー付きのクリック。移動の後のフォーカス（最初の表示、h1 なし、遅れて表示する見出し、利用者のフォーカスを奪わない、続けての移動、`focusOnNavigate={false}`、`scrollOnNavigate={false}` と製品の復元、モバイルのメニュー）。Bottom Navigation と入力欄の種類、`hideWhileTyping={false}`、320px の 5 項目と長いラベル。Section の h2〜h6、`level`、`landmark`、`titleId`、見出しのない Section、id の重複と参照先、長い見出しと操作の折り返し。Sticky の高さの変化と解除、文字の大きさ、320px の長いタイトルと操作 |
+| 型 | `sidebar-nav-types.ts`（`npm run typecheck`）：`href` のない項目、ページのない親の `pageLabel`、親の `badge`、3 階層目を、型の検査が誤りとして検出する |
 | SSR と Hydration | `ssr-app-structure.spec.ts`：window と document なしの描画、決定的な HTML、見出しの階層、現在地のグループが開いた HTML、Hydration の不一致なし、Hydration の後の移動とフォーカス、Hydration の前の CSS による表示（Sidebar、最大幅、余白、Bottom Navigation）。`registry/patterns` の `"use client"` の境界 |
 
-`app-structure.spec.ts` と `ssr-app-structure.spec.ts` は `npm run test:components` に含まれる。Patterns だけを実行する場合は `npm run test:patterns`。
+`app-structure.spec.ts`、`app-structure-checks.spec.ts`、`ssr-app-structure.spec.ts` は `npm run test:components` に含まれる。Patterns だけを実行する場合は `npm run test:patterns`（ファイル名に `app-structure` を含むテスト）。
 
 結果は「検証の結果」に記録する。
 
-### 検証の結果
+### v0.1 の検証の結果
 
-独立したレビューの指摘への対処の後の、最終の状態での結果。
+コミットする状態で、次をこの順に続けて実行した（2026-11-26、4 ワーカー）。
+
+| 確認 | 結果 |
+| --- | --- |
+| `npm run typecheck` | 成功（exit 0）。型の検品（`sidebar-nav-types.ts`）を含む |
+| `npm run preview:build` | 成功（exit 0）。チャンクの大きさの警告は従来どおり（範囲外） |
+| `npm run test:tokens` | 成功（failed 0） |
+| `npm run test:ssr` | 72 件成功 |
+| `npm run test:patterns` | 203 件成功、71 件 skip、失敗 0 件 |
+| `npm run test:components` | 1714 件成功、220 件 skip、失敗 0 件（8.3 分） |
+
+- 製品の例外とコンソールのエラーは 0 件。記録されたのは、SSR の検品での Vite の HMR の接続のコンソールのエラー（既存の条件で記録だけ）である。
+- skip は既存の規則によるもの（`@webkit` のないテストの WebKit、デスクトップだけ・モバイルだけの表示、ハードウェアキーボードの操作、`pointer: coarse` の判定、WebKit の修飾キー付きのクリック）。既存のテストの削除、不要な skip の追加、許容誤差の拡大はしていない。
+- 既存のテストの変更は 1 件：初期実装で追加した `app-structure.spec.ts` の、移動の直後に現在地の色を測る判定を、色の変化（120ms）の終わりを待つ判定に変えた（測る時点の問題。期待する値は変えていない）。
+- 修飾キー付きのクリックの検品は、Playwright の WebKit で新しいページが開かない環境があるため、Chromium で行った。
+
+### v0.1 の独立したレビュー
+
+別のエージェントが、v0.1 の差分を読み取りだけでレビューした。指摘は高 1 件、中 6 件、低 7 件。
+
+| 指摘 | 対処 |
+| --- | --- |
+| 高：検証の結果の節が未記入 | この節を記入した |
+| 中：`focusHeading` が最初の表示や `focusOnNavigate` が heading 以外の移動でもフォーカスを移す | 直前の移動で main にフォーカスした場合だけ動くようにし、最初の表示の検品を追加した |
+| 中：ページを持たない親に空の子の項目を書ける。`badge` だけを書いて意味を省ける | 型で禁止し、型の検品に追加した。プレビューの業務アプリの例の件数にも意味を付けた |
+| 中：検品が固定の時間（400ms）の読み込みに依存する。続けての移動の検品が、取り消しの処理が壊れていても成功する | 読み込みの完了を検品から起こすようにした。フォーカスの移動の記録で、移動が 1 回だけであることを確かめる |
+| 中：Section の見出しの検出が、Section の再描画のときだけ行われる | `SectionTitle` が自分の有無を Section に知らせる方式にし、後から表示・削除する見出しの検品を追加した。サーバーの HTML での挙動を資料に書いた |
+| 低：資料の色の名前、検品の画面のコメント、子を閉じた親のホバー、effect の依存、復元の例の順序、Base UI の挙動の記述 | 対処した。子を閉じた親の面は、自己レビューで親のページの面と見分けにくい（コントラスト比 約 1.07）ことを確かめたため、面を付けず文字の太さで示す方式に変えた |
+
+### 初期実装の検証の結果
+
+初期実装（`09a7000`）で、独立したレビューの指摘への対処の後の、最終の状態での結果。
 
 | 確認 | 結果 |
 | --- | --- |
@@ -174,7 +223,7 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 
 スクリーンショット（`preview/screenshots/<project>/`、Git の管理外）：`structure-*.png`（検証画面の 6 画面、折りたたみ、モバイルのメニュー）、`shell-*.png`（Shell の例）、`pattern-*.png`（資料のページ）を、Chromium の 1280×900 と Pixel 7 で撮り、目視で確かめた。WebKit と実機での目視の確認は行っていない。
 
-### 独立したレビュー
+### 初期実装の独立したレビュー
 
 別のエージェントが、実装の結論を渡さずに、差分、資料、スクリーンショットを 8 つの設計原則と 8 つの美的基準で確かめた。指摘は高 1 件、中 10 件、低 15 件。
 
@@ -183,7 +232,7 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 | 高：ホームの「30 日以内に更新」が、表示を 6 件に切った後の件数（6 件）を示していた。正しくは 15 件 | 絞り込んだすべての件数を示し、一覧の下に「ほか 9件」と、すべてを見るリンクを置いた。検品を追加した |
 | 中：ページ幅の切り替えの例で、選択中を Primary の塗りで示していた | ナビゲーションの現在地と同じニュートラルの面と太さ 600 にした |
 | 中：項目が 1 つのグループ（分析）に見出しを付けていた | 見出しを外した |
-| 中：商談の件数「18」の意味が伝わらず、支援技術からも隠れていた | `badgeLabel` を追加し、「進行中 18 件」を名前に続けて読み上げる |
+| 中：商談の件数「18」の意味が伝わらず、支援技術からも隠れていた | `badgeLabel` を追加した（v0.1 で、名前ではなく説明 `aria-describedby` として伝える方式に変えた） |
 | 中：すべての Section が `aria-labelledby` を持ち、region のランドマークが増えすぎる。見出しがない場合は存在しない id を参照する | `landmark` を付けた Section だけに付ける |
 | 中：設定の Tab「メンバー」の内容がプランだった | Tab を「プラン」にした |
 | 中：ホームの期間の Select が内容と連動していなかった | 売上の指標を期間で切り替える |
@@ -203,6 +252,15 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 | 実機の iOS Safari | 未検証。`100dvh`、Safe Area（`env()` の実際の値）、ソフトウェアキーボードの表示中の main のスクロールと Bottom Navigation を、実機で確かめていない。Safe Area は CSS 変数に擬似的な値を与えて確かめた |
 | Android の実機 | 未検証。`interactive-widget` の既定（resizes-visual）でのキーボードの表示を含む |
 | VoiceOver、NVDA | 未検証。ランドマーク、`aria-current`、`aria-expanded`、移動の後の h1 へのフォーカスを、Playwright の属性とフォーカスの検品で確かめている |
-| スクロールの復元 | 部品では行わない（製品の責務）。プレビューの検証画面も、移動のたびに先頭へ戻る |
-| Next.js での導入 | 未検証。`"use client"` の境界は規則で確かめている |
-| ページの移動での未保存の変更の確認 | Forms & Workflows で扱う |
+| ブラウザの文字の大きさの設定 | ルートの `font-size` を変えて近似した。メディアクエリの rem はブラウザの初期値を基準にするため、実際の設定の変更とはブレークポイントの位置が異なる |
+| ハードウェアキーボードを付けたタブレット | Bottom Navigation が入力中に隠れる（推定の限界）。実機で確かめていない |
+
+## 後続のフェーズへの引き継ぎ
+
+| 事項 | 引き継ぎ先 |
+| --- | --- |
+| Table の横スクロールの視覚的な手がかり（モバイルの顧客の一覧で、横にスクロールできることが見えない） | Data Browsing |
+| 未保存の変更がある場合のページの移動の確認 | Forms & Workflows |
+| ルーターに固有のスクロールの復元（`mainRef` を使う方法は資料に記載） | 製品の責務 |
+| 実機の iOS Safari、Android、VoiceOver、NVDA | 公開前の品質の検品 |
+| Next.js への導入の検品（`"use client"` の境界、SSR） | Registry & Gallery |

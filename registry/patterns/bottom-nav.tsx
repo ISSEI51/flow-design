@@ -17,15 +17,23 @@ import { cn } from "@/lib/utils"
 // - 項目はアイコンと短いラベル。現在地は aria-current="page"、ニュートラルの面（アイコンの背景）、文字の太さ 600 で示す。
 //   ブランドカラーで塗らない。
 // - md（768px）以上では表示しない。デスクトップでは Header Shell か Sidebar Shell のナビゲーションを使う。
-// - タッチ操作の端末で文字の入力欄にフォーカスがある間（ソフトウェアキーボードが表示される間）は隠し、入力の領域を広げる。
+// - タッチ操作の端末（pointer: coarse）で文字の入力欄にフォーカスがある間は隠し、入力の領域を広げる。
+//   ソフトウェアキーボードそのものは検出しない。「タッチ操作の端末で文字の入力欄にフォーカスがある」ことから、
+//   キーボードが表示されていると推定する（ハードウェアキーボードを付けたタブレットなどでは、推定が外れる）。
 
-const TEXT_INPUT_TYPES = new Set(["text", "search", "email", "tel", "url", "password", "number", "date", "datetime-local", "month", "time", "week"])
+// 文字を入力する input の type。日付や時刻（OS の選択の部品が開く）、チェックボックス、ボタンなどは含めない。
+const TEXT_INPUT_TYPES = new Set(["text", "search", "email", "tel", "url", "password", "number"])
 
+// フォーカスした要素で、文字を入力するか（ソフトウェアキーボードが表示されると推定できるか）。
+// - 読み取り専用と無効の入力欄は、文字を入力しないため含めない。
+// - 入力できる Combobox は <input> のため、type で判定する。ボタンの Select（role="combobox"）は含めない。
+// - contenteditable は含める。
 function isTextEntry(el: Element | null) {
   if (!(el instanceof HTMLElement)) return false
-  if (el.isContentEditable || el.tagName === "TEXTAREA") return true
-  if (el instanceof HTMLInputElement) return TEXT_INPUT_TYPES.has(el.type)
-  return el.getAttribute("role") === "textbox" || el.getAttribute("role") === "combobox"
+  if (el.isContentEditable) return true
+  if (el instanceof HTMLTextAreaElement) return !el.readOnly && !el.disabled
+  if (el instanceof HTMLInputElement) return TEXT_INPUT_TYPES.has(el.type) && !el.readOnly && !el.disabled
+  return false
 }
 
 // タッチ操作の端末で、文字の入力欄にフォーカスがあるか。サーバーでの描画と Hydration の間は false。

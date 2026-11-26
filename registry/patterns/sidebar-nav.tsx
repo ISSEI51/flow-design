@@ -34,17 +34,27 @@ import { cn } from "@/lib/utils"
 // - 階層は 2 つまで（主要な項目と、その子の項目）。3 つ目以上の階層は型で受け付けない。
 // - 主要な項目はアイコンと文字、子の項目は文字だけ。現在地は Sidebar の isActive（ニュートラルの面と太さ 600）で示す。
 // - 現在地は currentId（製品が自分のルーターから求めた項目の id）で受け取り、特定のルーティングのライブラリに依存しない。
+//   項目の id は、1 つの SidebarNav の中で一意にする（製品の責務）。
 // - リンクの要素は renderLink で変えられる（既定は <a href>）。例：Next.js の <Link>、React Router の <Link>。
+// - 子の項目を持たない項目は href が必須（型で保証する）。href を持たない親は、子の項目がある場合だけ描画する。
 // - 子の項目を持つ項目（SidebarNavParent）
 //   - 展開時：子の項目を 2 階層目として Sidebar の中に表示する。現在地を含むグループは、現在地がグループに入ったときに開く。
-//     ほかのグループも任意に開閉できる。
+//     ほかのグループも任意に開閉できる。利用者が閉じた状態は、グループの中で移動しても変えない。
 //   - 親が自身のページ（href）を持つ場合：親はリンクで、右の開閉のボタン（aria-expanded）で子の項目を開閉する。
 //     親への移動と子の開閉を、別の操作に分ける。
 //   - 親が自身のページを持たない場合：親はボタンで、押すと子の項目を開閉する。
 //   - 折りたたみ時（64px）：親を Dropdown Menu のボタンにし、右側に子の項目を表示する。
 //   - モバイル（Sheet）では常に展開時の表示になる。
-// - 項目を選んで移動したら、モバイルの Sheet を閉じる。修飾キー（Ctrl、⌘、Shift）付きのクリックと中ボタンは、
+//   - 親の現在地の表し方（data-nav-current）
+//       page         親のページ自体が現在地：sidebar-accent の面、太さ 600、aria-current="page"（Sidebar の isActive）
+//       child-open   子が現在地で、子を表示している：親は面なし、文字を sidebar-accent-foreground・太さ 500。子が現在地の面と aria-current="page"
+//       child-closed 子が現在地で、子を閉じている：面なし、文字を sidebar-accent-foreground・太さ 600、aria-current="true"
+//       （なし）      現在地を含まない
+//       折りたたみ時 子か親のページが現在地：sidebar-accent の面、太さ 600、aria-current="true"
+//     親のページ自体が現在地でない場合は、aria-current="page" を付けない。
+// - 項目を選んで移動したら、モバイルの Sheet を閉じる。修飾キー（Ctrl、⌘、Shift、Alt）付きのクリックと中ボタンは、
 //   新しいタブで開く操作として扱い、移動とみなさない。
+// - 子の項目の領域の id は useId で作り、同じ画面に複数の SidebarNav を置いても重複しない。
 
 type NavIcon = React.ComponentType<{ className?: string }>
 
@@ -55,31 +65,63 @@ type NavChildItem = {
   href: string
 }
 
-/** 主要な項目（1 階層目） */
-type NavItem = {
+type NavItemBase = {
   id: string
   label: string
   icon: NavIcon
-  /** 項目のページ。子の項目を持たない項目では必須。子の項目を持つ親で省略すると、親はページを持たない（押すと子の項目を開閉する） */
-  href?: string
-  /** 件数など（例：18）。表示は視覚だけのため、意味を badgeLabel で支援技術に伝える。子の項目を持つ親では表示しない */
-  badge?: string
-  /** badge の意味（例：進行中 18 件）。項目の名前に続けて読み上げる */
-  badgeLabel?: string
-  /** 子の項目を持つ親が自身のページも持つ場合の、折りたたみ時のメニューの中での名前（例：契約の一覧） */
-  pageLabel?: string
-  children?: NavChildItem[]
 }
+
+/** 子の項目を持たない、主要な項目。href は必須 */
+type NavLinkItem = NavItemBase & {
+  href: string
+  children?: undefined
+  pageLabel?: undefined
+} & (
+    | { badge?: undefined; badgeLabel?: undefined }
+    | {
+        /** 件数など（例：18）。表示は視覚だけ（aria-hidden） */
+        badge: string
+        /** badge の意味（例：進行中 18 件）。項目の説明（aria-describedby）として支援技術に伝える。badge を付ける場合は必須 */
+        badgeLabel: string
+      }
+  )
+
+/** 子の項目を持つ親。href を省略すると、親はページを持たない（押すと子の項目を開閉する）。badge は表示しない */
+type NavParentItem = NavItemBase & {
+  badge?: undefined
+  badgeLabel?: undefined
+} & (
+    | {
+        href: string
+        /** 折りたたみ時のメニューの中での、親のページの名前（例：契約の一覧）。省略すると label */
+        pageLabel?: string
+        /** 空の場合は、親のページへの通常の項目として描画する */
+        children: readonly NavChildItem[]
+      }
+    | {
+        href?: undefined
+        pageLabel?: undefined
+        /** ページを持たない親は、子の項目が 1 つ以上必要 */
+        children: readonly [NavChildItem, ...NavChildItem[]]
+      }
+  )
+
+/** 主要な項目（1 階層目） */
+type NavItem = NavLinkItem | NavParentItem
 
 /** 項目のまとまり。label は意味のある分類が必要な場合だけ付ける */
 type NavGroup = {
   label?: string
-  items: NavItem[]
+  items: readonly NavItem[]
 }
 
 type RenderLink = (link: { id: string; href: string }) => React.ReactElement
 
 const defaultRenderLink: RenderLink = ({ href }) => <a href={href} />
+
+function isNavParent(item: NavItem): item is NavParentItem {
+  return item.children !== undefined
+}
 
 // 新しいタブやウィンドウで開く操作か（ブラウザの既定の動作に任せ、移動とみなさない）。
 function isModifiedClick(event: React.MouseEvent) {
@@ -134,25 +176,24 @@ function SidebarNav({
           {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
           <SidebarGroupContent>
             <SidebarMenu>
-              {group.items.map((item) =>
-                item.children?.length ? (
-                  <SidebarNavParent
-                    key={item.id}
-                    item={item}
-                    currentId={currentId}
-                    onNavigate={onNavigate}
-                    renderLink={renderLink}
-                  />
-                ) : (
-                  <SidebarNavItem
-                    key={item.id}
-                    item={item}
-                    currentId={currentId}
-                    onNavigate={onNavigate}
-                    renderLink={renderLink}
-                  />
-                )
-              )}
+              {group.items.map((item) => {
+                if (!isNavParent(item))
+                  return <SidebarNavItem key={item.id} item={item} currentId={currentId} onNavigate={onNavigate} renderLink={renderLink} />
+                if (item.children.length > 0)
+                  return <SidebarNavParent key={item.id} item={item} currentId={currentId} onNavigate={onNavigate} renderLink={renderLink} />
+                // 子の項目が空の親：ページを持つ場合だけ、通常の項目として描画する
+                if (item.href)
+                  return (
+                    <SidebarNavItem
+                      key={item.id}
+                      item={{ id: item.id, label: item.label, icon: item.icon, href: item.href }}
+                      currentId={currentId}
+                      onNavigate={onNavigate}
+                      renderLink={renderLink}
+                    />
+                  )
+                return null
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -168,31 +209,46 @@ function SidebarNavItem({
   onNavigate,
   renderLink = defaultRenderLink,
 }: {
-  item: NavItem
+  item: NavLinkItem
   currentId?: string
   onNavigate?: (id: string, event: React.MouseEvent) => void
   renderLink?: RenderLink
 }) {
   const navigate = useNavigate(onNavigate)
+  const descriptionId = `sidebar-nav-badge${React.useId()}`
   const Icon = item.icon
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         isActive={currentId === item.id}
-        render={renderLink({ id: item.id, href: item.href ?? "#" })}
+        render={renderLink({ id: item.id, href: item.href })}
         onClick={(e) => navigate(item.id, e)}
         tooltip={item.label}
+        // badge の意味は説明（aria-describedby）で伝え、項目の名前は変えない
+        aria-describedby={item.badge ? descriptionId : undefined}
       >
         <Icon />
-        <span>
-          {item.label}
-          {item.badgeLabel && <span className="sr-only">、{item.badgeLabel}</span>}
-        </span>
+        <span>{item.label}</span>
       </SidebarMenuButton>
-      {item.badge && <SidebarMenuBadge aria-hidden="true">{item.badge}</SidebarMenuBadge>}
+      {item.badge && (
+        <>
+          <SidebarMenuBadge aria-hidden="true">{item.badge}</SidebarMenuBadge>
+          <span id={descriptionId} hidden>
+            {item.badgeLabel}
+          </span>
+        </>
+      )}
     </SidebarMenuItem>
   )
 }
+
+// 子が現在地のときの、展開時の親の表し方。
+const parentCurrentClass = {
+  "child-open": "font-medium text-sidebar-accent-foreground",
+  // 面は付けない。sidebar-accent を薄めた面は、親のページ自体が現在地の面（sidebar-accent）と見分けにくい
+  // （両者のコントラスト比は約 1.07）ため、文字の強調（太さ 600）だけで示す。
+  "child-closed": "font-semibold text-sidebar-accent-foreground",
+} as const
 
 /** 子の項目を持つ項目（2 階層目への入り口） */
 function SidebarNavParent({
@@ -204,7 +260,7 @@ function SidebarNavParent({
   defaultOpen,
   onOpenChange,
 }: {
-  item: NavItem
+  item: NavParentItem
   currentId?: string
   onNavigate?: (id: string, event: React.MouseEvent) => void
   renderLink?: RenderLink
@@ -216,8 +272,9 @@ function SidebarNavParent({
 }) {
   const { state, isMobile } = useSidebar()
   const navigate = useNavigate(onNavigate)
+  const subId = `sidebar-nav-sub${React.useId()}`
   const Icon = item.icon
-  const children = item.children ?? []
+  const children = item.children
   const collapsed = state === "collapsed" && !isMobile
   const selfActive = item.href !== undefined && currentId === item.id
   const childActive = children.some((c) => c.id === currentId)
@@ -247,8 +304,6 @@ function SidebarNavParent({
     prevContainsRef.current = containsCurrent
   }, [controlled, containsCurrent, open])
 
-  const subId = `sidebar-nav-sub-${item.id}`
-
   if (collapsed) {
     const entries = item.href ? [{ id: item.id, label: item.pageLabel ?? item.label, href: item.href }, ...children] : children
     return (
@@ -257,6 +312,7 @@ function SidebarNavParent({
           <SidebarMenuButton
             render={<DropdownMenuTrigger />}
             data-nav-parent={item.id}
+            data-nav-current={containsCurrent ? "collapsed" : undefined}
             // 面の色だけで伝えず、現在地を含む項目であることを aria-current="true"（集合の中の現在の項目）でも伝える。
             // 名前は変えない（名前で項目を探す操作と支援技術の読み上げを、状態で変えないため）。
             aria-current={containsCurrent ? "true" : undefined}
@@ -290,6 +346,16 @@ function SidebarNavParent({
     )
   }
 
+  // 展開時の親の現在地の状態。親のページ自体は isActive（page）で表す。
+  const childState = childActive ? (open ? "child-open" : "child-closed") : undefined
+  const parentState = {
+    "data-nav-current": selfActive ? "page" : childState,
+    // 子を閉じているときは、子の aria-current="page" が見えないため、親に aria-current="true" を付ける。
+    // 値がない場合はキーを渡さない（undefined を渡すと、isActive が付ける aria-current="page" を消すため）
+    ...(childState === "child-closed" ? { "aria-current": "true" as const } : {}),
+    className: childState ? parentCurrentClass[childState] : undefined,
+  }
+
   return (
     <SidebarMenuItem>
       {item.href ? (
@@ -298,6 +364,7 @@ function SidebarNavParent({
             isActive={selfActive}
             render={renderLink({ id: item.id, href: item.href })}
             onClick={(e) => navigate(item.id, e)}
+            {...parentState}
           >
             <Icon />
             <span>{item.label}</span>
@@ -314,7 +381,7 @@ function SidebarNavParent({
           </SidebarMenuAction>
         </>
       ) : (
-        <SidebarMenuButton aria-expanded={open} aria-controls={open ? subId : undefined} onClick={() => setOpen(!open)}>
+        <SidebarMenuButton aria-expanded={open} aria-controls={open ? subId : undefined} onClick={() => setOpen(!open)} {...parentState}>
           <Icon />
           <span>{item.label}</span>
           <ChevronDown
@@ -350,8 +417,11 @@ export {
   SidebarNavItem,
   SidebarNavParent,
   findNavTrail,
+  isNavParent,
   type NavChildItem,
   type NavGroup,
   type NavItem,
+  type NavLinkItem,
+  type NavParentItem,
   type RenderLink,
 }
