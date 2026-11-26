@@ -176,6 +176,8 @@ export type SettingsAreaProps = {
   headingLevel?: 2 | 3
   /** 明示的な保存のフォームのどれかに未保存の変更があるか（設定の外への移動の前に、製品が確認するため） */
   onAnyDirtyChange?: (dirty: boolean) => void
+  /** 模擬のサーバーの保存の順序の規則（プレビューの検品用。製品では API の契約に合わせて固定する） */
+  saveContract?: SettingsSectionProps["saveContract"]
   testId?: string
 }
 
@@ -189,6 +191,7 @@ export function SettingsArea({
   onPermissionDenied,
   headingLevel = 2,
   onAnyDirtyChange,
+  saveContract,
   testId = "set-area",
 }: SettingsAreaProps) {
   const groups = settingsCategories(scope, hrefFor)
@@ -263,7 +266,7 @@ export function SettingsArea({
   }, [focusRequest])
 
   const entries = useMemo(() => settingsSearchEntries(scope), [scope])
-  const sectionProps: SettingsSectionProps = { scope, api, onPermissionDenied, onDirtyChange }
+  const sectionProps: SettingsSectionProps = { scope, api, onPermissionDenied, onDirtyChange, saveContract }
   const scopeText =
     current.id === "organization" || current.id === "members"
       ? `対象：${workspaceName(scope)}（組織の設定。すべてのメンバーに適用されます）`
@@ -285,7 +288,9 @@ export function SettingsArea({
     case "notifications":
       body = (
         <>
-          <QuietHoursSection {...sectionProps} />
+          {/* 通知の設定の部品（notifications）を差し込む場合は、その部品の「通知を控える時間」を使う。
+              同じ意味の設定を、別の保存先で 2 つ示さない（統合の検証画面で見つけた重複） */}
+          {!notifications && <QuietHoursSection {...sectionProps} />}
           {notifications ?? (
             <Section data-setting-id="notification-types">
               <SectionHeader>

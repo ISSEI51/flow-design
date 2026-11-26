@@ -7,13 +7,38 @@ import { collectPageErrors } from "./page-errors"
 
 // Patterns / System & Account / Permission States の資料のページの検品。
 // 模擬のサーバーは window.__fdSaPermissionServer で設定する（応答の時間、結果、ignoreAbort、受け付けた要求の記録）。
+// 応答の順序は、固定の応答時間ではなく、要求の保留（hold）と解放（release）で制御する。
 // 期待値は、指示書の判断基準（6 章、13 章）と model.ts のロール・契約プランから決める（画面の表示から作らない）。
 collectPageErrors(test)
 
 type Server = NonNullable<Window["__fdSaPermissionServer"]>
+type Kind = Server["log"][number]["kind"]
 const server = <T>(page: Page, fn: (s: Server) => T) =>
   page.evaluate((src) => new Function("s", `return (${src})(s)`)(window.__fdSaPermissionServer), fn.toString()) as Promise<T>
+const serverWith = <A, T>(page: Page, fn: (s: Server, arg: A) => T, arg: A) =>
+  page.evaluate(([src, a]) => new Function("s", "a", `return (${src})(s, a)`)(window.__fdSaPermissionServer, a), [fn.toString(), arg] as const) as Promise<Awaited<T>>
 const logOf = (page: Page, kind: string) => server(page, (s) => s.log).then((l) => l.filter((x) => x.kind === kind))
+/** 種類 kind の要求を保留する（release まで応答しない） */
+const hold = (page: Page, kind: Kind, on = true) => serverWith(page, (s, [k, v]) => void (s.hold[k] = v), [kind, on] as const)
+/** 保留中の要求の数 */
+const heldOf = (page: Page, kind: Kind, scope?: string) =>
+  serverWith(page, (s, [k, sc]) => s.held.filter((h) => h.kind === k && (sc === null || h.scope === sc)).length, [kind, scope ?? null] as const)
+/** 保留中の要求を解放し、応答の処理と描画の予約が進むまで待つ */
+const release = (page: Page, kind: Kind, options: { scope?: string; outcome?: "success" | "fail" | "unknown"; process?: boolean } = {}) =>
+  serverWith(
+    page,
+    async (s, [k, o]) => {
+      const n = s.release(k, o)
+      await s.settle()
+      return n
+    },
+    [kind, options] as const,
+  )
+/**
+ * 要求が count 件以上保留されるまで待つ。同じスコープを表示しているほかの例も、変更の知らせで取得し直すため、
+ * 種類だけで数える場合は「以上」で待つ（release は一致するものをすべて解放する）。
+ */
+const waitHeld = (page: Page, kind: Kind, count = 1, scope?: string) => expect.poll(() => heldOf(page, kind, scope)).toBeGreaterThanOrEqual(count)
 
 const demo = (page: Page, id: string) => page.getByTestId(`perm-demo-${id}`)
 const op = (page: Page, demoId: string, id: string) => demo(page, demoId).getByTestId(`perm-op-${id}`)
@@ -171,7 +196,7 @@ test.describe("unresolved permissions are never treated as allowed", () => {
     await ready(page, "ops")
     await pickScope(page, "ops", /鈴木 一郎/)
     await ready(page, "ops")
-    await server(page, (s) => (s.latency.access = 2500))
+    await hold(page, "access")
     await pickScope(page, "ops", /佐藤 花子（本社営業部/)
     await expect(demo(page, "ops").getByTestId("perm-ops")).toHaveAttribute("data-status", "loading")
     const edit = opButton(page, "ops", "edit", "顧客を編集")
@@ -180,6 +205,8 @@ test.describe("unresolved permissions are never treated as allowed", () => {
     await expect(op(page, "ops", "edit").locator("[data-slot=restriction-reason]")).toHaveText("権限を確認しています")
     await expect(op(page, "ops", "invite")).toHaveCount(0)
     await expect(op(page, "ops", "audit")).toHaveCount(0)
+    await waitHeld(page, "access", 1, "u-sato:hq")
+    await release(page, "access")
     await ready(page, "ops")
     await expect(edit).toBeEnabled()
     await expect(op(page, "ops", "audit")).toHaveAttribute("data-restriction", "entitlement")
@@ -317,8 +344,12 @@ test.describe("permission request", () => {
     await open(page)
     await page.evaluate(() => ((window as unknown as { __permMarker: number }).__permMarker = 1))
     const button = req(page, "customers.delete").getByRole("button", { name: "「顧客を削除」の権限を申請" })
-    // 二重申請の防止：素早く 2 回押しても、送る要求は 1 つ
+    // 二重申請の防止：素早く 2 回押しても、送る要求は 1 つ（応答を保留して、送信中の 2 回目の押下を確かめる）
+    await hold(page, "request")
     await button.dblclick()
+    await waitHeld(page, "request")
+    expect(await logOf(page, "request")).toHaveLength(1)
+    await release(page, "request")
     await expect(req(page, "customers.delete")).toHaveAttribute("data-request-status", "pending")
     await expect(req(page, "customers.delete").getByRole("button")).toHaveCount(0)
     expect(await logOf(page, "request")).toHaveLength(1)
@@ -345,6 +376,9 @@ test.describe("permission request", () => {
     await req(page, "customers.edit").getByRole("button", { name: "「顧客を登録・編集」の権限を申請" }).click()
     await expect(req(page, "customers.edit")).toHaveAttribute("data-request-status", "pending")
     expect((await server(page, (s) => s.inspect().requests)).length).toBe(1)
+    // 照会の結果を文で示す（申請されていた）
+    await expect(req(page, "customers.edit").getByRole("status")).toHaveText("「顧客を登録・編集」の権限は申請されていました。承認を待っています。")
+    expect(await logOf(page, "request")).toHaveLength(2)
     // 却下
     await demo(page, "request").getByTestId("perm-admin-requests").getByRole("button", { name: "却下する" }).click()
     await expect(req(page, "customers.edit")).toHaveAttribute("data-request-status", "rejected")
@@ -396,25 +430,71 @@ test.describe("permission change while in use", () => {
     await page.evaluate(() => ((window as unknown as { __permMarker: number }).__permMarker = 1))
     const edit = opButton(page, "live", "edit", "顧客を編集")
     await expect(edit).toBeEnabled()
-    await server(page, (s) => (s.latency.access = 1200))
+    await hold(page, "access")
     await demo(page, "live").getByRole("button", { name: "鈴木 一郎さんを閲覧者にする" }).click()
-    // 再確認の間も、古い権限での操作を受け付けない
-    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "unresolved", { timeout: 500 })
+    // 再確認の間も、古い権限での操作を受け付けない（応答を保留している間）
+    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "unresolved")
     await expect(op(page, "live", "edit").locator("[data-slot=restriction-reason]")).toHaveText("最新の権限を確認しています")
+    await expect(edit).toHaveAttribute("aria-disabled", "true")
+    await waitHeld(page, "access")
+    await release(page, "access")
     await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "authorization")
     await expect(demo(page, "live").getByTestId("perm-live-notice")).toHaveText("権限が変更されました。表示している操作を更新しました。")
     await expect(demo(page, "live").getByTestId("perm-live-notice")).toHaveAttribute("role", "status")
     await demo(page, "live").getByRole("button", { name: "鈴木 一郎さんをメンバーに戻す" }).click()
+    // 前の権限（閲覧者）でも許可されない操作は、再確認の間も、その理由（認可）を示す（表示を揺らさない）
+    await waitHeld(page, "access")
+    await expect(demo(page, "live").getByTestId("perm-ops")).toHaveAttribute("data-status", "refreshing")
+    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "authorization")
+    await release(page, "access")
     await expect(op(page, "live", "edit")).toHaveAttribute("data-mode", "enabled")
     expect(await page.evaluate(() => (window as unknown as { __permMarker?: number }).__permMarker)).toBe(1)
+  })
+
+  test("from the first commit after a change notice until the re-fetched response, no commit allows the operation", async ({ page }) => {
+    await open(page)
+    await ready(page, "live")
+    const ops = demo(page, "live").getByTestId("perm-ops")
+    const before = Number(await ops.getAttribute("data-request-id"))
+    const revision = Number(await ops.getAttribute("data-revision"))
+    // 画面に反映した（commit した）状態をすべて記録する（一時的な状態も検出する）
+    await ops.evaluate((el) => {
+      const seen: string[] = []
+      ;(window as unknown as { __permLive: string[] }).__permLive = seen
+      const edit = () => el.querySelector('[data-testid="perm-op-edit"]')?.getAttribute("data-mode") ?? "none"
+      new MutationObserver(() =>
+        seen.push([el.getAttribute("data-revision"), el.getAttribute("data-status"), el.getAttribute("data-verified"), el.getAttribute("data-request-id"), edit()].join("|")),
+      ).observe(el, { attributes: true, subtree: true })
+    })
+    await hold(page, "access")
+    await server(page, (s) => s.simulate.setRole("u-suzuki", "hq", "viewer"))
+    await expect(ops).toHaveAttribute("data-status", "refreshing")
+    await expect(ops).toHaveAttribute("data-verified", "false")
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "authorization")
+    const seen = await page.evaluate(() => (window as unknown as { __permLive: string[] }).__permLive)
+    const after = seen.filter((x) => x.startsWith(`${revision + 1}|`))
+    expect(after.length).toBeGreaterThan(0)
+    for (const x of after) {
+      const [, status, verified, requestId, mode] = x.split("|")
+      // 新しい revision の commit で ready（確認済み）になるのは、変更の後に送った要求の応答だけ
+      if (status === "ready") expect(Number(requestId)).toBeGreaterThan(before)
+      else expect(verified).toBe("false")
+      // 変更の後に、古い権限で「顧客を編集」を有効にした commit がない
+      expect(mode === "enabled" && Number(requestId) <= before).toBe(false)
+    }
   })
 
   test("an operation sent with permissions that were revoked meanwhile is rejected by the server and shown", async ({ page }) => {
     await open(page)
     await ready(page, "live")
-    await server(page, (s) => (s.latency.operation = 800))
+    await hold(page, "operation")
     await opButton(page, "live", "edit", "顧客を編集").click()
+    await waitHeld(page, "operation")
     await server(page, (s) => s.simulate.setRole("u-suzuki", "hq", "viewer"))
+    // サーバーは、解放した時点（処理する時点）の権限で判断する
+    await release(page, "operation")
     await expect(demo(page, "live").getByTestId("perm-ops-result")).toHaveText(/「顧客を編集」をサーバーが拒否しました/)
   })
 })
@@ -492,11 +572,13 @@ test.describe("permission change while editing", () => {
   test("permission revoked during save: the actual server result (rejected) is shown, and nothing is saved", async ({ page }) => {
     await open(page)
     await expect(editor(page)).toHaveAttribute("data-mode", "edit")
-    await server(page, (s) => (s.latency.save = 1200))
+    await hold(page, "save")
     await note(page).fill("保存中に権限が変わる")
     await editor(page).getByRole("button", { name: "保存" }).click()
     await expect(editor(page).getByTestId("perm-editor-save-status")).toHaveText("保存しています")
+    await waitHeld(page, "save")
     await server(page, (s) => s.simulate.setRole("u-suzuki", "hq", "viewer"))
+    await release(page, "save")
     await expect(editor(page).getByTestId("perm-editor-save-status")).toHaveText(
       "保存されませんでした。権限が変更されたため、サーバーが保存を受け付けませんでした。",
     )
@@ -508,12 +590,14 @@ test.describe("permission change while editing", () => {
     await open(page)
     await expect(editor(page)).toHaveAttribute("data-mode", "edit")
     await server(page, (s) => Object.assign(s, { outcome: { save: "unknown" } }))
-    await server(page, (s) => (s.latency.save = 800))
+    await hold(page, "save")
     await note(page).fill("結果が不明な保存")
     await editor(page).getByRole("button", { name: "保存" }).click()
     const spinner = editor(page).locator("[data-slot=button-spinner] svg")
     await expect(spinner).toBeVisible()
     expect(await spinner.evaluate((el) => getComputedStyle(el).animationName)).toBe("none")
+    await waitHeld(page, "save")
+    await release(page, "save")
     await expect(editor(page).getByTestId("perm-editor-save-status")).toHaveText("保存されていたことを確認しました。")
     expect((await server(page, (s) => s.inspect().customers.find((c) => c.id === "C-00001")!)).note).toBe("結果が不明な保存")
   })
@@ -622,7 +706,8 @@ test.describe("stale authorization results", () => {
     await open(page)
     await expect(ops(page)).toHaveAttribute("data-status", "ready")
     const before = await appliedLog(page).count()
-    await server(page, (s) => Object.assign(s, { ignoreAbort: true, accessLatencyByScope: { "u-sato:hq": 1200, "u-tanaka:hq": 400 } }))
+    await server(page, (s) => Object.assign(s, { ignoreAbort: true }))
+    await hold(page, "access")
     // 表示した scope の値をすべて記録する（一時的な表示も検出する）
     await ops(page).evaluate((el) => {
       const seen: string[] = []
@@ -635,8 +720,13 @@ test.describe("stale authorization results", () => {
     await stale(page)
       .getByRole("radio", { name: /佐藤 花子/ })
       .check()
-    await expect(ops(page)).toHaveAttribute("data-status", "ready", { timeout: 4000 })
-    await page.waitForTimeout(600)
+    await waitHeld(page, "access", 1, "u-tanaka:hq")
+    await waitHeld(page, "access", 1, "u-sato:hq")
+    // 古い応答（B。中止の合図に従わない）を先に届ける：反映しない
+    await release(page, "access", { scope: "u-tanaka:hq" })
+    await expect(ops(page)).toHaveAttribute("data-status", "loading")
+    await release(page, "access", { scope: "u-sato:hq" })
+    await expect(ops(page)).toHaveAttribute("data-status", "ready")
     expect(await ops(page).getAttribute("data-scope")).toBe("u-sato:hq")
     const seen = await page.evaluate(() => (window as unknown as { __permSeen: string[] }).__permSeen)
     expect(seen.some((s) => s.startsWith("u-tanaka"))).toBe(false)
@@ -657,16 +747,20 @@ test.describe("stale authorization results", () => {
     await open(page)
     await expect(ops(page)).toHaveAttribute("data-status", "ready")
     const before = await appliedLog(page).count()
-    await server(page, (s) => Object.assign(s, { ignoreAbort: true, accessLatencyByScope: { "u-tanaka:hq": 600 } }))
+    await server(page, (s) => Object.assign(s, { ignoreAbort: true }))
+    await hold(page, "access")
     await stale(page)
       .getByRole("radio", { name: /田中 美咲/ })
       .check()
+    await waitHeld(page, "access", 1, "u-tanaka:hq")
     await stale(page)
       .getByRole("checkbox", { name: /例を表示する/ })
       .uncheck()
     await expect(ops(page)).toHaveCount(0)
-    await page.waitForTimeout(1000)
+    // アンマウントの後に応答を届ける（中止の合図に従わない処理）
+    expect(await release(page, "access")).toBe(1)
     await expect(appliedLog(page)).toHaveCount(before)
+    await hold(page, "access", false)
     await stale(page)
       .getByRole("checkbox", { name: /例を表示する/ })
       .check()
@@ -682,10 +776,12 @@ test.describe("in-flight work does not block another scope", () => {
   test("operation: switching user while an operation is pending leaves no busy state in the new (or returned) scope", async ({ page }) => {
     await open(page)
     await ready(page, "ops")
-    await server(page, (s) => (s.latency.operation = 2000))
+    // 中止の合図に従わない処理：スコープを切り替えた後も、元のスコープの応答が届く
+    await server(page, (s) => Object.assign(s, { ignoreAbort: true }))
+    await hold(page, "operation")
     await opButton(page, "ops", "edit", "顧客を編集").click()
     await expect(opButton(page, "ops", "edit", "顧客を編集")).toHaveAttribute("aria-busy", "true")
-    await page.waitForTimeout(200)
+    await waitHeld(page, "operation")
     await pickScope(page, "ops", /鈴木 一郎/)
     await ready(page, "ops")
     const edit = opButton(page, "ops", "edit", "顧客を編集")
@@ -697,8 +793,9 @@ test.describe("in-flight work does not block another scope", () => {
     await expect(op(page, "ops", "edit")).toHaveAttribute("data-mode", "enabled")
     await expect(opButton(page, "ops", "edit", "顧客を編集")).not.toHaveAttribute("aria-busy", "true")
     // 元のスコープ（世代 1）の応答が届いても、結果の文を示さない
-    await page.waitForTimeout(2200)
+    expect(await release(page, "operation")).toBe(1)
     await expect(demo(page, "ops").getByTestId("perm-ops-result")).toHaveText("")
+    await expect(opButton(page, "ops", "edit", "顧客を編集")).toBeEnabled()
     expect(await logOf(page, "operation")).toHaveLength(1)
   })
 
@@ -706,7 +803,8 @@ test.describe("in-flight work does not block another scope", () => {
     await open(page)
     await pickScope(page, "ops", /田中 美咲/)
     await ready(page, "ops")
-    await server(page, (s) => (s.latency.request = 2000))
+    await server(page, (s) => Object.assign(s, { ignoreAbort: true }))
+    await hold(page, "request")
     const button = op(page, "ops", "delete").getByRole("button", { name: "「顧客を削除」の権限を申請" })
     await button.click()
     await expect(button).toHaveAttribute("aria-busy", "true")
@@ -716,11 +814,22 @@ test.describe("in-flight work does not block another scope", () => {
     await expect(other).toBeVisible()
     await expect(other).not.toHaveAttribute("aria-busy", "true")
     await expect(other).toBeEnabled()
+    // 申請の対象は、送信を始めた時点のスコープと権限に固定されている
+    expect(await release(page, "request")).toBe(1)
+    expect((await server(page, (s) => s.inspect().requests)).map((r) => `${r.scope}:${r.permission}`)).toEqual(["u-tanaka:hq:customers.delete"])
+    await expect(op(page, "ops", "delete").locator('[data-testid="perm-request-customers.delete"]').getByRole("status")).toHaveText("")
+    await expect(op(page, "ops", "delete").locator('[data-testid="perm-request-customers.delete"]')).toHaveAttribute("data-request-status", "none")
+    // 元のスコープに戻ると、サーバーの記録から承認待ちと示す（古い応答の文ではなく、取得し直した記録）
+    await pickScope(page, "ops", /田中 美咲/)
+    await ready(page, "ops")
+    await expect(op(page, "ops", "delete").locator('[data-testid="perm-request-customers.delete"]')).toHaveAttribute("data-request-status", "pending")
+    await expect(op(page, "ops", "delete").getByRole("button", { name: "「顧客を削除」の権限を申請" })).toHaveCount(0)
   })
 
   test("role change: switching user while a change is pending does not leave the role selects disabled", async ({ page }) => {
     await open(page)
-    await server(page, (s) => (s.latency.role = 2000))
+    await server(page, (s) => Object.assign(s, { ignoreAbort: true }))
+    await hold(page, "role")
     await roleSelect(page, "u-tanaka").click()
     await page.getByRole("option", { name: "メンバー" }).click()
     await expect(roleSelect(page, "u-suzuki")).toBeDisabled()
@@ -730,8 +839,9 @@ test.describe("in-flight work does not block another scope", () => {
     await expect(roleSelect(page, "u-suzuki")).toBeEnabled()
     await expect(roleSelect(page, "u-tanaka")).toBeEnabled()
     // 前の世代の応答の結果の文を示さない
-    await page.waitForTimeout(2200)
+    expect(await release(page, "role")).toBe(1)
     await expect(demo(page, "roles").getByTestId("perm-roles-result")).toHaveText("")
+    await expect(roleSelect(page, "u-tanaka")).toBeEnabled()
   })
 })
 
@@ -741,6 +851,8 @@ test.describe("re-fetch failure after a permission change notice", () => {
     await open(page)
     await ready(page, "live")
     const editor = demo(page, "edit").getByTestId("perm-editor")
+    // 製品が「前の権限で表示を続ける」を選んだ場合（既定は表示しない。下の検品）
+    await demo(page, "edit").getByRole("radio", { name: "前の権限で表示を続ける" }).check()
     await expect(editor).toHaveAttribute("data-mode", "edit")
     await server(page, (s) => (s.outcome.access = "fail"))
     await server(page, (s) => s.simulate.setRole("u-suzuki", "hq", "viewer"))
@@ -758,5 +870,535 @@ test.describe("re-fetch failure after a permission change notice", () => {
     await op(page, "live", "edit").getByRole("button", { name: "権限を再確認" }).click()
     await ready(page, "live")
     await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "authorization")
+  })
+})
+
+// ------------------------------------------------------------------ 古い認可の結果：最初の A の応答
+test.describe("stale authorization results: the first A of A → B → A", () => {
+  test("the first A response (pending, ignoring AbortSignal) is not applied to the returned A", async ({ page }) => {
+    await open(page)
+    const ops = demo(page, "stale").getByTestId("perm-ops")
+    await expect(ops).toHaveAttribute("data-status", "ready")
+    await server(page, (s) => Object.assign(s, { ignoreAbort: true }))
+    await hold(page, "access")
+    const radio = (name: RegExp) => demo(page, "stale").getByRole("radio", { name })
+    await radio(/田中 美咲/).check() // B1
+    await radio(/佐藤 花子/).check() // A1（応答を保留）
+    await radio(/田中 美咲/).check() // B2
+    await radio(/佐藤 花子/).check() // A2
+    await waitHeld(page, "access", 2, "u-sato:hq")
+    const accessLog = await server(page, (s) => s.log.map((l, i) => ({ ...l, i })).filter((l) => l.kind === "access" && l.scope === "u-sato:hq"))
+    const [a1, a2] = accessLog.slice(-2).map((l) => l.i)
+    // 最初の A の応答を先に届ける：同じスコープの値でも、前の世代の要求のため反映しない
+    await serverWith(page, (s, index) => s.held.find((h) => h.logIndex === index)!.release(), a1)
+    await server(page, (s) => s.settle())
+    await expect(ops).toHaveAttribute("data-status", "loading")
+    await expect(ops).toHaveAttribute("data-request-id", "")
+    await release(page, "access", { scope: "u-tanaka:hq" })
+    await expect(ops).toHaveAttribute("data-status", "loading")
+    await release(page, "access", { scope: "u-sato:hq" })
+    await expect(ops).toHaveAttribute("data-status", "ready")
+    await expect(ops).toHaveAttribute("data-request-id", String(a2))
+  })
+})
+
+// ------------------------------------------------------------------ useAccess の状態の表（検品用の部品を別の root に描画する）
+// 取得の処理は Deferred Promise。commit ごとの状態を記録し、操作を許可した commit を確かめる。
+test.describe("useAccess: state table", () => {
+  type ProbeRecord = import("../src/data/system-account/permission-access-probe").ProbeRecord
+  type Probe = import("../src/data/system-account/permission-access-probe").AccessProbe
+  const probeUrl = "/src/data/system-account/permission-access-probe.tsx"
+  const mount = (page: Page, initial: { scopeKey: string; revision?: number; enabled?: boolean }) =>
+    page.evaluate(
+      async ([url, init]) => {
+        const m = (await import(/* @vite-ignore */ url)) as typeof import("../src/data/system-account/permission-access-probe")
+        window.__fdSaAccessProbe = m.mountAccessProbe(init)
+      },
+      [probeUrl, initial] as const,
+    )
+  /** 検品用の部品を操作する。fn はブラウザで実行する（外の変数を参照しない） */
+  const probe = <A, T>(page: Page, fn: (p: Probe, arg: A) => T, arg?: A) =>
+    page.evaluate(([src, a]) => new Function("p", "a", `return (${src})(p, a)`)(window.__fdSaAccessProbe, a), [fn.toString(), arg] as const) as Promise<Awaited<T>>
+  const records = (page: Page) => probe(page, (p) => p.records.slice())
+  /** 最新の、中止されていない要求に応答する（ok：権限、scope：応答のスコープ） */
+  const respond = (page: Page, arg: { scope?: string; permissions?: string[]; fail?: boolean; id?: number }) =>
+    probe(
+      page,
+      async (p, a) => {
+        const r = a.id !== undefined ? p.requests[a.id] : p.requests.filter((x) => !x.aborted).at(-1)!
+        if (a.fail) r.reject(new Error("network"))
+        else r.resolve({ scope: a.scope ?? r.scopeKey, permissions: a.permissions ?? ["x"], features: [] })
+        await p.settle()
+      },
+      arg,
+    )
+  const since = (all: ProbeRecord[], from: number) => all.slice(from)
+  const last = (all: ProbeRecord[]) => all.at(-1)!
+
+  test.beforeEach(async ({ page }) => {
+    await open(page)
+  })
+  test.afterEach(async ({ page }) => {
+    await probe(page, (p) => p.unmount())
+  })
+
+  // [説明, 手順, 確かめること]
+  const cases: [string, (page: Page) => Promise<void>][] = [
+    [
+      "initial fetch: loading never allows; ready after the response",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        expect((await records(page)).every((r) => r.status === "loading" && !r.allowed && !r.verified)).toBe(true)
+        await respond(page, {})
+        expect(last(await records(page))).toMatchObject({ status: "ready", verified: true, allowed: true, grantsScope: "A" })
+      },
+    ],
+    [
+      "initial fetch failure: error, no grants, not allowed",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        await respond(page, { fail: true })
+        expect(last(await records(page))).toMatchObject({ status: "error", grantsScope: null, allowed: false })
+      },
+    ],
+    [
+      "revision change: the very first commit is refreshing (before the re-fetch effect runs)",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        await respond(page, {})
+        const n = (await records(page)).length
+        await probe(page, (p) => p.set({ revision: 1 }))
+        const after = since(await records(page), n)
+        expect(after[0]).toMatchObject({ revision: 1, status: "refreshing", verified: false, allowed: false, permissions: "x" })
+        expect(after.every((r) => !r.allowed)).toBe(true)
+        await respond(page, {})
+        expect(last(await records(page))).toMatchObject({ revision: 1, status: "ready", allowed: true })
+      },
+    ],
+    [
+      "re-fetch failure: stale keeps the grants for display and never allows",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        await respond(page, {})
+        await probe(page, (p) => p.set({ revision: 1 }))
+        await respond(page, { fail: true })
+        expect(last(await records(page))).toMatchObject({ status: "stale", verified: false, allowed: false, permissions: "x" })
+      },
+    ],
+    [
+      "same scope, only the permissions change: no commit of the new revision allows",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        await respond(page, { permissions: ["x"] })
+        const n = (await records(page)).length
+        await probe(page, (p) => p.set({ revision: 1 }))
+        await respond(page, { permissions: [] })
+        const after = since(await records(page), n)
+        expect(after.every((r) => !r.allowed)).toBe(true)
+        expect(last(after)).toMatchObject({ status: "ready", permissions: "", allowed: false })
+      },
+    ],
+    [
+      "response scope mismatch: initial error, and stale after a re-fetch",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        await respond(page, { scope: "B" })
+        expect(last(await records(page))).toMatchObject({ status: "error", grantsScope: null, allowed: false })
+        await probe(page, (p) => p.reload())
+        await respond(page, {})
+        await probe(page, (p) => p.set({ revision: 1 }))
+        await respond(page, { scope: "B" })
+        expect(last(await records(page))).toMatchObject({ status: "stale", grantsScope: "A", allowed: false })
+        expect((await records(page)).some((r) => r.grantsScope === "B")).toBe(false)
+      },
+    ],
+    [
+      "A → B → A, responses ignore AbortSignal: the first A and B are not applied",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        const firstA = await probe(page, (p) => p.requests.filter((r) => !r.aborted).at(-1)!.id)
+        await probe(page, (p) => p.set({ scopeKey: "B" }))
+        const b = await probe(page, (p) => p.requests.filter((r) => !r.aborted).at(-1)!.id)
+        await probe(page, (p) => p.set({ scopeKey: "A" }))
+        expect(await probe(page, (p, ids) => ids.map((i) => p.requests[i].aborted), [firstA, b])).toEqual([true, true])
+        await respond(page, { id: firstA })
+        await respond(page, { id: b })
+        const all = await records(page)
+        expect(all.every((r) => !r.allowed && r.grantsScope === null)).toBe(true)
+        expect(last(all)).toMatchObject({ scopeKey: "A", status: "loading" })
+        await respond(page, {})
+        expect(last(await records(page))).toMatchObject({ scopeKey: "A", status: "ready", grantsScope: "A", allowed: true })
+        expect((await records(page)).some((r) => r.grantsScope !== null && r.grantsScope !== r.scopeKey)).toBe(false)
+      },
+    ],
+    [
+      "scope change: the first commit of the new scope has no grants of the previous scope",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        await respond(page, {})
+        const n = (await records(page)).length
+        await probe(page, (p) => p.set({ scopeKey: "B" }))
+        expect(since(await records(page), n)[0]).toMatchObject({ scopeKey: "B", status: "loading", grantsScope: null, allowed: false })
+      },
+    ],
+    [
+      "enabled = false: no request, no grants, not allowed (also right after ready)",
+      async (page) => {
+        await mount(page, { scopeKey: "A", enabled: false })
+        expect(await probe(page, (p) => p.requests.length)).toBe(0)
+        expect((await records(page)).every((r) => r.status === "loading" && !r.allowed)).toBe(true)
+        await probe(page, (p) => p.set({ enabled: true }))
+        await respond(page, {})
+        const n = (await records(page)).length
+        const requests = await probe(page, (p) => p.requests.length)
+        await probe(page, (p) => p.set({ enabled: false }))
+        expect(since(await records(page), n)[0]).toMatchObject({ enabled: false, status: "loading", grantsScope: null, allowed: false })
+        expect(await probe(page, (p) => p.requests.length)).toBe(requests)
+      },
+    ],
+    [
+      "reload: the first commit is refreshing; latest() refuses right after reload(), before any commit",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        await respond(page, {})
+        expect(await probe(page, (p) => p.decideLatest())).toBe(true)
+        const n = (await records(page)).length
+        await probe(page, (p) => p.reload())
+        expect(since(await records(page), n)[0]).toMatchObject({ status: "refreshing", allowed: false })
+        await respond(page, {})
+        expect(await probe(page, (p) => p.decideLatest())).toBe(true)
+        // reload() を呼んだ同じ処理の中（描画の前）から、latest() は確認済みの権限を返さない
+        expect(await probe(page, (p) => p.reloadAndDecideLatest())).toBe(false)
+        await respond(page, {})
+        expect(await probe(page, (p) => p.decideLatest())).toBe(true)
+      },
+    ],
+    [
+      "unmount: a response after unmount is not applied",
+      async (page) => {
+        await mount(page, { scopeKey: "A" })
+        const n = (await records(page)).length
+        const id = await probe(page, (p) => {
+          const r = p.requests.filter((x) => !x.aborted).at(-1)!.id
+          p.unmount()
+          return r
+        })
+        await respond(page, { id })
+        expect((await records(page)).length).toBe(n)
+        // afterEach の unmount のために、もう一度描画する
+        await mount(page, { scopeKey: "A" })
+      },
+    ],
+  ]
+  for (const [name, run] of cases) test(name, async ({ page }) => run(page))
+})
+
+// ------------------------------------------------------------------ useAccess：破棄された描画（review-v01 L4）
+// Transition で始めた新しいスコープの描画が Suspend して commit されず、スコープを元に戻して破棄された後も、
+// 表示中のスコープの latest() が確認済みの権限を返す（描画の中で書き換えた値で照合しない。commit の時点の値で照合する）。
+test.describe("useAccess: a discarded render", () => {
+  type Probe = import("../src/data/system-account/permission-access-probe").AccessTransitionProbe
+  const probeUrl = "/src/data/system-account/permission-access-probe.tsx"
+  const probe = <A, T>(page: Page, fn: (p: Probe, arg: A) => T, arg?: A) =>
+    page.evaluate(([src, a]) => new Function("p", "a", `return (${src})(p, a)`)(window.__fdSaAccessTransitionProbe, a), [fn.toString(), arg] as const) as Promise<Awaited<T>>
+
+  test("a suspended scope change that is abandoned does not keep blocking operations in the shown scope", async ({ page }) => {
+    await open(page)
+    await page.evaluate(async (url) => {
+      const m = (await import(/* @vite-ignore */ url)) as typeof import("../src/data/system-account/permission-access-probe")
+      window.__fdSaAccessTransitionProbe = m.mountAccessTransitionProbe({ scopeKey: "A", suspendScope: "B" })
+    }, probeUrl)
+    // A の権限の取得に応答する
+    await probe(page, async (p) => {
+      p.requests.filter((r) => !r.aborted).at(-1)!.resolve({ scope: "A", permissions: ["x"], features: [] })
+      await p.settle()
+    })
+    expect(await probe(page, (p) => p.decideLatest())).toEqual({ allowed: true, status: "ready" })
+    // B への切り替えを Transition で始める（B の描画は Suspend して commit されない）。表示は A のまま
+    await probe(page, async (p) => {
+      p.startScopeTransition("B")
+      await p.settle()
+    })
+    expect(await probe(page, (p) => p.shownScope())).toBe("A")
+    // A に戻す：B の描画は破棄される。useAccess の部品は props が commit 済みの値と同じため、描画されない
+    await probe(page, async (p) => {
+      p.setScope("A")
+      await p.settle()
+    })
+    expect(await probe(page, (p) => p.shownScope())).toBe("A")
+    // 表示中の A の確認済みの権限で、操作を始められる（破棄された B の描画で止めたままにしない）
+    expect(await probe(page, (p) => p.decideLatest())).toEqual({ allowed: true, status: "ready" })
+    // B の権限の要求は送られていない（効果は commit の後に走る）
+    expect(await probe(page, (p) => [...new Set(p.requests.map((r) => r.scopeKey))])).toEqual(["A"])
+    await probe(page, (p) => p.unmount())
+  })
+})
+
+// ------------------------------------------------------------------ 権限を失った直後の操作
+test.describe("right after losing a permission: delete, export, save and moving from a notification", () => {
+  const revoked = (page: Page) => demo(page, "revoked")
+  const result = (page: Page) => revoked(page).getByTestId("perm-revoked-result")
+  const dialog = (page: Page) => page.getByTestId("perm-revoked-confirm")
+  const confirmButton = (page: Page) => dialog(page).getByRole("button", { name: "削除する" })
+  const toViewer = (page: Page) => server(page, (s) => s.simulate.setRole("u-sato", "hq", "viewer"))
+  const readyRevoked = (page: Page) => expect(revoked(page).getByTestId("perm-revoked")).toHaveAttribute("data-status", "ready")
+
+  test("delete: a confirmation opened with the old permission cannot start the delete while re-checking or after the loss", async ({ page }) => {
+    await open(page)
+    await readyRevoked(page)
+    await revoked(page).getByRole("button", { name: "顧客を削除" }).click()
+    await expect(confirmButton(page)).toBeEnabled()
+    await hold(page, "access")
+    await toViewer(page)
+    // 確認の Dialog の中でも、最新の権限を確認するまで確定できない
+    await expect(confirmButton(page)).toBeDisabled()
+    await expect(dialog(page).getByTestId("perm-revoked-confirm-reason")).toHaveText("最新の権限を確認しています")
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await expect(dialog(page).getByTestId("perm-revoked-confirm-reason")).toHaveText("この操作には「顧客を削除」の権限が必要です")
+    await expect(confirmButton(page)).toBeDisabled()
+    expect(await logOf(page, "operation")).toHaveLength(0)
+  })
+
+  test("delete: pressed in the same task as the change notice (before the screen updates) does not start", async ({ page }) => {
+    await open(page)
+    await readyRevoked(page)
+    await revoked(page).getByRole("button", { name: "顧客を削除" }).click()
+    await expect(confirmButton(page)).toBeEnabled()
+    // 変更の知らせと押下を同じ処理の中で行う（画面はまだ前の権限で、ボタンは有効）
+    const enabledWhenPressed = await server(page, (s) => {
+      s.simulate.setRole("u-sato", "hq", "viewer")
+      const button = document.querySelector<HTMLButtonElement>('[data-testid="perm-revoked-confirm"] [data-slot="alert-dialog-action"]')!
+      const enabled = !button.disabled && button.getAttribute("aria-disabled") !== "true"
+      button.click()
+      return enabled
+    })
+    expect(enabledWhenPressed).toBe(true)
+    await expect(result(page)).toHaveText("最新の権限を確認できるまで、削除を始めません。")
+    await expect(result(page)).toHaveAttribute("data-kind", "blocked")
+    await server(page, (s) => s.settle())
+    expect(await logOf(page, "operation")).toHaveLength(0)
+  })
+
+  test("export: losing the permission while the preparation is pending does not start the export", async ({ page }) => {
+    await open(page)
+    await readyRevoked(page)
+    await hold(page, "overview")
+    await revoked(page).getByRole("button", { name: "顧客を書き出す" }).click()
+    await waitHeld(page, "overview")
+    await hold(page, "access")
+    await toViewer(page)
+    await waitHeld(page, "access")
+    // 準備の応答が届いた時点で、最新の権限で判断し直す（準備を始めた時点の認可で続けない）
+    await release(page, "overview")
+    await expect(result(page)).toHaveText("最新の権限を確認できるまで、書き出しを始めません。")
+    expect(await logOf(page, "operation")).toHaveLength(0)
+    await release(page, "access")
+    await expect(revoked(page).getByTestId("perm-revoked-export")).toHaveAttribute("data-restriction", "authorization")
+    // 権限が確定した後も、押しても始めない（無効の操作）
+    await revoked(page).getByRole("button", { name: "顧客を書き出す" }).click({ force: true })
+    expect(await logOf(page, "operation")).toHaveLength(0)
+  })
+
+  test("export: with the permission kept, the export starts after the preparation (control)", async ({ page }) => {
+    await open(page)
+    await readyRevoked(page)
+    await revoked(page).getByRole("button", { name: "顧客を書き出す" }).click()
+    await expect(result(page)).toHaveText("8 件の書き出しをサーバーが受け付けました（模擬。ファイルは作りません）。")
+    expect((await logOf(page, "operation")).map((l) => l.detail)).toEqual(["customers.export"])
+  })
+
+  test("notification: moving is refused while re-checking and after the loss; the server decides during the move", async ({ page }) => {
+    await open(page)
+    await readyRevoked(page)
+    const openLink = revoked(page).getByTestId("perm-revoked-notification").getByRole("button", { name: "メンバーの一覧を開く" })
+    await hold(page, "access")
+    await toViewer(page)
+    await openLink.click()
+    await expect(result(page)).toHaveText("最新の権限を確認できるまで、移動しません。")
+    expect((await logOf(page, "members")).filter((l) => l.detail === "navigate")).toHaveLength(0)
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await openLink.click()
+    await expect(result(page)).toHaveText("この対象を閲覧する権限がありません。移動しませんでした。")
+    expect((await logOf(page, "members")).filter((l) => l.detail === "navigate")).toHaveLength(0)
+    await expect(revoked(page).getByTestId("perm-revoked-opened")).toHaveCount(0)
+
+    // 権限を戻して移動を始め、移動先の確認の応答を待つ間に権限を失う：サーバーが処理する時点の権限で拒否する
+    // 権限を戻す。取得し直しの要求を保留して、確認中になったことを確かめてから解放する
+    // （前の閲覧者の権限の「確認済み」を、戻した後の確認済みと取り違えない）
+    await server(page, (s) => s.simulate.setRole("u-sato", "hq", "admin"))
+    await waitHeld(page, "access")
+    await expect(revoked(page).getByTestId("perm-revoked")).toHaveAttribute("data-verified", "false")
+    await hold(page, "access", false)
+    await release(page, "access")
+    await expect(revoked(page).getByTestId("perm-revoked")).toHaveAttribute("data-verified", "true")
+    await expect(result(page)).toHaveText("この対象を閲覧する権限がありません。移動しませんでした。")
+    await hold(page, "members")
+    await openLink.click()
+    await waitHeld(page, "members")
+    await toViewer(page)
+    await release(page, "members")
+    await expect(result(page)).toHaveText("この対象を閲覧する権限がありません。移動しませんでした。")
+    await expect(result(page)).toHaveAttribute("data-kind", "rejected")
+    await expect(revoked(page).getByTestId("perm-revoked-opened")).toHaveCount(0)
+  })
+
+  test("notification: with the permission kept, the list opens; it is hidden while the permission is re-checked", async ({ page }) => {
+    await open(page)
+    await readyRevoked(page)
+    await revoked(page).getByTestId("perm-revoked-notification").getByRole("button", { name: "メンバーの一覧を開く" }).click()
+    await expect(revoked(page).getByTestId("perm-revoked-opened")).toHaveText("メンバーの一覧（3 人）を表示しています（模擬）。")
+    // 開いた一覧（保護された情報）は、最新の権限を確認している間は表示しない
+    await hold(page, "access")
+    await server(page, (s) => s.simulate.grant("u-sato:hq", "members.view"))
+    await expect(revoked(page).getByTestId("perm-revoked")).toHaveAttribute("data-status", "refreshing")
+    await expect(revoked(page).getByTestId("perm-revoked-opened")).toHaveCount(0)
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await expect(revoked(page).getByTestId("perm-revoked-opened")).toBeVisible()
+  })
+
+  test("save: pressed in the same task as the change notice does not send a save", async ({ page }) => {
+    await open(page)
+    const editor = demo(page, "edit").getByTestId("perm-editor")
+    await expect(editor).toHaveAttribute("data-mode", "edit")
+    await editor.getByLabel("備考").fill("権限を失う直前の入力")
+    await expect(editor.getByRole("button", { name: "保存" })).toBeEnabled()
+    const enabledWhenPressed = await server(page, (s) => {
+      s.simulate.setRole("u-suzuki", "hq", "viewer")
+      const button = document.querySelector<HTMLButtonElement>('[data-testid="perm-demo-edit"] [data-testid="perm-editor-save"]')!
+      const enabled = !button.disabled && button.getAttribute("aria-disabled") !== "true"
+      button.click()
+      return enabled
+    })
+    expect(enabledWhenPressed).toBe(true)
+    await expect(editor).toHaveAttribute("data-mode", "read-only")
+    expect(await logOf(page, "save")).toHaveLength(0)
+    await expect(editor.getByTestId("perm-editor-save-status")).toHaveAttribute("data-status", "idle")
+  })
+})
+
+// ------------------------------------------------------------------ 権限を確認している間の保護された情報
+test.describe("protected content while the latest authorization is unverified", () => {
+  const editor = (page: Page) => demo(page, "edit").getByTestId("perm-editor")
+  const note = (page: Page) => editor(page).getByLabel("備考")
+
+  test("default (hide): the record is not shown while re-checking; the draft and the focus are kept", { tag: "@webkit" }, async ({ page }) => {
+    await open(page)
+    await expect(editor(page)).toHaveAttribute("data-mode", "edit")
+    await note(page).fill("確認中も保持する入力")
+    await note(page).focus()
+    await hold(page, "access")
+    // 権限の内容は変わらないが、変更の知らせが届いた（取得し直す）
+    await server(page, (s) => s.simulate.grant("u-suzuki:hq", "customers.view"))
+    await expect(editor(page)).toHaveAttribute("data-mode", "verifying")
+    await expect(editor(page)).not.toContainText(firstCustomer.company)
+    await expect(editor(page)).not.toContainText(firstCustomer.phone)
+    await expect(editor(page).locator("textarea, input")).toHaveCount(0)
+    await expect(editor(page).getByTestId("perm-editor-verifying")).toHaveText(
+      "最新の権限を確認しています。確認できるまで、この顧客の内容を表示しません。入力中の内容は保持しています。",
+    )
+    // フォーカスしていた入力欄が消えたため、確認中の文へ移す
+    await expect(editor(page).getByTestId("perm-editor-verifying").locator("p")).toBeFocused()
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await expect(editor(page)).toHaveAttribute("data-mode", "edit")
+    await expect(note(page)).toHaveValue("確認中も保持する入力")
+    await expect(note(page)).toBeFocused()
+    await expect(editor(page).getByTestId("perm-editor-notice")).toHaveAttribute("data-notice", "none")
+  })
+
+  test("default (hide): a re-check that fails keeps hiding the record and offers a re-check", async ({ page }) => {
+    await open(page)
+    await expect(editor(page)).toHaveAttribute("data-mode", "edit")
+    await server(page, (s) => (s.outcome.access = "fail"))
+    await server(page, (s) => s.simulate.grant("u-suzuki:hq", "customers.view"))
+    await expect(editor(page).getByTestId("perm-editor-verifying")).toContainText("最新の権限を確認できませんでした。確認できるまで、この顧客の内容を表示しません。")
+    await expect(editor(page)).not.toContainText(firstCustomer.company)
+    await server(page, (s) => (s.outcome.access = "success"))
+    await editor(page).getByRole("button", { name: "権限を再確認" }).click()
+    await expect(editor(page)).toHaveAttribute("data-mode", "edit")
+    await expect(editor(page)).toContainText(firstCustomer.company)
+  })
+
+  test("keep (product policy): the record stays visible while re-checking, but saving is not allowed", async ({ page }) => {
+    await open(page)
+    await demo(page, "edit").getByRole("radio", { name: "前の権限で表示を続ける" }).check()
+    await expect(editor(page)).toHaveAttribute("data-mode", "edit")
+    await note(page).fill("表示を続ける")
+    await hold(page, "access")
+    await server(page, (s) => s.simulate.grant("u-suzuki:hq", "customers.view"))
+    await expect(editor(page).locator("[data-slot=restriction-reason]")).toHaveText("最新の権限を確認しています")
+    await expect(editor(page)).toHaveAttribute("data-mode", "edit")
+    await expect(editor(page)).toContainText(firstCustomer.company)
+    await expect(editor(page).getByRole("button", { name: "保存" })).toHaveAttribute("aria-disabled", "true")
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await expect(editor(page).getByRole("button", { name: "保存" })).toBeEnabled()
+  })
+
+  test("members in the overview are not shown while re-checking (protected); the customers section structure stays", async ({ page }) => {
+    await open(page)
+    const partial = demo(page, "partial")
+    await partial.getByRole("radio", { name: /鈴木 一郎/ }).check()
+    await expect(partial.getByTestId("perm-overview-members").getByRole("listitem")).toHaveCount(3)
+    await hold(page, "access")
+    await server(page, (s) => s.simulate.grant("u-suzuki:hq", "customers.view"))
+    await expect(partial.getByTestId("perm-overview-members-pending")).toHaveAttribute("data-status", "refreshing")
+    await expect(partial.getByTestId("perm-overview-members").getByRole("listitem")).toHaveCount(0)
+    await expect(partial.getByRole("heading", { name: "顧客" })).toBeVisible()
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await expect(partial.getByTestId("perm-overview-members").getByRole("listitem")).toHaveCount(3)
+  })
+})
+
+// ------------------------------------------------------------------ 権限の申請：最新の権限、照会
+test.describe("permission request: latest authorization and inquiry", () => {
+  const req = (page: Page, p: Permission) => demo(page, "request").getByTestId(`perm-request-${p}`)
+
+  test("while the permissions are re-checked, a request cannot be sent (a granted permission is not requested again)", async ({ page }) => {
+    await open(page)
+    const button = req(page, "customers.delete").getByRole("button", { name: "「顧客を削除」の権限を申請" })
+    await expect(button).toBeEnabled()
+    await hold(page, "access")
+    await hold(page, "requests")
+    // 管理者が「顧客を削除」を付与した（知らせの後の権限の取得を保留している）
+    await server(page, (s) => s.simulate.grant("u-tanaka:hq", "customers.delete"))
+    // 申請の記録の取得し直しが終わった後も、権限を確認するまで申請を始めない
+    await waitHeld(page, "requests")
+    await release(page, "requests")
+    await expect(button).toBeDisabled()
+    await button.click({ force: true })
+    expect(await logOf(page, "request")).toHaveLength(0)
+    await waitHeld(page, "access")
+    await release(page, "access")
+    await expect(op(page, "request", "delete")).toHaveAttribute("data-mode", "enabled")
+    await expect(req(page, "customers.delete")).toHaveCount(0)
+    expect(await logOf(page, "request")).toHaveLength(0)
+  })
+
+  test("unknown result that was not created: the inquiry says so and the request can be sent again", async ({ page }) => {
+    await open(page)
+    await hold(page, "request")
+    await req(page, "customers.edit").getByRole("button", { name: "「顧客を登録・編集」の権限を申請" }).click()
+    await waitHeld(page, "request")
+    await hold(page, "requests")
+    // サーバーに届かなかったが、届いたかを確かめられない（結果が不明）
+    await release(page, "request", { process: false })
+    await expect(req(page, "customers.edit").getByTestId("perm-request-checking")).toHaveText("申請の状態を確認しています")
+    await expect(req(page, "customers.edit").getByRole("button", { name: /申請/ })).toHaveCount(0)
+    await waitHeld(page, "requests")
+    await release(page, "requests")
+    await expect(req(page, "customers.edit").getByRole("status")).toHaveText(
+      "「顧客を登録・編集」の権限は申請されていませんでした。必要な場合は、もう一度申請してください。",
+    )
+    await expect(req(page, "customers.edit")).toHaveAttribute("data-request-status", "none")
+    expect((await server(page, (s) => s.inspect().requests)).length).toBe(0)
+    await hold(page, "request", false)
+    await req(page, "customers.edit").getByRole("button", { name: "「顧客を登録・編集」の権限を申請" }).click()
+    await expect(req(page, "customers.edit")).toHaveAttribute("data-request-status", "pending")
+    expect((await server(page, (s) => s.inspect().requests)).length).toBe(1)
   })
 })

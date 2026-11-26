@@ -4,6 +4,7 @@ import {
   decideAccess,
   type AccessDecision,
   diffPermissions,
+  isAccessVerified,
   pageAccessFromStatus,
   presentAction,
   resolveContentAccess,
@@ -33,6 +34,8 @@ const loading: Snapshot = { status: "loading", grants: null, error: null }
 const failed: Snapshot = { status: "error", grants: null, error: new Error("network") }
 const refreshing = (role: keyof typeof roles): Snapshot => ({ status: "refreshing", grants: grants(role), error: null })
 const stale = (role: keyof typeof roles): Snapshot => ({ status: "stale", grants: grants(role), error: new Error("network") })
+/** 製品が、最新の認可を確認していないと示した ready（変更の知らせを受けたが、まだ取得し直していない場合など） */
+const unverified = (role: keyof typeof roles): Snapshot => ({ status: "ready", grants: grants(role), error: null, verified: false })
 const reasonOf = (d: AccessDecision<string, string>) => (d.allowed ? null : d.reason)
 
 test.describe("decideAccess: reasons are kept as separate states", () => {
@@ -77,7 +80,11 @@ test.describe("decideAccess: reasons are kept as separate states", () => {
     const base = { permissions: ["customers.export"] as Permission[], feature: "export" as Feature }
     expect(reasonOf(decideAccess(ready("member"), { ...base, unmetPrerequisite: "invite-sender" }))).toEqual({ kind: "prerequisite", prerequisite: "invite-sender" })
     expect(reasonOf(decideAccess(ready("member"), { ...base, service: "unavailable" }))).toEqual({ kind: "service" })
-    expect(reasonOf(decideAccess(ready("member"), { ...base, connectivity: "offline" }))).toEqual({ kind: "connectivity" })
+    expect(reasonOf(decideAccess(ready("member"), { ...base, connectivity: "offline" }))).toEqual({ kind: "connectivity", status: "offline" })
+    // 接続を確認していない（unconfirmed）も、確認済みの online として扱わない
+    expect(reasonOf(decideAccess(ready("member"), { ...base, connectivity: "unconfirmed" }))).toEqual({ kind: "connectivity", status: "unconfirmed" })
+    expect(restrictionText({ kind: "connectivity", status: "unconfirmed" })).toBe("接続を確認しています。確認できるまで、この操作は行えません")
+    expect(restrictionText({ kind: "connectivity", status: "offline" })).toBe("オフラインのため利用できません。接続が戻ると利用できます")
     expect(reasonOf(decideAccess(ready("member"), { ...base, pending: true }))).toEqual({ kind: "pending" })
     // 権限がない場合は、オフラインや障害より先に認可を理由にする（接続が戻っても使えないため）。
     expect(reasonOf(decideAccess(ready("viewer"), { ...base, connectivity: "offline", service: "unavailable", pending: true }))).toEqual({
@@ -141,11 +148,91 @@ test.describe("resolveContentAccess: read only is a mode, not disabled inputs", 
     expect(resolveContentAccess(ready("viewer"), record)).toEqual({ mode: "read-only", reason: { kind: "authorization", missing: ["customers.edit"] } })
     expect(resolveContentAccess(ready("viewer"), { view: ["members.view"] }).mode).toBe("hidden")
   })
-  test("unknown permissions show no content; refreshing keeps the previous mode (operations are decided separately)", () => {
+  test("unknown permissions show no content; refreshing keeps the previous mode only when the product chooses keep (operations are decided separately)", () => {
     expect(resolveContentAccess(loading, record)).toEqual({ mode: "pending", status: "loading" })
     expect(resolveContentAccess(failed, record)).toEqual({ mode: "pending", status: "error" })
-    expect(resolveContentAccess(refreshing("member"), record).mode).toBe("edit")
+    // v0.1：保護された情報を、最新の認可を確認していない間に表示し続けることを既定にしない（製品が keep を選んだ場合だけ）。
+    expect(resolveContentAccess(refreshing("member"), { ...record, whileUnverified: "keep" }).mode).toBe("edit")
+    expect(resolveContentAccess(refreshing("member"), record)).toEqual({ mode: "pending", status: "refreshing" })
     expect(decideAccess(refreshing("member"), { permissions: ["customers.edit"] }).allowed).toBe(false)
+  })
+
+  // 表示可能性（構造）、閲覧可能性（保護された情報）、操作可能性、最新の認可の確認を区別する。
+  test("table: sensitivity × whileUnverified × verification state", () => {
+    type Opts = Parameters<typeof resolveContentAccess<Permission, Feature>>[1]
+    const rows: [string, Snapshot, Opts, ReturnType<typeof resolveContentAccess>["mode"], string | null][] = [
+      // [説明, 状態, 指定, 内容の扱い, pending の status]
+      ["ready, protected (default)", ready("member"), record, "edit", null],
+      ["refreshing, protected (default hide)", refreshing("member"), record, "pending", "refreshing"],
+      ["stale, protected (default hide)", stale("member"), record, "pending", "stale"],
+      ["ready but unverified, protected (default hide)", unverified("member"), record, "pending", "refreshing"],
+      ["refreshing, protected, keep", refreshing("member"), { ...record, whileUnverified: "keep" }, "edit", null],
+      ["stale, protected, keep (viewer: read only)", stale("viewer"), { ...record, whileUnverified: "keep" }, "read-only", null],
+      ["refreshing, public-structure (hide is ignored)", refreshing("member"), { ...record, sensitivity: "public-structure", whileUnverified: "hide" }, "edit", null],
+      ["stale, public-structure", stale("viewer"), { ...record, sensitivity: "public-structure" }, "read-only", null],
+      // 前の権限でも閲覧できない内容は、確認中も hidden のまま（pending にして領域の存在を示さない）
+      ["refreshing, no view permission before", refreshing("viewer"), { view: ["members.view"] }, "hidden", null],
+      ["stale, no view permission before, keep", stale("viewer"), { view: ["members.view"], whileUnverified: "keep" }, "hidden", null],
+      ["loading", loading, { ...record, whileUnverified: "keep" }, "pending", "loading"],
+      ["error", failed, { ...record, sensitivity: "public-structure" }, "pending", "error"],
+    ]
+    for (const [name, snapshot, opts, mode, status] of rows) {
+      const content = resolveContentAccess(snapshot, opts)
+      expect(content.mode, name).toBe(mode)
+      expect(content.mode === "pending" ? content.status : null, name).toBe(status)
+      // どの行でも、最新の認可を確認していない間は操作（保存）を許可しない
+      if (!isAccessVerified(snapshot)) expect(decideAccess(snapshot, { permissions: opts.view }).allowed, name).toBe(false)
+    }
+  })
+})
+
+test.describe("verified: the latest authorization is confirmed only for ready", () => {
+  test("isAccessVerified per state; a ready snapshot without verified stays compatible (verified)", () => {
+    expect(isAccessVerified(ready("member"))).toBe(true)
+    expect(isAccessVerified({ status: "ready", grants: grants("member"), error: null, verified: true })).toBe(true)
+    for (const s of [loading, failed, refreshing("member"), stale("member"), unverified("member")]) expect(isAccessVerified(s)).toBe(false)
+  })
+
+  test("ready with verified: false is treated like refreshing by decideAccess and presentAction", () => {
+    expect(reasonOf(decideAccess(unverified("admin"), { permissions: ["customers.delete"] }))).toEqual({ kind: "unresolved", status: "refreshing" })
+    expect(decideAccess(unverified("admin")).allowed).toBe(false)
+    // 前の権限でも許可されない操作は、その理由を示す（表示を揺らさない）
+    expect(reasonOf(decideAccess(unverified("viewer"), { permissions: ["customers.delete"] }))).toEqual({ kind: "authorization", missing: ["customers.delete"] })
+    expect(presentAction(decideAccess(unverified("admin"), { permissions: ["members.manage"] }), { relevance: "admin" }).mode).toBe("disabled")
+  })
+})
+
+test.describe("several restrictions at once: the function is not disclosed to users without the permission", () => {
+  const audit = { permissions: ["audit.view"] as Permission[], feature: "audit-log" as Feature }
+  test("table: plan + permission + temporary reasons", () => {
+    type Row = [string, Snapshot, Parameters<typeof decideAccess<Permission, Feature>>[1], ActionAudience, string, string | null]
+    const rows: Row[] = [
+      // [説明, 状態, 条件, 操作の性質, 画面での扱い, 理由の kind]
+      ["admin, plan lacks feature (admin function)", ready("admin", "hq"), audit, { relevance: "admin" }, "disabled", "entitlement"],
+      ["member, plan lacks feature and permission (admin function)", ready("member", "hq"), audit, { relevance: "admin" }, "hidden", "entitlement"],
+      ["member, plan + permission, requestable admin function", ready("member", "hq"), audit, { relevance: "admin", requestable: true }, "hidden", "entitlement"],
+      ["member, plan + permission, task operation", ready("member", "hq"), audit, { relevance: "task" }, "disabled", "entitlement"],
+      ["member, plan + permission, confidential", ready("member", "hq"), audit, { relevance: "task", disclosure: "confidential" }, "hidden", "entitlement"],
+      ["viewer, permission + offline + outage + pending", ready("viewer"), { permissions: ["customers.export"], feature: "export", connectivity: "offline", service: "unavailable", pending: true }, { relevance: "task" }, "disabled", "authorization"],
+      ["admin, prerequisite + offline", ready("admin"), { permissions: ["members.manage"], unmetPrerequisite: "invite-sender", connectivity: "offline" }, { relevance: "admin" }, "disabled", "prerequisite"],
+      ["admin, outage + offline", ready("admin"), { permissions: ["customers.export"], service: "unavailable", connectivity: "offline" }, { relevance: "task" }, "disabled", "service"],
+      ["member (west), permission only", ready("member", "west"), audit, { relevance: "admin" }, "hidden", "authorization"],
+      ["refreshing admin, plan lacks feature", refreshing("admin"), audit, { relevance: "admin" }, "disabled", "entitlement"],
+    ]
+    for (const [name, snapshot, requirement, audience, mode, kind] of rows) {
+      const decision = decideAccess(snapshot, requirement)
+      expect(presentAction(decision, audience).mode, name).toBe(mode)
+      expect(reasonOf(decision)?.kind ?? null, name).toBe(kind)
+    }
+  })
+
+  test("restrictionText: when the permission is also missing, the text does not mention the plan or the feature", () => {
+    const withPermission = restrictionText<Permission, Feature>({ kind: "entitlement", feature: "audit-log", missing: [] }, { feature: () => "監査ログ" })
+    const withoutPermission = restrictionText<Permission, Feature>({ kind: "entitlement", feature: "audit-log", missing: ["audit.view"] }, { feature: () => "監査ログ" })
+    expect(withPermission).toBe("監査ログは、現在の契約プランでは利用できません")
+    expect(withoutPermission).not.toMatch(/契約|プラン|監査ログ/)
+    expect(withoutPermission).not.toMatch(/権限が必要|権限がありません/)
+    expect(withoutPermission).toBe("この操作は利用できません")
   })
 })
 
@@ -177,10 +264,12 @@ test.describe("page access, role diff and reason texts", () => {
       { kind: "unresolved", status: "refreshing" },
       { kind: "unresolved", status: "stale" },
       { kind: "entitlement", feature: "audit-log", missing: [] },
+      { kind: "entitlement", feature: "audit-log", missing: ["audit.view"] },
       { kind: "authorization", missing: ["customers.edit"] },
       { kind: "prerequisite", prerequisite: "invite-sender" },
       { kind: "service" },
       { kind: "connectivity" },
+      { kind: "connectivity", status: "unconfirmed" },
       { kind: "pending" },
     ]
     const texts = reasons.map((r) => restrictionText(r, { permission: (p) => p, feature: (f) => f }))
@@ -262,6 +351,28 @@ test.describe("mock server: authorization is decided on the server at processing
     expect(await status("u-tanaka:hq", `/customers/${confidentialCustomerIds[0]}`)).toBe(404)
     expect(await status("u-tanaka:hq", "/customers/C-99999")).toBe(404)
     expect(await status("u-sato:hq", `/customers/${confidentialCustomerIds[0]}`)).toBe(200)
+  })
+
+  test("a held request is processed (and authorized) when it is released, not when it was sent", async () => {
+    permissionServer.hold.operation = true
+    const sent = codeOf(api.runOperation("u-suzuki:hq", ["customers.edit"], null))
+    expect(permissionServer.held.map((h) => h.kind)).toEqual(["operation"])
+    permissionServer.simulate.setRole("u-suzuki", "hq", "viewer")
+    expect(permissionServer.release("operation")).toBe(1)
+    expect(await sent).toBe("forbidden")
+    expect(permissionServer.held).toHaveLength(0)
+    // 中止された要求は、ignoreAbort でなければ保留を解き、応答しない
+    const controller = new AbortController()
+    const aborted = codeOf(api.runOperation("u-suzuki:hq", ["customers.view"], null, { signal: controller.signal }))
+    controller.abort()
+    expect(await aborted).toMatch(/AbortError/)
+    expect(permissionServer.held).toHaveLength(0)
+    // process: false は、サーバーで処理せずに結果が不明な失敗を返す（申請の照会の検品）
+    permissionServer.hold.request = true
+    const unknown = api.requestPermission("u-tanaka:hq", "customers.edit").then(() => "ok", (e: unknown) => (e as Error).constructor.name)
+    permissionServer.release("request", { process: false })
+    expect(await unknown).toBe("MockUnknownError")
+    expect(permissionServer.inspect().requests).toHaveLength(0)
   })
 
   test("an operation is re-authorized on the server (UI state is not trusted)", async () => {

@@ -20,9 +20,13 @@ import { focusAfterRemoval, formatNotificationTime, type NotificationEntry, type
 // - 既読にした通知が一覧から消えた（未読の絞り込み）ときは、次の通知（なければ前の通知、なければ fallbackFocus）へ
 //   フォーカスを移す。利用者が一覧の外へフォーカスを移した後は、フォーカスを動かさない。
 // - 新着が一覧に加わっても、フォーカスを動かさない。
+// - 本文の表示の可否（canViewContent）が false の通知は、タイトル、対象、補足を表示せず（読み上げの名前にも含めない）、開けない。
+//   取得し直すまでの間に閲覧の権限が変わった場合に、前の権限で取得した本文を表示しないため。
+// - 結果が不明で確認中の通知（verifyingIds）は「状態を確認中」と示し、既読の操作を受け付けない（フォーカスは失わせない）。
 //
 // この部品が持たないもの（製品の責務）
 // - 通知を開いたときの移動（onOpen）。移動の可否（権限、削除、未保存の変更）の判定。
+// - 本文の表示の可否（canViewContent）の判定。現在の閲覧の権限から決める（サーバーも権限のない本文を返さない）。
 // - 集約のタイトルの文（groupTitle）と、集約してよい通知の判断（groupNotifications の canGroup）。
 
 type NotificationGroupEntry<T extends NotificationLike> = Extract<NotificationEntry<T>, { kind: "group" }>
@@ -50,6 +54,15 @@ type NotificationListProps<T extends NotificationLike> = {
   groupTitle?: (group: NotificationGroupEntry<T>) => string
   /** 既読の操作を受け付けない（再取得中など） */
   disabled?: boolean
+  /** 結果が不明で確認中の通知の ID（「状態を確認中」と示し、既読の操作を受け付けない） */
+  verifyingIds?: ReadonlySet<string>
+  /**
+   * 本文（タイトル、対象、補足）を表示してよいか。現在の閲覧の権限から製品が決める。false の通知は hiddenTitle を表示し、開けない。
+   * 既定はすべて表示する
+   */
+  canViewContent?: (item: T) => boolean
+  /** 本文を表示しない通知のタイトル */
+  hiddenTitle?: string
   /** 正確な日時を画面にも表示する（専用のページ） */
   showAbsoluteTime?: boolean
   /** 項目が消えて残りがないときの、フォーカスの移動先（一覧の見出しなど） */
@@ -74,6 +87,9 @@ function NotificationList<T extends NotificationLike>({
   renderActions,
   groupTitle = (g) => `${g.latest.title} ほか ${g.items.length - 1} 件`,
   disabled = false,
+  verifyingIds,
+  canViewContent,
+  hiddenTitle = "閲覧できない内容のお知らせ",
   showAbsoluteTime = false,
   fallbackFocus,
   initialExpandedFor = null,
@@ -140,23 +156,29 @@ function NotificationList<T extends NotificationLike>({
       return next
     })
 
-  const row = (item: T, nested: boolean) => (
-    <NotificationRow
-      key={item.id}
-      item={item}
-      nested={nested}
-      now={now}
-      timeZone={timeZone}
-      openable={Boolean(onOpen) && hasTarget(item)}
-      onOpen={onOpen}
-      onReadChange={onReadChange}
-      targetLabel={getTargetLabel?.(item) ?? null}
-      meta={renderMeta?.(item)}
-      actions={renderActions?.(item)}
-      disabled={disabled}
-      showAbsoluteTime={showAbsoluteTime}
-    />
-  )
+  const row = (item: T, nested: boolean) => {
+    const visible = canViewContent ? canViewContent(item) : true
+    return (
+      <NotificationRow
+        key={item.id}
+        item={item}
+        nested={nested}
+        now={now}
+        timeZone={timeZone}
+        title={visible ? item.title : hiddenTitle}
+        hidden={!visible}
+        verifying={verifyingIds?.has(item.id) ?? false}
+        openable={visible && Boolean(onOpen) && hasTarget(item)}
+        onOpen={onOpen}
+        onReadChange={onReadChange}
+        targetLabel={visible ? (getTargetLabel?.(item) ?? null) : null}
+        meta={visible ? renderMeta?.(item) : null}
+        actions={renderActions?.(item)}
+        disabled={disabled}
+        showAbsoluteTime={showAbsoluteTime}
+      />
+    )
+  }
 
   return (
     <ul
@@ -241,6 +263,9 @@ function NotificationRow<T extends NotificationLike>({
   nested,
   now,
   timeZone,
+  title,
+  hidden,
+  verifying,
   openable,
   onOpen,
   onReadChange,
@@ -254,6 +279,9 @@ function NotificationRow<T extends NotificationLike>({
   nested: boolean
   now: number
   timeZone: string
+  title: string
+  hidden: boolean
+  verifying: boolean
   openable: boolean
   onOpen?: (item: T) => void
   onReadChange?: (ids: string[], read: boolean) => void
@@ -268,9 +296,10 @@ function NotificationRow<T extends NotificationLike>({
     <>
       <span className={cn("block text-ui [word-break:auto-phrase]", !item.read && "font-semibold")}>
         {!item.read && <span className="sr-only">未読、</span>}
-        {item.title}
+        {title}
       </span>
       <span className="mt-1 flex flex-wrap gap-x-2 text-caption text-muted-foreground">
+        {verifying && <span data-slot="notification-verifying">状態を確認中</span>}
         {targetLabel && <span>{targetLabel}</span>}
         <time dateTime={time.iso} title={time.absolute}>
           {showAbsoluteTime && time.relative ? `${time.relative}（${time.absolute}）` : showAbsoluteTime ? time.absolute : time.text}
@@ -285,6 +314,8 @@ function NotificationRow<T extends NotificationLike>({
       data-row-id={item.id}
       data-notification-id={item.id}
       data-read={item.read ? "" : undefined}
+      data-verifying={verifying ? "" : undefined}
+      data-hidden-content={hidden ? "" : undefined}
       className={cn("flex items-start gap-3 py-3", !nested && "border-b border-border last:border-b-0")}
     >
       <UnreadMark unread={!item.read} />
@@ -306,10 +337,10 @@ function NotificationRow<T extends NotificationLike>({
           <Button
             variant="ghost"
             size="icon-sm"
-            disabled={disabled}
-            // 再取得中に無効になっても、フォーカスを失わせない。
+            disabled={disabled || verifying}
+            // 再取得中、確認中に無効になっても、フォーカスを失わせない。
             focusableWhenDisabled
-            aria-label={`「${item.title}」を${item.read ? "未読に戻す" : "既読にする"}`}
+            aria-label={`「${title}」を${item.read ? "未読に戻す" : "既読にする"}`}
             title={item.read ? "未読に戻す" : "既読にする"}
             data-slot="notification-read-toggle"
             className="pointer-coarse:size-12"

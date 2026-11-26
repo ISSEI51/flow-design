@@ -8,6 +8,9 @@
 //   集約した後も、含まれる通知を個別に確かめられるよう、items を返す。
 // - 未読の件数が不明な場合に、架空の件数を作らない（Dot か、表示なし）。0 件では何も表示しない。
 // - 一括既読の対象は、開始した時点の範囲（ID の一覧、またはカーソル）に固定する。処理中に届いた通知を含めない。
+// - 既読の更新の結果の件数は、応答で確認できた結果（更新された ID、検証できる件数）から求める。要求した件数を成功の件数にしない
+//   （summarizeReadUpdate）。API が全件の成功を保証する契約（all-or-nothing）を持つ場合だけ、要求した範囲を成功とする。
+// - 保留中の新着と取得した一覧の両方にある通知を、二重に数えない（reconcilePending。スコープと ID・イベントの ID で照合する）。
 // - 相対時刻は、渡された基準の時刻（now）から求める。描画中に Date.now() を読まない（SSR と Hydration の一致のため）。
 // - Quiet Hours は、利用者のタイムゾーンで判定し、日をまたぐ範囲（22:00〜07:00）を扱う。緊急の通知は遅らせない。
 // - 配信の状態は、確認できた事実だけから示す。送信できたことを、配信や既読として扱わない。
@@ -191,7 +194,10 @@ function notificationTriggerLabel(base: string, indicator: UnreadIndicator) {
 /**
  * 表示する未読の件数。サーバーが返した件数（reported）に、まだサーバーの結果に反映していない
  * 画面の上の変更（既読・未読の更新中の通知）と、保留している新着の未読を加える。
- * reported が null の場合：一覧がすべて読み込み済み（complete）なら数え、そうでなければ null（不明）。
+ * - complete（一覧をすべて読み込んでいる）：一覧から数える（reported と一致しない場合も、一覧の件数を使う）。
+ * - reported が null で、complete でない：null（不明）。
+ * - reported が読み込み済みの未読より少ない（サーバーの件数と一覧の不一致）：読み込み済みの未読の件数を下限にする。
+ * pending には、reported に含まれていない新着だけを渡す（reconcilePending の counted）。
  */
 function computeUnreadCount<T extends NotificationLike>({
   reported,
@@ -206,14 +212,67 @@ function computeUnreadCount<T extends NotificationLike>({
   base: readonly T[]
   /** 画面の上の通知（更新中の変更を含める）。base と同じ ID の集まり */
   shown: readonly T[]
-  /** 保留している新着（base と重複しないもの） */
+  /** 保留している新着のうち、reported に含まれていないもの（base と重複しないもの） */
   pending?: readonly T[]
   /** 一覧をすべて読み込んでいる（未読の件数を数えられる） */
   complete?: boolean
 }): number | null {
   const extra = countUnread(pending)
-  if (reported === null) return complete ? countUnread(shown) + extra : null
-  return Math.max(0, reported - countUnread(base) + countUnread(shown) + extra)
+  const loaded = countUnread(shown)
+  if (complete) return loaded + extra
+  if (reported === null || !Number.isFinite(reported)) return null
+  return Math.max(loaded + extra, Math.max(0, Math.floor(reported)) - countUnread(base) + loaded + extra)
+}
+
+/** サーバーの件数と、読み込み済みの一覧が一致しないか（complete なのに件数が違う、または読み込み済みの未読より少ない） */
+function isUnreadCountInconsistent({ reported, base, complete = false }: { reported: number | null; base: readonly NotificationLike[]; complete?: boolean }) {
+  if (reported === null) return false
+  const loaded = countUnread(base)
+  return complete ? reported !== loaded : reported < loaded
+}
+
+// ---------------------------------------------------------------- 保留中の新着の照合
+
+/** 保留している新着。受け取った購読のスコープと、受け取った順の番号を持つ */
+type PendingEntry<T extends NotificationLike> = {
+  /** 受け取った購読のスコープ（scopeKey） */
+  scope: string | undefined
+  item: T
+  /** 受け取った順の番号（取得を始めた時点の番号と比べる） */
+  order: number
+}
+
+/**
+ * 保留中の新着と取得した一覧を照合する。
+ * - shown：現在のスコープの新着のうち、一覧（base）と ID・イベントの ID が重複しないもの（「新着 N 件を表示」に使う）。
+ * - counted：shown のうち、サーバーの件数（reported）にまだ含まれていないもの。
+ *   asOf（一覧と件数が反映している受け付けた順の番号の最大値）がある場合は、通知の sequence がそれより大きいもの。
+ *   asOf がない場合は、取得を始めた後に受け取ったもの（order > startedAt）。
+ *   取得を始める前に受け取った新着は、サーバーの件数に含まれているものとして数えない（一覧のページの外にある場合も二重に数えない）。
+ */
+function reconcilePending<T extends NotificationLike>({
+  base,
+  pending,
+  scope,
+  asOf = null,
+  startedAt,
+}: {
+  base: readonly T[]
+  pending: readonly PendingEntry<T>[]
+  scope: string | undefined
+  asOf?: number | null
+  /** 一覧の取得を始めた時点の番号。取得していなければ null（すべてを数える） */
+  startedAt: number | null
+}): { shown: T[]; counted: T[] } {
+  const inScope = pending.filter((p) => p.scope === scope)
+  const shown = withoutKnown(base, inScope.map((p) => p.item))
+  const orderOf = new Map(inScope.map((p) => [p.item.id, p.order]))
+  const counted = shown.filter((item) => {
+    if (startedAt === null) return true
+    if (asOf !== null && typeof item.sequence === "number") return item.sequence > asOf
+    return (orderOf.get(item.id) ?? Infinity) > startedAt
+  })
+  return { shown, counted }
 }
 
 // ---------------------------------------------------------------- 一括既読の範囲
@@ -259,6 +318,143 @@ function isInReadAllRange(item: NotificationLike, range: ReadAllRange) {
 /** 範囲に含まれる通知だけを既読にする（処理中に届いた通知は未読のまま） */
 function applyReadAll<T extends NotificationLike>(items: readonly T[], range: ReadAllRange): T[] {
   return items.map((n) => (!n.read && isInReadAllRange(n, range) ? { ...n, read: true } : n))
+}
+
+// ---------------------------------------------------------------- 既読の更新の結果
+
+/** 既読の更新（個別、一括）の応答。製品の API が返せる値だけを入れる */
+type ReadUpdateReport = {
+  /** 実際に更新した ID */
+  updated?: readonly string[] | null
+  /** 実際に更新した件数（ID を返さない API） */
+  count?: number | null
+  /** cursor の範囲で、サーバーが処理した範囲の終わり（要求の until と一致するかを確かめる） */
+  until?: number | null
+  /** サーバーが処理したスコープ（要求の range.scope と一致するかを確かめる） */
+  scope?: string | null
+} | null | undefined | void
+
+type ReadUpdateIssue = "no-report" | "invalid-count" | "count-mismatch" | "cursor-mismatch" | "scope-mismatch"
+
+type ReadUpdateSummary = {
+  /**
+   * confirmed：範囲の対象がすべて更新されたと確認できた。partial：一部だけ更新された（missingIds）。
+   * unknown：どれが更新されたか、または件数を確認できない（取得し直して確かめる）。
+   */
+  status: "confirmed" | "partial" | "unknown"
+  /** 確認できた、範囲の中の更新された ID（重複を除く）。cursor では読み込んでいない ID を含む場合がある */
+  updatedIds: string[]
+  /** updatedIds が更新されたすべての ID か（false：件数だけがわかる、または何もわからない） */
+  identified: boolean
+  /** 確認できた件数。不明なら null。要求した件数を、そのまま使わない */
+  count: number | null
+  /** 範囲の対象（range.ids）のうち、更新を確認できなかった ID（identified のときだけ） */
+  missingIds: string[]
+  /** 応答に含まれていた、範囲の外の ID（処理中に届いた通知など）。既読として扱わない */
+  unexpectedIds: string[]
+  /** 応答の中で重複していた ID */
+  duplicateIds: string[]
+  issues: ReadUpdateIssue[]
+}
+
+/**
+ * 既読の更新の応答から、確認できた結果を求める（純粋な関数）。
+ * - updated（ID の一覧）があれば、重複を除き、範囲の中の ID だけを更新されたものとする。範囲の外の ID は unexpectedIds。
+ *   ids の範囲：range.ids に含まれる ID だけが範囲の中。cursor の範囲：known（画面が知っている通知）の中で範囲の外とわかる ID を除き、
+ *   読み込んでいない ID はサーバーの結果として受け入れる（範囲の時点とスコープの検証はサーバーの責務）。
+ * - count だけがあれば、整数で 0 以上か、要求より多くないか（ids：range.ids の件数、cursor：expected）を確かめる。
+ *   どの ID が更新されたかはわからない（identified: false）。count が要求と同じなら confirmed、少なければ partial。
+ * - 何も返さない応答は、contract が "all-or-nothing"（API が全件の成功を保証する）の場合だけ、範囲のすべてを更新されたとする。
+ *   それ以外は unknown（no-report）。
+ * - until と scope が要求と一致しない応答は unknown。scope が一致しない場合は、どの ID も更新されたものとしない。
+ */
+function summarizeReadUpdate(
+  range: ReadAllRange,
+  report: ReadUpdateReport,
+  {
+    contract = "reported",
+    known = [],
+    expected = null,
+  }: {
+    /** reported：応答で結果を返す（既定）。all-or-nothing：成功の応答は、範囲のすべてを更新したことを保証する */
+    contract?: "reported" | "all-or-nothing"
+    /** 画面が知っている通知（表示中、保留中）。cursor の範囲で、範囲の外の ID を見分けるために使う */
+    known?: readonly NotificationLike[]
+    /** cursor の範囲で、開始した時点の未読の件数（わかる場合）。count の上限の確認に使う */
+    expected?: number | null
+  } = {}
+): ReadUpdateSummary {
+  const requested = range.ids
+  const requestedSet = new Set(requested)
+  const issues: ReadUpdateIssue[] = []
+  const r = report ?? null
+  const summary = (s: Omit<ReadUpdateSummary, "issues" | "status"> & { status?: ReadUpdateSummary["status"] }): ReadUpdateSummary => {
+    const status = s.status ?? (issues.length > 0 ? "unknown" : s.missingIds.length > 0 ? "partial" : "confirmed")
+    return { ...s, status, issues }
+  }
+  if (r && r.scope !== undefined && r.scope !== null && r.scope !== range.scope) {
+    issues.push("scope-mismatch")
+    return summary({ updatedIds: [], identified: false, count: null, missingIds: [], unexpectedIds: [], duplicateIds: [], status: "unknown" })
+  }
+  if (r && range.kind === "cursor" && r.until !== undefined && r.until !== range.until) issues.push("cursor-mismatch")
+  const knownById = new Map(known.map((n) => [n.id, n]))
+  const inRange = (id: string) => {
+    if (requestedSet.has(id)) return true
+    if (range.kind === "ids") return false
+    const item = knownById.get(id)
+    return item ? isInReadAllRange(item, range) : true
+  }
+  const validCount = (c: unknown, max: number | null): c is number =>
+    typeof c === "number" && Number.isInteger(c) && c >= 0 && (max === null || c <= max)
+  const max = range.kind === "ids" ? requested.length : expected
+
+  if (r && Array.isArray(r.updated)) {
+    const seen = new Set<string>()
+    const duplicateIds: string[] = []
+    const updatedIds: string[] = []
+    const unexpectedIds: string[] = []
+    for (const id of r.updated) {
+      if (seen.has(id)) {
+        if (!duplicateIds.includes(id)) duplicateIds.push(id)
+        continue
+      }
+      seen.add(id)
+      if (inRange(id)) updatedIds.push(id)
+      else unexpectedIds.push(id)
+    }
+    if (r.count !== undefined && r.count !== null && r.count !== updatedIds.length) issues.push(validCount(r.count, null) ? "count-mismatch" : "invalid-count")
+    const missingIds = requested.filter((id) => !seen.has(id))
+    return summary({ updatedIds, identified: true, count: issues.length > 0 ? null : updatedIds.length, missingIds, unexpectedIds, duplicateIds })
+  }
+  if (r && r.count !== undefined && r.count !== null) {
+    if (!validCount(r.count, max)) {
+      issues.push("invalid-count")
+      return summary({ updatedIds: [], identified: false, count: null, missingIds: [], unexpectedIds: [], duplicateIds: [] })
+    }
+    const all = max !== null && r.count === max
+    if (all && issues.length === 0) return summary({ updatedIds: [...requested], identified: range.kind === "ids", count: r.count, missingIds: [], unexpectedIds: [], duplicateIds: [] })
+    return summary({
+      updatedIds: [],
+      identified: false,
+      count: issues.length > 0 ? null : r.count,
+      missingIds: [],
+      unexpectedIds: [],
+      duplicateIds: [],
+      status: issues.length > 0 || max === null ? "unknown" : "partial",
+    })
+  }
+  if (contract === "all-or-nothing" && issues.length === 0) {
+    return summary({
+      updatedIds: [...requested],
+      identified: range.kind === "ids",
+      count: range.kind === "ids" ? requested.length : expected,
+      missingIds: [],
+      unexpectedIds: [],
+      duplicateIds: [],
+    })
+  }
+  if (issues.length === 0) issues.push("no-report")
+  return summary({ updatedIds: [], identified: false, count: null, missingIds: [], unexpectedIds: [], duplicateIds: [] })
 }
 
 // ---------------------------------------------------------------- フォーカス
@@ -422,6 +618,9 @@ function describeDelivery(record: ChannelDelivery): { state: DeliveryState; labe
 export {
   applyReadAll,
   computeUnreadCount,
+  isUnreadCountInconsistent,
+  reconcilePending,
+  summarizeReadUpdate,
   countUnread,
   createReadAllRange,
   dedupeNotifications,
@@ -440,4 +639,16 @@ export {
   sortNotifications,
   withoutKnown,
 }
-export type { ChannelDelivery, DeliveryState, NotificationEntry, NotificationLike, QuietHours, ReadAllRange, UnreadIndicator }
+export type {
+  ChannelDelivery,
+  DeliveryState,
+  NotificationEntry,
+  NotificationLike,
+  PendingEntry,
+  QuietHours,
+  ReadAllRange,
+  ReadUpdateIssue,
+  ReadUpdateReport,
+  ReadUpdateSummary,
+  UnreadIndicator,
+}

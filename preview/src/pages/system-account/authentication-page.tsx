@@ -10,7 +10,14 @@ import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, Tabl
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/toast"
 import { AuthStatus } from "@/patterns/auth-feedback"
-import { planReauthentication, resolveReturnTo, type ReturnToResult } from "@/patterns/auth-flow"
+import {
+  decideReauthenticationRestore,
+  planReauthentication,
+  resolveReturnTo,
+  type ReauthDiscardTarget,
+  type ReauthenticationPlan,
+  type ReturnToResult,
+} from "@/patterns/auth-flow"
 import type { AuthLayoutVariant } from "@/patterns/auth-layout"
 import { useScopeGuard } from "@/patterns/scope-guard"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
@@ -46,7 +53,7 @@ const userName = (id: string) => (id in users ? users[id as UserId].name : "新�
 const destinationText = (d: ReturnToResult) =>
   d.status === "accepted"
     ? `${d.path}（元の目的の画面）`
-    : `${d.path}（既定の画面。${{ missing: "復帰先の指定がない", unsafe: "復帰先が同じオリジンの相対パスではない", "not-allowed": "この利用者は復帰先の画面を開けない" }[d.reason]}）`
+    : `${d.path}（既定の画面。${{ missing: "復帰先の指定がない", unsafe: "復帰先が同じオリジンの相対パスではない", "not-allowed": "この利用者は復帰先の画面を開けない", "check-failed": "復帰先を開けるかを確かめられなかった" }[d.reason]}）`
 
 function ResultLine({ testId, children }: { testId: string; children: ReactNode }) {
   return (
@@ -304,6 +311,9 @@ const mfaUsers: [UserId, string][] = [
 function MfaDemo() {
   const [userId, setUserId] = useState<UserId>("u-sato")
   const [expired, setExpired] = useState(false)
+  // 製品の指定の例：入力が揃ったら自動で送信するか、リカバリーコードの大文字・小文字を区別するか
+  const [autoSubmit, setAutoSubmit] = useState(false)
+  const [caseSensitive, setCaseSensitive] = useState(false)
   const [challenge, setChallenge] = useState<Awaited<ReturnType<typeof authApi.signInWithPassword>> | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const [run, setRun] = useState(0)
@@ -319,6 +329,7 @@ function MfaDemo() {
   useEffect(() => {
     let active = true
     authServer.codeTtlMs = expired ? 0 : 5 * 60_000
+    authServer.recoveryCaseSensitive = caseSensitive
     authApi.signInWithPassword({ org: "hq", email: users[userId].email, password: demoPassword }).then(
       (r) => active && setChallenge(r),
       () => undefined
@@ -326,7 +337,7 @@ function MfaDemo() {
     return () => {
       active = false
     }
-  }, [userId, expired, run])
+  }, [userId, expired, caseSensitive, run])
 
   return (
     <div className="flex flex-col gap-6">
@@ -345,6 +356,18 @@ function MfaDemo() {
           切れている
         </Radio>
       </DemoControls>
+      <DemoControls legend="リカバリーコードの大文字・小文字（製品の指定）">
+        <Radio name="auth-mfa-case" checked={!caseSensitive} onChange={() => reset(() => setCaseSensitive(false))}>
+          区別しない（大文字にそろえる）
+        </Radio>
+        <Radio name="auth-mfa-case" checked={caseSensitive} onChange={() => reset(() => setCaseSensitive(true))}>
+          区別する（入力のまま送る）
+        </Radio>
+        <label className="flex min-h-10 cursor-pointer items-center gap-2">
+          <input type="checkbox" checked={autoSubmit} onChange={(e) => setAutoSubmit(e.target.checked)} className="size-4 accent-[var(--primary)]" data-testid="auth-mfa-auto-submit" />
+          コードの桁数が揃ったら自動で送信する
+        </label>
+      </DemoControls>
       <DemoFrame testId="auth-mfa-frame">
         {result ? (
           <ResultLine testId="auth-mfa-result">{result}</ResultLine>
@@ -354,6 +377,8 @@ function MfaDemo() {
             api={authApi}
             challenge={challenge.challenge}
             headingLevel={3}
+            autoSubmit={autoSubmit}
+            recoveryCaseSensitive={caseSensitive}
             onAuthenticated={(id) => setResult(`認証済み：${userName(id)}`)}
             onCancel={() => setResult("ログインの最初の画面に戻りました（パスワードから入力し直す）")}
             testId="auth-mfa"
@@ -597,7 +622,10 @@ function ReturnToTable() {
   const rows: [string, string][] = [
     ...returnToSamples,
     ["", "指定なし"],
-    ["/w/hq/customers?q=100%", "「%」を含む検索の条件"],
+    ["/w/hq/customers?q=100%", "不完全なエンコード（「%」の後が 16 進数でない）"],
+    ["/w/hq/../hq/settings/billing", "ドットのセグメント（解析で値が変わる）"],
+    ["/%252F%252Fevil.example", "二重にエンコードした //"],
+    ["/w/hq/customers?q=%E9%9D%92%E5%B1%B1", "エンコードした検索の条件（青山）"],
   ]
   return (
     <TableScrollArea>
@@ -632,26 +660,54 @@ function ReturnToTable() {
 
 // ---------------------------------------------------------------- セッション切れと再認証
 type SaveState = "idle" | "saving" | "saved" | "failed" | "unknown"
+/** 再認証の後に表示するもの。content：顧客の情報。no-access：閲覧できない。other-workspace：別のワークスペース */
+type SessionView = "content" | "no-access" | "other-workspace"
+type VerifyArgs = {
+  plan: ReauthenticationPlan
+  /** 作業を保持したときの利用者とワークスペース */
+  previousUserId: string
+  previousWorkspaceId: WorkspaceId
+  /** 再認証の後の利用者、セッション、ワークスペース */
+  nextUserId: string
+  sessionId: string
+  workspaceId: WorkspaceId
+  /** 結果が不明な保存の内容（同じ利用者の場合だけ） */
+  unconfirmed: string | null
+}
+
+const discardLabels: Record<ReauthDiscardTarget, string> = {
+  input: "入力",
+  credentials: "認証情報",
+  notifications: "通知",
+  cache: "キャッシュ",
+  "async-results": "非同期の結果",
+  "unconfirmed-mutation": "結果が不明な保存",
+}
 
 function SessionDemo() {
   const [userId, setUserId] = useState<string>("u-sato")
+  // 作業を保持しているワークスペース（この例の顧客は本社営業部のもの）
+  const [workspaceId, setWorkspaceId] = useState<WorkspaceId>("hq")
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [phase, setPhase] = useState<"active" | "expired" | "verifying">("active")
+  const [view, setView] = useState<SessionView>("content")
   const [refreshable, setRefreshable] = useState(false)
-  const [revoke, setRevoke] = useState(false)
+  const [revoke, setRevoke] = useState<"none" | "edit" | "view">("none")
+  const [nextWorkspace, setNextWorkspace] = useState<WorkspaceId>("hq")
   const [expireNextSave, setExpireNextSave] = useState(false)
   const [saved, setSaved] = useState<string | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>("idle")
-  // 結果を確かめていない保存の内容。再認証の後に、再送信せずに確かめる
+  // 結果を確かめていない保存の内容。再認証の後に、再送信せずに、現在の認可で照会して確かめる
   const [unconfirmed, setUnconfirmed] = useState<string | null>(null)
   const [message, setMessage] = useState("")
   const [canEdit, setCanEdit] = useState(true)
   const [log, setLog] = useState("")
-  const guard = useScopeGuard(userId)
+  // 利用者とワークスペースが変わったら、前のスコープの保存と更新の結果を反映しない
+  const guard = useScopeGuard(`${userId}:${workspaceId}`)
   // 再認証の後の確認（利用者が変わってもスコープを変えない。最後の確認だけを反映する）
   const verifyGuard = useScopeGuard("session-verify")
-  const verifyArgs = useRef<{ nextUserId: string; previous: string } | null>(null)
+  const verifyArgs = useRef<VerifyArgs | null>(null)
   const [verifyError, setVerifyError] = useState<string | null>(null)
   const saving = useRef(false)
   const customer = customers[0]
@@ -660,11 +716,12 @@ function SessionDemo() {
   useEffect(() => {
     const id = authApi.startSession("u-sato")
     setSessionId(id)
-    authApi.loadNote({ userId: "u-sato" }).then((t) => setSaved(t), () => undefined)
+    authApi.loadNote({ sessionId: id }).then((t) => setSaved(t), () => undefined)
     return () => authApi.expireSession(id)
   }, [])
   useEffect(() => {
-    authServer.revokeEditOnReauth = revoke
+    authServer.revokeEditOnReauth = revoke === "edit"
+    authServer.revokeViewOnReauth = revoke === "view"
   }, [revoke])
 
   const value = draft ?? saved ?? ""
@@ -680,18 +737,21 @@ function SessionDemo() {
     }
     // 安全に自動で更新できる場合は、利用者に知らせずに更新する
     const ticket = guard.begin("refresh")
-    authApi.refreshSession({ sessionId, userId }, { signal: ticket.signal }).then(
-      (r) => {
-        if (!guard.isLatest(ticket)) return
-        setSessionId(r.sessionId)
-        setLog("セッションを自動で更新しました（画面には表示しない）。")
-      },
-      (e) => {
-        if (isAbortError(e) || !guard.isLatest(ticket)) return
-        setPhase("expired")
-        setLog("自動の更新に失敗しました。再認証が必要です。")
-      }
-    )
+    authApi
+      .refreshSession({ sessionId, userId }, { signal: ticket.signal })
+      .then(
+        (r) => {
+          if (!guard.isLatest(ticket)) return
+          setSessionId(r.sessionId)
+          setLog("セッションを自動で更新しました（画面には表示しない）。")
+        },
+        (e) => {
+          if (isAbortError(e) || !guard.isLatest(ticket)) return
+          setPhase("expired")
+          setLog("自動の更新に失敗しました。再認証が必要です。")
+        }
+      )
+      .finally(() => guard.release(ticket))
   }
 
   const save = () => {
@@ -735,81 +795,130 @@ function SessionDemo() {
       )
       .finally(() => {
         saving.current = false
+        guard.release(ticket)
       })
+  }
+
+  // planReauthentication と decideReauthenticationRestore の discard に従って破棄する
+  const discard = (targets: readonly ReauthDiscardTarget[]) => {
+    if (targets.includes("input")) setDraft(null)
+    if (targets.includes("cache")) setSaved(null)
+    if (targets.includes("unconfirmed-mutation")) setUnconfirmed(null)
+    // async-results：利用者かワークスペースが変わると guard のスコープが変わり、前のスコープの結果を反映しない
+    // credentials：前のセッションの ID は onReauthenticated で置き換え、ログインの画面の入力はアンマウントで消える
   }
 
   const onReauthenticated = (nextUserId: string) => {
     const previous = userId
     const id = authApi.startSession(nextUserId, { reauthenticated: true })
     setSessionId(id)
-    setPhase("verifying")
-    if (previous !== nextUserId) {
-      // 別の利用者：前の利用者のデータ、入力、結果の確認をすべて破棄する
-      const plan = planReauthentication({ previousUserId: previous, userId: nextUserId, permissionsStillAllow: false, hasUnconfirmedMutation: unconfirmed !== null })
+    // 同じ利用者であることだけで、作業を復元しない。ワークスペースが変わった場合も、そのまま復元しない
+    const plan = planReauthentication({
+      previousUserId: previous,
+      userId: nextUserId,
+      previousWorkspaceId: workspaceId,
+      workspaceId: nextWorkspace,
+      hasUnconfirmedMutation: unconfirmed !== null,
+    })
+    if (plan.kind !== "same-user") {
+      discard(plan.discard)
       setUserId(nextUserId)
-      setDraft(null)
-      setSaved(null)
-      setUnconfirmed(null)
+      setWorkspaceId(nextWorkspace)
       setSaveState("idle")
       setMessage("")
-      setLog(`別の利用者でログインしました。前の利用者の入力と、結果の確認を破棄しました（${plan.kind}）。`)
+      setLog(
+        `${plan.kind === "different-user" ? "別の利用者" : "別のワークスペース"}でログインしました。前の作業を復元せず、次を破棄しました：${plan.discard.map((d) => discardLabels[d]).join("、")}（${plan.kind}）。`
+      )
     }
-    verify(nextUserId, previous)
+    verify({
+      plan,
+      previousUserId: previous,
+      previousWorkspaceId: workspaceId,
+      nextUserId,
+      sessionId: id,
+      workspaceId: nextWorkspace,
+      unconfirmed: plan.kind === "same-user" ? unconfirmed : null,
+    })
   }
 
-  // 同じ利用者でも、別の利用者でも、権限を取得し直してから内容を表示する。
+  // 権限を取得し直し、現在の認可で対象を照会してから、復元するかを決める（decideReauthenticationRestore）。
   // 確認の要求は、最後に始めたものだけを反映し、アンマウントの後や中止の後の応答を反映しない（verifyGuard）。
   // 失敗した場合は内容を表示せず、もう一度確かめる操作を示す。
-  const verify = (nextUserId: string, previous: string) => {
+  const verify = (args: VerifyArgs) => {
+    const { plan, nextUserId, sessionId: sid, workspaceId: ws, unconfirmed: pendingText } = args
     const ticket = verifyGuard.begin("verify")
     setPhase("verifying")
     setVerifyError(null)
-    verifyArgs.current = { nextUserId, previous }
+    verifyArgs.current = args
+    const latest = () => verifyGuard.isLatest(ticket)
     const run = async () => {
-      const permissions = await authApi.fetchPermissions({ userId: nextUserId, workspaceId: "hq" }, { signal: ticket.signal })
-      if (!verifyGuard.isLatest(ticket)) return
-      const allow = permissions.includes("customers.edit")
-      if (previous === nextUserId) {
-        const plan = planReauthentication({ previousUserId: previous, userId: nextUserId, permissionsStillAllow: allow, hasUnconfirmedMutation: unconfirmed !== null })
-        let note: string | null = null
-        if (plan.confirmPending && unconfirmed !== null) {
-          note = await authApi.loadNote({ userId: nextUserId }, { signal: ticket.signal })
-          if (!verifyGuard.isLatest(ticket)) return
-        }
-        setCanEdit(allow)
-        if (!plan.restoreWork) {
-          setDraft(null)
-          setMessage("編集の権限がなくなったため、保存していない入力内容を破棄しました。")
-        }
-        if (note !== null) {
-          setSaved(note)
-          if (note === unconfirmed) {
-            setDraft(null)
-            setSaveState("saved")
-            setMessage("保存されていたことを確かめました（再送信していません）。")
-          } else {
-            setSaveState("failed")
-            setMessage(plan.restoreWork ? "保存されていませんでした。入力内容を確かめて、もう一度保存してください。" : "保存されていませんでした。")
-          }
-          setUnconfirmed(null)
-        } else if (plan.restoreWork && draft !== null) {
-          setMessage("保存していない入力内容を復元しました。")
-        }
-      } else {
-        const note = await authApi.loadNote({ userId: nextUserId }, { signal: ticket.signal })
-        if (!verifyGuard.isLatest(ticket)) return
-        setCanEdit(allow)
+      const permissions = await authApi.fetchPermissions({ userId: nextUserId, workspaceId: ws }, { signal: ticket.signal })
+      if (!latest()) return
+      const allowView = permissions.includes("customers.view")
+      const allowEdit = permissions.includes("customers.edit")
+      if (plan.kind === "different-workspace" || ws !== "hq") {
+        // この例の顧客は本社営業部のもの。別のワークスペースでは、その顧客の情報を取得しない
+        setCanEdit(false)
+        setView("other-workspace")
+        setPhase("active")
+        return
+      }
+      // 閲覧できる場合だけ、現在のセッション（現在の認可）で照会する。保存の結果の照会にも、現在の認可が必要
+      let note: string | null = null
+      if (allowView) {
+        note = await authApi.loadNote({ sessionId: sid }, { signal: ticket.signal })
+        if (!latest()) return
+      }
+      if (plan.kind === "different-user") {
+        setCanEdit(allowEdit)
         setSaved(note)
+        setView(allowView ? "content" : "no-access")
+        setPhase("active")
+        return
+      }
+      const decision = decideReauthenticationRestore(plan, {
+        // セッションの利用者（再認証で発行したセッション）と、作業を保持した利用者を比べる
+        sameAccount: nextUserId === args.previousUserId,
+        sameWorkspace: ws === args.previousWorkspaceId,
+        canView: allowView,
+        canEdit: allowEdit,
+        target: "unchanged",
+        pendingMutation: plan.confirmPending && note !== null ? (note === pendingText ? "applied" : "not-applied") : undefined,
+      })
+      discard(decision.discard)
+      setCanEdit(decision.allowEdit)
+      setView(decision.showTarget ? "content" : "no-access")
+      if (decision.showTarget && note !== null) setSaved(note)
+      if (decision.pendingMutation !== "none" && decision.pendingMutation !== "unresolved") setUnconfirmed(null)
+      if (decision.pendingMutation === "applied") {
+        setDraft(null)
+        setSaveState("saved")
+      } else if (decision.pendingMutation === "not-applied") setSaveState("failed")
+      else setSaveState("idle")
+      switch (decision.reason) {
+        case "no-view-permission":
+          setMessage("閲覧の権限がなくなったため、この顧客の情報と、保存していない入力内容を表示しません。")
+          break
+        case "no-edit-permission":
+          setMessage("編集の権限がなくなったため、保存していない入力内容を破棄しました。")
+          break
+        case null:
+          if (decision.pendingMutation === "applied") setMessage("保存されていたことを確かめました（再送信していません）。")
+          else if (decision.pendingMutation === "not-applied") setMessage("保存されていませんでした。入力内容を確かめて、もう一度保存してください。")
+          else if (draft !== null) setMessage("保存していない入力内容を復元しました。")
+          break
+        default:
+          setMessage("前の作業を復元しませんでした。")
       }
       setPhase("active")
     }
     run().catch((e) => {
-      if (isAbortError(e) || !verifyGuard.isLatest(ticket)) return
+      if (isAbortError(e) || !latest()) return
       setVerifyError("権限と保存の結果を確かめられませんでした。")
     })
   }
 
-  const role = membershipOf(userId as UserId, "hq")?.role
+  const role = membershipOf(userId as UserId, workspaceId)?.role
   return (
     <div className="flex flex-col gap-6">
       <DemoControls legend="セッションの更新（模擬）">
@@ -821,11 +930,22 @@ function SessionDemo() {
         </Radio>
       </DemoControls>
       <DemoControls legend="再認証の後の権限（模擬）">
-        <Radio name="auth-session-perm" checked={!revoke} onChange={() => setRevoke(false)}>
+        <Radio name="auth-session-perm" checked={revoke === "none"} onChange={() => setRevoke("none")}>
           変わらない
         </Radio>
-        <Radio name="auth-session-perm" checked={revoke} onChange={() => setRevoke(true)}>
+        <Radio name="auth-session-perm" checked={revoke === "edit"} onChange={() => setRevoke("edit")}>
           編集の権限がなくなる
+        </Radio>
+        <Radio name="auth-session-perm" checked={revoke === "view"} onChange={() => setRevoke("view")}>
+          閲覧の権限がなくなる
+        </Radio>
+      </DemoControls>
+      <DemoControls legend="再認証の後のワークスペース（模擬）">
+        <Radio name="auth-session-ws" checked={nextWorkspace === "hq"} onChange={() => setNextWorkspace("hq")}>
+          同じ（本社営業部）
+        </Radio>
+        <Radio name="auth-session-ws" checked={nextWorkspace === "west"} onChange={() => setNextWorkspace("west")}>
+          別のワークスペース（西日本営業部）
         </Radio>
       </DemoControls>
       <DemoControls legend="セッションの操作（模擬）">
@@ -856,15 +976,20 @@ function SessionDemo() {
               {verifyError ?? "権限を確かめています"}
             </p>
             {verifyError && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => verifyArgs.current && verify(verifyArgs.current.nextUserId, verifyArgs.current.previous)}
-                data-testid="auth-session-verify-retry"
-              >
+              <Button variant="outline" size="sm" onClick={() => verifyArgs.current && verify(verifyArgs.current)} data-testid="auth-session-verify-retry">
                 もう一度確かめる
               </Button>
             )}
+          </div>
+        ) : view === "other-workspace" ? (
+          <div className="flex flex-col items-start gap-2" data-testid="auth-session-other-workspace">
+            <p className="text-heading">{workspaces[workspaceId].name}のホーム（模擬）</p>
+            <p className="text-ui text-muted-foreground">別のワークスペースでログインしたため、前のワークスペースの作業を復元していません。</p>
+          </div>
+        ) : view === "no-access" ? (
+          <div className="flex flex-col items-start gap-2" data-testid="auth-session-no-access">
+            <p className="text-heading">この顧客を表示する権限がありません</p>
+            <AuthStatus data-testid="auth-session-message">{message}</AuthStatus>
           </div>
         ) : (
           <div className="flex flex-col gap-6" data-testid="auth-session-content">
@@ -1004,12 +1129,18 @@ function AccountDemo() {
     if (!account) return
     const ticket = guard.begin("export")
     const name = workspaces[account.workspaceId].name
-    setTimeout(() => {
-      // 開始したスコープの最新の処理の結果だけを反映する（A → B → A でも反映しない）
-      if (!guard.isLatest(ticket)) return
-      const id = toast({ variant: "success", title: `顧客の書き出しが完了しました（${name}）` })
-      if (id) toastIds.current.push(id)
-    }, 3000)
+    authApi
+      .exportCustomers({ workspaceId: account.workspaceId }, { signal: ticket.signal })
+      .then(
+        () => {
+          // 開始したスコープの最新の処理の結果だけを反映する（A → B → A でも反映しない。AbortSignal に従わない応答も）
+          if (!guard.isLatest(ticket)) return
+          const id = toast({ variant: "success", title: `顧客の書き出しが完了しました（${name}）` })
+          if (id) toastIds.current.push(id)
+        },
+        () => undefined
+      )
+      .finally(() => guard.release(ticket))
   }
 
   const memberships = account ? Object.values(workspaces).filter((w) => membershipOf(account.userId, w.id)) : []

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { useBrowseData } from "@/patterns/browse-data"
@@ -6,7 +6,7 @@ import { DataRegionError, LoadingReveal } from "@/patterns/data-states"
 import { classifySaveError } from "@/patterns/setting-save"
 import { SettingSaveStatus } from "@/patterns/setting-status"
 
-import type { SettingsApi } from "../../data/system-account/settings-server"
+import type { SaveContract, SettingsApi } from "../../data/system-account/settings-server"
 import { users, workspaces, type Language, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
 
 // Settings の画面の部品（製品側のコードの例）で共通に使うもの。Registry には含めない。
@@ -27,6 +27,11 @@ export type SettingsSectionProps = {
   onPermissionDenied?: () => void
   /** 明示的な保存のフォームの未保存の変更。画面の移動の前の確認に使う */
   onDirtyChange?: (unit: string, dirty: boolean) => void
+  /**
+   * 模擬のサーバーの保存の順序の規則。versioned の場合は、即時保存に版の照合（versions、ifMatch）を使う。
+   * 製品では、API の契約に合わせて固定する（画面の操作で切り替えない）
+   */
+  saveContract?: SaveContract
 }
 
 export const languageLabels: Record<Language, string> = { ja: "日本語", en: "English" }
@@ -98,11 +103,21 @@ type FormLike = {
   dirty: boolean
   saving: boolean
   canDiscard: boolean
+  canSubmit: boolean
+  submitBlockedReason: "saving" | "unresolved" | "unchanged" | null
   discard: () => void
   verify: () => void
 }
 
-/** 明示的な保存のフォームの操作の行：保存、変更の取り消し、保存の状態 */
+const blockedTexts = {
+  unchanged: "変更がないため、保存していません。",
+  unresolved: "前の保存の結果を確認するまで、もう一度保存できません。「確認する」で確かめてください。",
+} as const
+
+/**
+ * 明示的な保存のフォームの操作の行：保存、変更の取り消し、保存の状態。
+ * 保存できない間（変更がない、結果が不明か競合）も保存のボタンは無効にせず（フォーカスを失わせない）、押したときに理由を示す
+ */
 export function FormFooter({
   form,
   saveLabel,
@@ -114,10 +129,26 @@ export function FormFooter({
   testId: string
   extra?: ReactNode
 }) {
+  const [note, setNote] = useState<string | null>(null)
+  const reason = form.submitBlockedReason
+  // 保存できるようになったら、理由の文を消す
+  useEffect(() => {
+    if (reason === null || reason === "saving") setNote(null)
+  }, [reason])
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" loading={form.saving} data-testid={`${testId}-save`}>
+        <Button
+          type="submit"
+          loading={form.saving}
+          onClick={(e) => {
+            if (reason === "unchanged" || reason === "unresolved") {
+              e.preventDefault()
+              setNote(blockedTexts[reason])
+            }
+          }}
+          data-testid={`${testId}-save`}
+        >
           {saveLabel}
         </Button>
         {/* 結果が不明な間は破棄できない（サーバーに保存された可能性がある）。確認の後に取り消せる */}
@@ -127,6 +158,9 @@ export function FormFooter({
         {extra}
       </div>
       <SettingSaveStatus status={form.status} dirty={form.dirty} onVerify={form.verify} data-testid={`${testId}-status`} />
+      <p role="status" className="text-ui text-muted-foreground" data-testid={`${testId}-blocked`}>
+        {note ?? ""}
+      </p>
     </div>
   )
 }
@@ -141,10 +175,13 @@ export type ActionState =
   | { kind: "failed"; text: string }
   | { kind: "unknown"; text: string }
 
-/** 模擬の通信のエラーを分類する（setting-save の classifySaveError と同じ規則） */
+/**
+ * 模擬の通信のエラーを分類する（setting-save の classifySaveError を使う）。結果の不明と、クライアントの待機の中止（aborted）は、
+ * どちらも処理されたかがわからないため「確認する」の対象にする
+ */
 export function actionError(error: unknown, unknownText: string, failedPrefix: string): ActionState {
   const kind = classifySaveError(error)
-  if (kind === "unknown") return { kind: "unknown", text: unknownText }
+  if (kind === "unknown" || kind === "aborted") return { kind: "unknown", text: unknownText }
   return { kind: "failed", text: `${failedPrefix}${error instanceof Error ? `：${error.message}` : ""}` }
 }
 

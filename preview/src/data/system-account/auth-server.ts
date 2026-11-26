@@ -2,6 +2,8 @@
 // 認証情報の不一致、通信の失敗、試行回数の制限、認証のサービスの障害、コードの期限切れ、メールの送信の失敗、
 // 保存の途中のセッション切れ（結果が不明）を再現し、Authentication の Pattern の挙動を確かめる。
 // 検品からは window.__fdSaAuthServer で設定する（応答の時間、結果、ignoreAbort、受け付けた要求の記録、reset()）。
+// 応答の順序を検品で決める場合は、hold[kind] = true で要求を保留し、heldCount(kind) で保留を確かめ、release(kind) で解放する
+// （固定の応答時間や操作の速さを前提にしない）。
 //
 // 入力されたパスワードと確認コードは、比較にだけ使い、記録（requests）にも残さない。
 
@@ -41,6 +43,7 @@ export type AuthRequestKind =
   | "permissions"
   | "save"
   | "load"
+  | "export"
 
 /**
  * 応答の結果
@@ -76,6 +79,8 @@ type SentEmail = { to: string; type: "verify" | "reset" | "magic-link" | "accoun
 type ServerConfig = {
   /** 応答までの時間（ms） */
   latency: Record<AuthRequestKind, number>
+  /** true の種類の要求は、release で解放するまで応答しない（保留の間は latency を使わない） */
+  hold: Partial<Record<AuthRequestKind, boolean>>
   /** 種類ごとの結果。指定のない種類は success */
   mode: Partial<Record<AuthRequestKind, AuthServerMode>>
   /** AbortSignal に従わず、中止された後も応答を返す（古い応答の破棄の検品） */
@@ -90,6 +95,10 @@ type ServerConfig = {
   expireDuringSave: boolean
   /** 再認証の後に、編集の権限を取り消す（権限の再検証の検品） */
   revokeEditOnReauth: boolean
+  /** 再認証の後に、閲覧の権限を取り消す（閲覧の権限を失った情報を復元しない検品） */
+  revokeViewOnReauth: boolean
+  /** リカバリーコードの大文字・小文字を区別する（製品の指定の例）。false の場合はサーバーで大文字にそろえて比べる */
+  recoveryCaseSensitive: boolean
   /** 受け付けた要求（検品用）。パスワードとコードは含めない */
   requests: { kind: AuthRequestKind; email?: string; userId?: string; method?: string; provider?: string }[]
   /** 実際に送信したメール（模擬）。送信に失敗した要求は含めない */
@@ -113,7 +122,9 @@ const initialConfig = (): ServerConfig => ({
     permissions: 300,
     save: 700,
     load: 300,
+    export: 3000,
   },
+  hold: {},
   mode: {},
   ignoreAbort: false,
   codeTtlMs: 5 * 60_000,
@@ -121,6 +132,8 @@ const initialConfig = (): ServerConfig => ({
   resendCooldownMs: 30_000,
   expireDuringSave: false,
   revokeEditOnReauth: false,
+  revokeViewOnReauth: false,
+  recoveryCaseSensitive: false,
   requests: [],
   sentEmails: [],
 })
@@ -140,6 +153,10 @@ let notes: Record<string, string> = {}
 let sessions = new Map<string, { userId: string }>()
 /** 編集の権限を取り消した利用者 */
 let revoked = new Set<string>()
+/** 閲覧の権限を取り消した利用者 */
+let revokedView = new Set<string>()
+/** 保留している要求（hold） */
+let held: { kind: AuthRequestKind; release: () => void }[] = []
 
 function resetState() {
   challenges = new Map()
@@ -151,15 +168,35 @@ function resetState() {
   notes = { "u-sato": "来月の更新の前に、担当者と打ち合わせる。", "u-suzuki": "", "u-tanaka": "" }
   sessions = new Map()
   revoked = new Set()
+  revokedView = new Set()
+  // 保留している要求は応答しないまま捨てる（前の検品や例の要求を、次の状態に届けない）
+  held = []
 }
 resetState()
 
-export const authServer: ServerConfig & { reset: () => void } = Object.assign(initialConfig(), {
+type ServerControls = {
+  reset: () => void
+  /** 保留している要求の数（kind を省略すると、すべての種類） */
+  heldCount: (kind?: AuthRequestKind) => number
+  /** 保留している要求のうち、最も古いものを 1 つ解放する。解放した場合は true */
+  release: (kind?: AuthRequestKind) => boolean
+}
+
+export const authServer: ServerConfig & ServerControls = Object.assign(initialConfig(), {
   reset() {
     Object.assign(authServer, initialConfig())
     resetState()
     mailVersion++
     for (const l of mailListeners) l()
+  },
+  heldCount(kind?: AuthRequestKind) {
+    return held.filter((h) => kind === undefined || h.kind === kind).length
+  },
+  release(kind?: AuthRequestKind) {
+    const entry = held.find((h) => kind === undefined || h.kind === kind)
+    if (!entry) return false
+    entry.release()
+    return true
   },
 })
 
@@ -227,14 +264,39 @@ function request<T>(kind: AuthRequestKind, signal: AbortSignal | undefined, run:
   const mode = modeOf(kind)
   const failed = mode !== "success" && mode !== "unknown"
   const outcome: MockOutcome = failed ? "fail" : mode === "unknown" ? "unknown" : "success"
-  return mockRequest({
-    latency: authServer.latency[kind],
+  return send(kind, signal, {
     outcome,
-    signal,
-    ignoreAbort: authServer.ignoreAbort,
     run,
     failMessage: failed ? errorMessages[mode] : undefined,
     failCode: failed ? mode : undefined,
+  })
+}
+
+/**
+ * 模擬の要求を送る。hold[kind] が true の場合は、release(kind) まで保留する（サーバーでの処理 run も解放の後に行う）。
+ * 保留の間に AbortSignal で中止された場合は、ignoreAbort でなければ AbortError で終わり、保留から外す。
+ */
+function send<T>(kind: AuthRequestKind, signal: AbortSignal | undefined, options: Omit<Parameters<typeof mockRequest<T>>[0], "latency" | "signal" | "ignoreAbort">): Promise<T> {
+  const ignoreAbort = authServer.ignoreAbort
+  if (!authServer.hold[kind]) return mockRequest({ ...options, latency: authServer.latency[kind], signal, ignoreAbort })
+  return new Promise<T>((resolve, reject) => {
+    const entry = {
+      kind,
+      release: () => {
+        held = held.filter((h) => h !== entry)
+        mockRequest({ ...options, latency: 0, signal, ignoreAbort }).then(resolve, reject)
+      },
+    }
+    held.push(entry)
+    if (signal && !ignoreAbort) {
+      const onAbort = () => {
+        if (!held.includes(entry)) return
+        held = held.filter((h) => h !== entry)
+        reject(new DOMException("aborted", "AbortError"))
+      }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener("abort", onAbort, { once: true })
+    }
   })
 }
 
@@ -275,8 +337,10 @@ export function homePathOf(userId: string) {
 export function permissionsOf(userId: string, workspaceId: WorkspaceId): Permission[] {
   const m = membershipOf(userId as UserId, workspaceId)
   if (!m) return []
-  const list = roles[m.role].permissions
-  return revoked.has(userId) ? list.filter((p) => p !== "customers.edit" && p !== "customers.delete") : list
+  let list = roles[m.role].permissions
+  if (revoked.has(userId)) list = list.filter((p) => p !== "customers.edit" && p !== "customers.delete")
+  if (revokedView.has(userId)) list = list.filter((p) => !p.startsWith("customers."))
+  return list
 }
 
 /**
@@ -346,7 +410,8 @@ export const authApi = {
       if (c.attempts >= authServer.maxCodeAttempts) throw new MockRequestError("入力の上限に達しました（模擬）", "rate-limited")
       if (!c.methods.includes(method)) throw new MockRequestError("この方式は使えません（模擬）", "method-unavailable")
       if (method === "recovery-code") {
-        const normalized = code.toUpperCase()
+        // 大文字・小文字を区別しない設定では、サーバーで大文字にそろえて比べる（区別する設定では、そのまま比べる）
+        const normalized = authServer.recoveryCaseSensitive ? code : code.toUpperCase()
         const valid = c.userId === "u-sato" && demoRecoveryCodes.some((r) => r.replace("-", "") === normalized) && !usedRecoveryCodes.has(normalized)
         if (!valid) {
           c.attempts++
@@ -425,11 +490,8 @@ export const authApi = {
   ): Promise<{ kind: "verification-pending"; emailSent: boolean } | { kind: "authenticated"; userId: string }> {
     record({ kind: "sign-up", email })
     const mailFails = modeOf("sign-up") === "mail-failed"
-    return mockRequest({
-      latency: authServer.latency["sign-up"],
+    return send("sign-up", signal, {
       outcome: modeOf("sign-up") === "network" ? "fail" : modeOf("sign-up") === "unknown" ? "unknown" : "success",
-      signal,
-      ignoreAbort: authServer.ignoreAbort,
       failMessage: errorMessages.network,
       failCode: "network",
       run: () => {
@@ -521,6 +583,7 @@ export const authApi = {
     const id = `s-${++sessionSeq}`
     sessions.set(id, { userId })
     if (reauthenticated && authServer.revokeEditOnReauth) revoked.add(userId)
+    if (reauthenticated && authServer.revokeViewOnReauth) revokedView.add(userId)
     return id
   },
   /** セッションを切る（模擬：有効期限） */
@@ -551,26 +614,38 @@ export const authApi = {
     record({ kind: "save", userId: session?.userId })
     const expire = authServer.expireDuringSave
     authServer.expireDuringSave = false
-    return mockRequest({
-      latency: authServer.latency.save,
+    return send("save", signal, {
       outcome: expire ? "unknown" : modeOf("save") === "success" ? "success" : modeOf("save") === "unknown" ? "unknown" : "fail",
-      signal,
-      ignoreAbort: authServer.ignoreAbort,
       failMessage: errorMessages.network,
       failCode: "network",
       run: () => {
         const s = sessions.get(sessionId)
         if (!s) throw new MockRequestError("セッションの有効期限が切れています（模擬）", "session-expired")
+        if (!permissionsOf(s.userId, "hq").includes("customers.edit")) throw new MockRequestError("編集の権限がありません（模擬）", "forbidden")
         notes[s.userId] = text
         if (expire) sessions.delete(sessionId)
         return { text }
       },
     })
   },
-  /** 社内メモの取得（保存の結果を確かめる） */
-  loadNote({ userId }: { userId: string }, { signal }: Opts = {}) {
-    record({ kind: "load", userId })
-    return request("load", signal, () => notes[userId] ?? "")
+  /**
+   * 社内メモの取得（保存の結果を確かめる照会を兼ねる）。現在のセッションと、その利用者の現在の閲覧の権限で確かめる。
+   * 保存の結果の照会にも、現在の認可が必要（閲覧できない利用者には、保存されたかどうかも返さない）。
+   */
+  loadNote({ sessionId }: { sessionId: string }, { signal }: Opts = {}) {
+    const session = sessions.get(sessionId)
+    record({ kind: "load", userId: session?.userId })
+    return request("load", signal, () => {
+      const s = sessions.get(sessionId)
+      if (!s) throw new MockRequestError("セッションの有効期限が切れています（模擬）", "session-expired")
+      if (!permissionsOf(s.userId, "hq").includes("customers.view")) throw new MockRequestError("閲覧の権限がありません（模擬）", "forbidden")
+      return notes[s.userId] ?? ""
+    })
+  },
+  /** 顧客の書き出し（ログアウトとアカウントの切り替えの例。結果は開始したスコープにだけ反映する） */
+  exportCustomers({ workspaceId }: { workspaceId: WorkspaceId }, { signal }: Opts = {}) {
+    record({ kind: "export" })
+    return request("export", signal, () => ({ workspaceId }))
   },
 }
 

@@ -9,6 +9,8 @@
 // - 変更できない設定には、理由を返す（ポリシー、契約プラン、権限の順）。理由のない「変更できない」を返さない。
 // - 閲覧の権限がない設定は、検索の候補に含めない。
 // - 標準の設定へ戻す操作は、指定した範囲の項目だけを対象にし、範囲の外の値とロックされた値を変えない。
+// - 通知のチャネル（resolveDeliveryChannel）は、必須の通知、組織のポリシー、個人の設定、端末の許可を区別する。
+//   求めるのは配信の可否であり、既読かどうかとは別である。
 //
 // この部品が持たないもの（製品の責務）
 // - 値の保存と取得、ポリシーと権限の判定の正しさ（バックエンドが最終的に判断する）。
@@ -87,6 +89,46 @@ function resolveDependent<T>({
   inactiveReason: string
 }): DependentSetting<T> {
   return { stored: value, active: parentEnabled, inactiveReason: parentEnabled ? null : inactiveReason }
+}
+
+/** 端末（OS、ブラウザ）の通知の許可。unsupported：端末が通知に対応していない */
+type DevicePermission = "granted" | "denied" | "default" | "unsupported"
+
+type ResolvedDeliveryChannel = {
+  /** 設定の値（Switch に示す値）。必須の通知はオン、組織のポリシーで使えないチャネルはオフ */
+  setting: ResolvedSetting<boolean>
+  /** 製品がこのチャネルで配信を試み、かつ端末の許可がある（配信されることであり、既読になることではない） */
+  delivers: boolean
+  /** 配信されない原因。user：個人の設定でオフ、policy：組織のポリシー、permission：端末の許可がない */
+  blockedBy: "user" | "policy" | "permission" | null
+}
+
+/**
+ * 通知の 1 つのチャネル（種類 × 受け取り方）の、必須の通知、組織のポリシー、個人の設定、端末の許可を区別して求める。
+ * 必須の通知は組織のポリシーより優先する。個人の値は、ポリシーで使われていない間も残す（resolveSetting と同じ規則）。
+ * 端末の許可は、製品の設定とは別に持つ（許可がなくても個人の設定は変えない。配信されないことだけを示す）。
+ * ここで求めるのは配信の可否である。配信されたこと、既読になったことは、通知の状態（Notifications）が持つ。
+ */
+function resolveDeliveryChannel({
+  userEnabled,
+  required = null,
+  disabledByPolicy = null,
+  permission,
+}: {
+  /** 個人の設定（保存されている値） */
+  userEnabled: boolean
+  /** 必須の通知（無効にできない理由） */
+  required?: { reason: string } | null
+  /** 組織のポリシーで使えないチャネル（理由） */
+  disabledByPolicy?: { reason: string } | null
+  /** 端末の許可が必要なチャネル（プッシュ通知など）の場合だけ渡す */
+  permission?: DevicePermission
+}): ResolvedDeliveryChannel {
+  const orgPolicy = required ? { value: true, reason: required.reason } : disabledByPolicy ? { value: false, reason: disabledByPolicy.reason } : undefined
+  const setting = resolveSetting<boolean>({ productDefault: false, orgPolicy, userValue: userEnabled })
+  const permitted = permission === undefined || permission === "granted"
+  const blockedBy = !setting.value ? (setting.locked ? "policy" : "user") : permitted ? null : "permission"
+  return { setting, delivers: setting.value && permitted, blockedBy }
 }
 
 type SettingAccess = {
@@ -189,9 +231,11 @@ function applyReset<V extends Record<string, unknown>>(current: V, plan: ResetPl
   return next
 }
 
-export { applyReset, planReset, resolveDependent, resolveSetting, settingAccess, toSettingSearchGroups }
+export { applyReset, planReset, resolveDeliveryChannel, resolveDependent, resolveSetting, settingAccess, toSettingSearchGroups }
 export type {
   DependentSetting,
+  DevicePermission,
+  ResolvedDeliveryChannel,
   ResetPlan,
   ResolvedSetting,
   SettingAccess,

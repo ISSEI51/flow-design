@@ -14,11 +14,13 @@ import type { SettingSaveState } from "@/patterns/setting-save"
 // - SettingRow：設定の名前と補足を左、操作（Switch、Select、Button）を右に置く 1 行（Settings Row）。Field で名前と操作を関連付ける。
 //   行の幅が足りない場合は、操作を名前の下へ縦に移す（Container Query）。Switch など小さな操作は layout="inline" で横に保つ。
 //   設定の項目ごとに Card で囲まない。行の間は余白（16〜24px）で区切る。
-// - SettingSaveStatus：保存の単位の状態（保存中、保存しました、失敗、結果の不明、権限不足、未保存の変更）を文字で示す。
-//   常に置いた読み上げの領域（role="status"）の中身を変える。結果が不明な場合だけ「確認する」を置く。
+// - SettingSaveStatus：保存の単位の状態（保存中、保存しました、確定した失敗、バリデーションによる拒否、権限不足、競合、
+//   結果の不明、未保存の変更）を文字で示す。常に置いた読み上げの領域（role="status"）の中身を変える。
+//   結果が不明な場合と競合の場合だけ「確認する」を置く（サーバーの値を取得し直す。同じ保存を送り直さない）。
 //
 // この部品が守ること
-// - 状態を色だけで伝えない（文字とアイコン）。Destructive の色は、確定した失敗だけに使う（権限不足と結果の不明は warning）。
+// - 状態を色だけで伝えない（文字とアイコン）。Destructive の色は、処理されなかったことが確かな失敗（確定した失敗と
+//   バリデーションによる拒否）だけに使う（権限不足、競合、結果の不明は warning）。
 // - 状態が変わってもフォーカスを動かさない。保存の状態は名前と補足の下（狭い領域では操作の下）に置き、文が増えても操作の位置を動かさない。
 // - 読み上げの領域は display: none にしない（中身が空の間は高さ 0 になる）。
 //
@@ -100,7 +102,7 @@ function SettingSaveStatus({
   status: SettingSaveState
   /** 明示的な保存のフォームの未保存の変更（idle のときに示す） */
   dirty?: boolean
-  /** 結果が不明な保存を確かめる。渡さない場合は「確認する」を置かない */
+  /** 結果が不明か競合の保存を確かめる（サーバーの値を取得する）。渡さない場合は「確認する」を置かない */
   onVerify?: () => void
   verifyLabel?: string
   texts?: Partial<StatusTexts>
@@ -114,16 +116,21 @@ function SettingSaveStatus({
         ? t.verifying
         : s === "saved"
           ? t.saved
-          : s === "failed" || s === "unknown" || s === "forbidden"
-            ? status.message
-            : dirty
+          : s === "idle"
+            ? dirty
               ? t.dirty
               : ""
-  const Icon = s === "saving" || s === "verifying" ? LoaderCircle : s === "saved" ? Check : s === "failed" ? CircleAlert : s === "unknown" || s === "forbidden" ? TriangleAlert : null
+            : "message" in status
+              ? status.message
+              : ""
+  const definite = s === "failed" || s === "invalid"
+  const warning = s === "unknown" || s === "forbidden" || s === "conflict"
+  const Icon = s === "saving" || s === "verifying" ? LoaderCircle : s === "saved" ? Check : definite ? CircleAlert : warning ? TriangleAlert : null
   return (
     <div
       data-slot="setting-save-status"
       data-state={s === "idle" && dirty ? "dirty" : s}
+      data-reason={status.state === "unknown" ? status.reason : undefined}
       className={cn("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1", className)}
       {...props}
     >
@@ -132,13 +139,13 @@ function SettingSaveStatus({
         role="status"
         className={cn(
           "flex min-w-0 items-start gap-2 text-ui [word-break:auto-phrase]",
-          s === "failed" ? "text-destructive" : s === "unknown" || s === "forbidden" ? "text-warning" : "text-muted-foreground"
+          definite ? "text-destructive" : warning ? "text-warning" : "text-muted-foreground"
         )}
       >
         {text && Icon && <Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", (s === "saving" || s === "verifying") && "motion-safe:animate-spin")} />}
         {text && <span>{text}</span>}
       </p>
-      {s === "unknown" && onVerify && (
+      {(s === "unknown" || s === "conflict") && onVerify && (
         <Button variant="outline" size="sm" onClick={onVerify}>
           {verifyLabel}
         </Button>

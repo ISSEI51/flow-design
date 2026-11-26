@@ -8,8 +8,13 @@
 // この部品が守ること
 // - 利用を制限する理由を、認可、契約プラン、前提の設定の不足、処理中、接続、サービスの障害、権限の未確定に分けて返す
 //   （Restriction の kind）。すべてを「権限がありません」にしない。
-// - 権限の取得中、取得の失敗、再確認中、再確認の失敗では、操作を許可しない（未確定の権限を許可として扱わない）。
+// - 権限の取得中、取得の失敗、再確認中、再確認の失敗、最新の認可を確認していない間（verified が false）は、
+//   操作を許可しない（未確定の権限を許可として扱わない）。
+// - 表示可能性（画面の構造を表示するか）、閲覧可能性（保護された情報を表示するか）、操作可能性（操作を始めてよいか）、
+//   最新の認可を確認済みか（verified）を区別する。最新の認可を確認していない間に、保護された情報を表示し続けることを
+//   既定にしない（resolveContentAccess の sensitivity と whileUnverified）。
 // - すべてを機械的に非表示や無効にしない（業務との関係、存在を知らせてよいか、申請できるかで決める）。
+// - 権限がない利用者に、契約プランの案内で機能の存在や解決の方法を示さない（契約プランと権限の両方が不足する場合）。
 //
 // この部品が持たないもの（製品の責務）
 // - 実際の認可。UI の非表示と無効化は、バックエンドでの認可の代わりにならない。
@@ -31,16 +36,21 @@ type AccessGrants<P extends string = string, F extends string = string> = {
  * 権限の取得の状態。
  * - loading：初回の取得中（スコープの変更の直後を含む）。grants はない
  * - error：取得に失敗した。grants はない
- * - refreshing：権限の変更の知らせを受けて取得し直している。grants は前の値（表示にだけ使う）
- * - stale：取得し直しに失敗した。grants は前の値（表示にだけ使う）
+ * - refreshing：権限の変更の知らせを受けて取得し直している。grants は前の値（最新の認可ではない）
+ * - stale：取得し直しに失敗した。grants は前の値（最新の認可ではない）
  * - ready：最新の取得に成功した
+ *
+ * verified：最新の認可を確認済みか。ready で verified が false の場合は、grants を確認済みの最新の認可として扱わない
+ * （製品が、権限の変更の知らせを受けたが revision をまだ変えていない場合、サーバーで描画した権限をクライアントで
+ * 確かめていない場合など）。decideAccess と resolveContentAccess は refreshing と同じに扱う。
+ * 省略した ready は確認済みとして扱う（既存の呼び出しとの互換）。ready 以外は常に確認済みではない。
  */
 type AccessSnapshot<P extends string = string, F extends string = string, G extends AccessGrants<P, F> = AccessGrants<P, F>> =
-  | { status: "loading"; grants: null; error: null }
-  | { status: "error"; grants: null; error: unknown }
-  | { status: "refreshing"; grants: G; error: null }
-  | { status: "stale"; grants: G; error: unknown }
-  | { status: "ready"; grants: G; error: null }
+  | { status: "loading"; grants: null; error: null; verified?: false }
+  | { status: "error"; grants: null; error: unknown; verified?: false }
+  | { status: "refreshing"; grants: G; error: null; verified?: false }
+  | { status: "stale"; grants: G; error: unknown; verified?: false }
+  | { status: "ready"; grants: G; error: null; verified?: boolean }
 
 /** 利用を制限する理由。原因ごとに別の状態として持つ */
 type Restriction<P extends string = string, F extends string = string> =
@@ -54,8 +64,8 @@ type Restriction<P extends string = string, F extends string = string> =
   | { kind: "prerequisite"; prerequisite: string }
   /** サービスや機能の障害、メンテナンス */
   | { kind: "service" }
-  /** サービスに接続できない（オフライン） */
-  | { kind: "connectivity" }
+  /** サービスに接続できない（オフライン）、または接続を確認していない（unconfirmed） */
+  | { kind: "connectivity"; status?: "offline" | "unconfirmed" }
   /** 処理中（同じ対象の保存や処理の完了を待っている） */
   | { kind: "pending" }
 
@@ -73,8 +83,11 @@ type AccessRequirement<P extends string = string, F extends string = string> = {
   unmetPrerequisite?: string | null
   /** 操作に関係するサービスの状態 */
   service?: "available" | "unavailable"
-  /** サービスとの接続 */
-  connectivity?: "online" | "offline"
+  /**
+   * サービスとの接続。unconfirmed は、接続を確認していない（useConnectivity の unknown など）。
+   * unconfirmed は offline と同じく操作を許可しない（確認していない接続を、確認済みとして扱わない）。
+   */
+  connectivity?: "online" | "offline" | "unconfirmed"
   /** 処理中（保存の完了を待っているなど） */
   pending?: boolean
 }
@@ -83,6 +96,22 @@ type AccessRequirement<P extends string = string, F extends string = string> = {
 
 const allowed: AccessDecision<never, never> = { allowed: true, reason: null }
 const deny = <P extends string, F extends string>(reason: Restriction<P, F>): AccessDecision<P, F> => ({ allowed: false, reason })
+
+/** 最新の認可を確認済みか（ready で、verified が false ではない） */
+function isAccessVerified(snapshot: AccessSnapshot<string, string>): boolean {
+  return snapshot.status === "ready" && snapshot.verified !== false
+}
+
+/**
+ * 前の権限（grants）はあるが、最新の認可を確認していない状態の種類。確認済みの場合と grants がない場合は null。
+ * stale は確認に失敗した場合、refreshing は確認中の場合（ready で verified が false の場合を含む）。
+ */
+function unverifiedStatus(snapshot: AccessSnapshot<string, string>): "refreshing" | "stale" | null {
+  if (snapshot.status === "stale") return "stale"
+  if (snapshot.status === "refreshing") return "refreshing"
+  if (snapshot.status === "ready" && snapshot.verified === false) return "refreshing"
+  return null
+}
 
 /**
  * 操作を許可するかと、許可しない理由を決める。
@@ -100,11 +129,14 @@ function decideAccess<P extends string, F extends string>(snapshot: AccessSnapsh
     return deny({ kind: "entitlement", feature: requirement.feature, missing })
   }
   if (missing.length > 0) return deny({ kind: "authorization", missing })
-  // 前の権限では許可される場合も、再確認が終わるまで操作を許可しない。
-  if (snapshot.status === "refreshing" || snapshot.status === "stale") return deny({ kind: "unresolved", status: snapshot.status })
+  // 前の権限では許可される場合も、最新の認可を確認するまで操作を許可しない（verified が false の ready を含む）。
+  const unverified = unverifiedStatus(snapshot)
+  if (unverified) return deny({ kind: "unresolved", status: unverified })
   if (requirement.unmetPrerequisite) return deny({ kind: "prerequisite", prerequisite: requirement.unmetPrerequisite })
   if (requirement.service === "unavailable") return deny({ kind: "service" })
-  if (requirement.connectivity === "offline") return deny({ kind: "connectivity" })
+  if (requirement.connectivity === "offline" || requirement.connectivity === "unconfirmed") {
+    return deny({ kind: "connectivity", status: requirement.connectivity })
+  }
   if (requirement.pending) return deny({ kind: "pending" })
   return allowed
 }
@@ -137,7 +169,8 @@ type ActionAudience = {
  *   確定するまで表示しない（表示した後に消すと、存在を知らせることになり、表示も揺れるため）
  * - 再確認中・再確認の失敗：前の権限で許可されていた操作のため、無効にする（表示は保つ）
  * - 契約プラン：存在を知らせない機能は表示しない。権限がある利用者には、管理の機能も無効にして理由を示す（その利用者の業務に関係するため）。
- *   権限もない場合は、認可と同じに扱う
+ *   権限もない場合は、認可と同じに扱う。ただし申請できる場合も、管理の機能は表示しない（申請しても契約プランで利用できないため）。
+ *   理由の文（restrictionText）は、契約プランの案内を含めない
  * - 認可：存在を知らせない機能は表示しない。管理の機能は、申請できる場合を除いて表示しない。業務の操作は無効にする
  * - 前提の設定、障害、接続、処理中：権限はあるため、無効にして理由を示す
  */
@@ -164,8 +197,12 @@ function presentAction<P extends string, F extends string>(decision: AccessDecis
 
 /** 内容（レコード、設定の項目）の扱い */
 type ContentAccess<P extends string = string, F extends string = string> =
-  /** 権限が確定していない。内容を表示しない（取得中か失敗を示す） */
-  | { mode: "pending"; status: "loading" | "error" }
+  /**
+   * 内容を表示しない（権限を確認していることか、確認できなかったことを示す）。
+   * loading と error は前の権限がない場合。refreshing と stale は、前の権限では閲覧できるが、最新の認可を確認していない
+   * 保護された情報を、製品のポリシー（whileUnverified: "hide"）で表示しない場合
+   */
+  | { mode: "pending"; status: "loading" | "error" | "refreshing" | "stale" }
   /** 閲覧できない。存在を知らせてよい場合は理由を示し、そうでなければ領域ごと表示しない */
   | { mode: "hidden"; reason: Restriction<P, F> }
   /** 閲覧できるが変更できない。通常の文字で表示する（すべての Input を Disabled にしない） */
@@ -173,18 +210,54 @@ type ContentAccess<P extends string = string, F extends string = string> =
   | { mode: "edit"; reason: null }
 
 /**
+ * 内容の機密性。製品が内容ごとに指定する。
+ * - public-structure：画面の構造（見出し、項目名、ナビゲーション、操作の配置）や、閲覧の権限を持つ人に共通の公開された情報。
+ *   最新の認可を確認していない間も、前の権限で表示を決める（表示を揺らさない）
+ * - protected：閲覧の権限で保護された情報（レコードの内容、メンバーの一覧、設定の値）。最新の認可を確認していない間の扱いは
+ *   whileUnverified で決める
+ */
+type ContentSensitivity = "public-structure" | "protected"
+
+/**
+ * 最新の認可を確認していない間（refreshing、stale、verified が false の ready）に、保護された情報をどう扱うか（製品のポリシー）。
+ * - hide：表示しない（mode: "pending"。既定）。入力中の値など、画面の状態は製品が保持してよい
+ * - keep：前の権限で表示を続ける。権限を失っていた場合に、その間は失った権限で閲覧できた情報が表示される。製品が、
+ *   その情報を表示し続けてよいと判断した場合にだけ指定する（例：自分が入力中の内容、閲覧の範囲が変わりにくい情報）
+ * どちらでも、前の権限で閲覧できない内容は表示しない（hidden のまま。確認中に表示し始めない）。操作は decideAccess で判断し、
+ * 確認が終わるまで許可しない。
+ */
+type UnverifiedContentPolicy = "keep" | "hide"
+
+/**
  * 内容を編集できるか、閲覧専用か、表示しないかを決める。
- * 再確認中・再確認の失敗では、前の権限で表示を決める（編集中の入力を消さない）。保存などの操作は decideAccess で判断し、
- * 再確認が終わるまで許可しない。
+ * 最新の認可を確認していない間は、sensitivity と whileUnverified で決める。既定（sensitivity: "protected"、whileUnverified: "hide"）では、
+ * 前の権限で閲覧できる保護された情報を表示しない（pending）。保存などの操作は decideAccess で判断し、確認が終わるまで許可しない。
  */
 function resolveContentAccess<P extends string, F extends string>(
   snapshot: AccessSnapshot<P, F>,
-  { view = [], edit = [], feature }: { view?: readonly P[]; edit?: readonly P[]; feature?: F },
+  {
+    view = [],
+    edit = [],
+    feature,
+    sensitivity = "protected",
+    whileUnverified = "hide",
+  }: {
+    view?: readonly P[]
+    edit?: readonly P[]
+    feature?: F
+    /** 内容の機密性。既定は protected */
+    sensitivity?: ContentSensitivity
+    /** 最新の認可を確認していない間の、保護された情報の扱い。既定は hide。sensitivity が public-structure の場合は使わない */
+    whileUnverified?: UnverifiedContentPolicy
+  },
 ): ContentAccess<P, F> {
   if (snapshot.status === "loading" || snapshot.status === "error") return { mode: "pending", status: snapshot.status }
   const settled = { status: "ready", grants: snapshot.grants, error: null } as const
   const viewDecision = decideAccess(settled, { permissions: view, feature })
+  // 前の権限でも閲覧できない内容は、確認中も表示しない（存在を知らせてよいかは、製品が hidden の扱いで決める）。
   if (!viewDecision.allowed) return { mode: "hidden", reason: viewDecision.reason }
+  const unverified = unverifiedStatus(snapshot)
+  if (unverified && sensitivity === "protected" && whileUnverified === "hide") return { mode: "pending", status: unverified }
   const editDecision = decideAccess(settled, { permissions: [...view, ...edit], feature })
   if (!editDecision.allowed) return { mode: "read-only", reason: editDecision.reason }
   return { mode: "edit", reason: null }
@@ -228,6 +301,9 @@ function restrictionText<P extends string, F extends string>(
         stale: "最新の権限を確認できませんでした。確認できるまで、この操作は行えません",
       }[reason.status]
     case "entitlement":
+      // 権限もない利用者には、契約プランの案内（機能の名前、プランで解決できること）を示さない。
+      // 契約プランを変えても、権限がないため解決しない。機能の存在を、権限のない利用者に知らせない。
+      if (reason.missing.length > 0) return "この操作は利用できません"
       return `${labels.feature?.(reason.feature) ?? "この機能"}は、現在の契約プランでは利用できません`
     case "authorization": {
       const names = reason.missing.map((p) => labels.permission?.(p) ?? p)
@@ -238,13 +314,14 @@ function restrictionText<P extends string, F extends string>(
     case "service":
       return "障害のため、この機能は一時的に利用できません"
     case "connectivity":
+      if (reason.status === "unconfirmed") return "接続を確認しています。確認できるまで、この操作は行えません"
       return "オフラインのため利用できません。接続が戻ると利用できます"
     case "pending":
       return "処理が終わるまで操作できません"
   }
 }
 
-export { decideAccess, diffPermissions, pageAccessFromStatus, presentAction, resolveContentAccess, restrictionText }
+export { decideAccess, diffPermissions, isAccessVerified, pageAccessFromStatus, presentAction, resolveContentAccess, restrictionText, unverifiedStatus }
 export type {
   AccessDecision,
   AccessGrants,
@@ -253,7 +330,9 @@ export type {
   ActionAudience,
   ActionPresentation,
   ContentAccess,
+  ContentSensitivity,
   PageAccessKind,
   Restriction,
   RestrictionKind,
+  UnverifiedContentPolicy,
 }

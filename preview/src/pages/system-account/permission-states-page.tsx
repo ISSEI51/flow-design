@@ -26,6 +26,7 @@ import {
   PartialOverview,
   PermissionChangeControls,
   RestrictedOperations,
+  RevokedActions,
   RoleManagement,
   defaultConditions,
   usePermissionAccess,
@@ -36,6 +37,7 @@ const api = permissionServer.api
 const scopeOf = (i: number) => exampleScopes[i].scope
 const suzukiHq: PermissionScope = { userId: "u-suzuki", workspaceId: "hq" }
 const tanakaHq: PermissionScope = { userId: "u-tanaka", workspaceId: "hq" }
+const satoHq: PermissionScope = { userId: "u-sato", workspaceId: "hq" }
 
 function ScopeRadios({ name, value, onChange, options = [0, 1, 2, 3] }: { name: string; value: number; onChange: (i: number) => void; options?: number[] }) {
   return (
@@ -304,6 +306,7 @@ function LiveChangeDemo() {
 function EditingDemo() {
   const { access, revision } = usePermissionAccess({ scope: suzukiHq, api })
   const [policy, setPolicy] = useState<"keep" | "discard">("keep")
+  const [whileUnverified, setWhileUnverified] = useState<"hide" | "keep">("hide")
   const [slowSave, setSlowSave] = useState(false)
   useEffect(() => {
     permissionServer.latency.save = slowSave ? 3000 : 800
@@ -321,13 +324,66 @@ function EditingDemo() {
               破棄する
             </Radio>
           </DemoControls>
+          <DemoControls legend="権限を確認している間の顧客の内容（製品のポリシー）">
+            <Radio name="perm-edit-unverified" checked={whileUnverified === "hide"} onChange={() => setWhileUnverified("hide")}>
+              表示しない（既定）
+            </Radio>
+            <Radio name="perm-edit-unverified" checked={whileUnverified === "keep"} onChange={() => setWhileUnverified("keep")}>
+              前の権限で表示を続ける
+            </Radio>
+          </DemoControls>
           <DemoControls legend="保存（模擬のサーバー）">
             <Check checked={slowSave} onChange={setSlowSave}>
               保存に 3 秒かかる
             </Check>
           </DemoControls>
         </div>
-        <CustomerEditor scope={suzukiHq} api={api} access={access} revision={revision} recordId={editingCustomerId} draftPolicy={policy} />
+        <CustomerEditor
+          scope={suzukiHq}
+          api={api}
+          access={access}
+          revision={revision}
+          recordId={editingCustomerId}
+          draftPolicy={policy}
+          whileUnverified={whileUnverified}
+        />
+      </div>
+    </DemoFrame>
+  )
+}
+
+// ---------------------------------------------------------------- 権限を失った直後の操作
+function RevokedDemo() {
+  const { access } = usePermissionAccess({ scope: satoHq, api })
+  const [slow, setSlow] = useState(false)
+  useEffect(() => {
+    permissionServer.latency.access = slow ? 3000 : 400
+  }, [slow])
+  return (
+    <DemoFrame testId="perm-demo-revoked">
+      <div className="flex flex-col gap-8">
+        <div className="flex flex-col gap-4">
+          <fieldset className="flex min-w-0 flex-col gap-2 text-ui">
+            <legend className="mb-1 font-medium">管理者の操作（模擬。認可の検証を行わずに反映する）</legend>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" className="max-w-full" onClick={() => permissionServer.simulate.setRole("u-sato", "hq", "viewer")}>
+                佐藤 花子さんを閲覧者にする
+              </Button>
+              <Button variant="secondary" size="sm" className="max-w-full" onClick={() => permissionServer.simulate.setRole("u-sato", "hq", "admin")}>
+                佐藤 花子さんを管理者に戻す
+              </Button>
+            </div>
+          </fieldset>
+          <DemoControls legend="権限の取得（模擬のサーバー）">
+            <Check checked={slow} onChange={setSlow}>
+              権限の再確認に 3 秒かかる
+            </Check>
+          </DemoControls>
+        </div>
+        <div className="flex flex-col gap-4">
+          <p className="text-ui text-muted-foreground">佐藤 花子さん（本社営業部・管理者）の画面。確認の画面を開いた後や、準備の応答を待つ間に権限を変えて試す。</p>
+          <RevokedActions scope={satoHq} api={api} access={access} />
+        </div>
       </div>
     </DemoFrame>
   )
@@ -455,6 +511,8 @@ export function PermissionStatesPage() {
             ["閲覧できるが変更できない", "閲覧専用。通常の文字で表示する（すべての Input を Disabled にしない）"],
             ["権限を申請できる", "必要に応じて表示し、申請の操作を示す（実際に申請できる場合だけ）"],
             ["権限を確認できていない", "操作を許可しない。取得中と取得の失敗を、許可として扱わない"],
+            ["最新の権限を確認している（変更の知らせの後）", "操作を許可しない。画面の構造は保ち、保護された情報は既定では表示しない（表示を続けるかは製品が選ぶ）"],
+            ["権限も契約プランも不足している", "契約プランの案内を示さない（機能の存在と契約での解決を、権限のない利用者に知らせない）"],
           ]}
         />
       </Section>
@@ -595,9 +653,16 @@ export function PermissionStatesPage() {
 
       <Section
         title="編集中の権限変更"
-        lead="編集の権限を失ったら保存を停止し、閲覧の権限も失ったら内容を表示しない。保存中に変わった場合は実際の結果を示し、権限が戻った場合は最新の内容と権限を確かめてから再開する。"
+        lead="編集の権限を失ったら保存を停止し、閲覧の権限も失ったら内容を表示しない。保存中に変わった場合は実際の結果を示し、権限が戻った場合は最新の内容と権限を確かめてから再開する。最新の権限を確認している間に顧客の内容を表示し続けるかは、製品のポリシーで選ぶ（既定は表示しない）。"
       >
         <EditingDemo />
+      </Section>
+
+      <Section
+        title="権限を失った直後の操作"
+        lead="確認の画面、Toast、通知を開いた時点の認可で、新しい操作を始めない。始める直前と、応答を待った後に、最新の権限で判断し直す。変更の知らせを受けた後、画面が更新される前に押された場合も始めない。最終的な認可はサーバーが行う。"
+      >
+        <RevokedDemo />
       </Section>
 
       <Section
@@ -624,6 +689,8 @@ export function PermissionStatesPage() {
             "閲覧の権限がないデータを、クライアントへ送らない（隠すだけにしない）。",
             "URL、リクエスト、ワークスペースの ID を無条件に信頼しない。サーバーは、操作を受け付けた時点の権限で判断する。",
             "未確定の権限で操作を許可しない。権限の取得の失敗を、許可として扱わない。",
+            "最新の権限を確認していない間に、保護された情報を表示し続けることを既定にしない。",
+            "確認の画面、Toast、通知を作った時点の認可で、新しい操作を始めない。始める直前に、最新の権限で判断し直す。",
             "アカウント、ワークスペース、認可の範囲が変わったら、前のデータと権限を引き継がない。",
           ]}
         />

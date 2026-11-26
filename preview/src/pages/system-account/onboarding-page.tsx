@@ -146,7 +146,7 @@ const viewerOptions: ViewerOption[] = [
   { key: "sato-hq", userId: "u-sato", workspaceId: "hq", label: "佐藤 花子・本社営業部（利用中の組織）" },
 ]
 const visibilityLabels = { expanded: "展開", collapsed: "折りたたみ", hidden: "非表示" } as const
-const checklistProgressLabels = { "not-started": "未開始", "in-progress": "進行中", completed: "完了" } as const
+const checklistProgressLabels: Record<Checklist["progress"], string> = { none: "対象の作業なし", "not-started": "未開始", "in-progress": "進行中", completed: "完了" }
 
 function ChecklistDemo() {
   const [key, setKey] = useState("sato-new")
@@ -182,7 +182,7 @@ function ChecklistDemo() {
           </DemoControls>
           <p className="text-ui text-muted-foreground" data-testid="onb-checklist-state">
             {checklist
-              ? `進捗：${checklistProgressLabels[checklist.progress]}（${checklist.total} 件中 ${checklist.doneCount} 件）・表示：${checklist.presentation === "none" ? "Checklist を使わない（作業が 1 件以下）" : visibilityLabels[checklist.visibility]}・必須の作業：${checklist.requirementsMet ? "完了" : "未完了"}`
+              ? `進捗：${checklistProgressLabels[checklist.progress]}（${checklist.total} 件中 ${checklist.doneCount} 件）・表示：${checklist.presentation === "none" ? "Checklist を使わない（作業が 1 件以下）" : visibilityLabels[checklist.visibility]}・必須の作業：${checklist.requirementsMet ? "完了" : checklist.outstandingRequired.length > 0 ? "未完了" : "未完了（権限のある管理者が行う）"}`
               : "読み込み中"}
           </p>
         </div>

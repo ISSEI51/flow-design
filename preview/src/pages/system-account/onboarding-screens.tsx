@@ -14,10 +14,10 @@ import { ContextualHelp } from "@/patterns/contextual-help"
 import { DataRefreshIndicator, DataRegionError } from "@/patterns/data-states"
 import { GettingStartedChecklist } from "@/patterns/getting-started"
 import { deriveChecklist, pickGuidance, type Checklist, type ChecklistVisibility, type OnboardingTaskResults } from "@/patterns/onboarding"
-import { useScopeGuard } from "@/patterns/scope-guard"
+import { useScopeGuard, type ScopeSnapshot, type ScopeTicket } from "@/patterns/scope-guard"
 import { cn } from "@/lib/utils"
 
-import { MockUnknownError } from "../../data/system-account/mock"
+import { MockRequestError } from "../../data/system-account/mock"
 import { users, type OnboardingTaskId, type Permission, type UserId } from "../../data/system-account/model"
 import {
   helpIds,
@@ -36,7 +36,8 @@ import { DiscardAlert } from "../overlays/discard-alert"
 
 type Heading = "h1" | "h2" | "h3"
 
-const isUnknown = (e: unknown) => e instanceof MockUnknownError
+/** 処理されなかったことが確かな失敗（サーバーが拒否した）。それ以外の例外は、結果が不明として扱う */
+const isConfirmedFailure = (e: unknown): e is MockRequestError => e instanceof MockRequestError
 const can = (v: OnboardingViewer, p: Permission) => v.permissions.includes(p)
 
 /** 利用者、組織、権限の組み合わせ。変わったら、前の利用者の状態を表示しない */
@@ -75,12 +76,14 @@ export function useGettingStarted({
     fetcher: (_, { signal }) => api.getProgress(viewer.userId, viewer.workspaceId, { signal }),
   })
   const guard = useScopeGuard(scope)
-  const [override, setOverride] = useState<{ scope: string; visibility: ChecklistVisibility } | null>(null)
+  // 保存中の表示の状態。保存を始めたときのスコープと世代（Ticket）と組で持ち、現在のスコープと世代のものだけを使う
+  // （A → B → A の最初の A で始めた保存の値を、戻った A で使い続けない）
+  const [override, setOverride] = useState<{ ticket: ScopeTicket; visibility: ChecklistVisibility } | null>(null)
   const [notice, setNotice] = useState<{ scope: string; text: string } | null>(null)
 
   // 再取得中は、同じスコープの前の結果を使う（useBrowseData は別のスコープのデータを返さない）。
   const results = externalResults ?? (fetched.status === "error" ? undefined : fetched.data)
-  const visibility = override?.scope === scope ? override.visibility : progress.status === "error" ? undefined : progress.data?.visibility
+  const visibility = override && guard.isSameScope(override.ticket) ? override.visibility : progress.status === "error" ? undefined : progress.data?.visibility
   const checklist = useMemo(
     () =>
       results && visibility
@@ -97,20 +100,26 @@ export function useGettingStarted({
 
   const setVisibility = (next: ChecklistVisibility) => {
     const ticket = guard.begin("visibility")
-    setOverride({ scope, visibility: next })
+    // 前のスコープの描画の関数から呼ばれた場合（無効な Ticket）は、保存を始めない
+    if (!guard.isCurrent(ticket)) return
+    setOverride({ ticket, visibility: next })
     setNotice(null)
+    // この保存の値だけを外す（後から始めた保存の値は残す）
+    const clear = () => setOverride((o) => (o?.ticket === ticket ? null : o))
     // 保存の要求は中止しない（中止しても、サーバーで処理されることがあるため）。結果だけを、開始したスコープの最新の要求に反映する。
     api.saveVisibility(viewer.userId, viewer.workspaceId, next).then(
       (saved) => {
-        if (!guard.isLatest(ticket)) return
+        if (!guard.isLatest(ticket)) return clear()
+        guard.release(ticket)
         progress.setData((d) => ({ ...d, visibility: saved }), { scopeKey: scope })
-        setOverride(null)
+        clear()
       },
       (error) => {
-        if (!guard.isLatest(ticket)) return
-        setOverride(null)
-        if (isUnknown(error)) {
-          // 保存されたかがわからない。保存されている状態を取得し直して表示する。
+        if (!guard.isLatest(ticket)) return clear()
+        guard.release(ticket)
+        clear()
+        if (!isConfirmedFailure(error)) {
+          // 保存されたかがわからない（確定した失敗ではない）。保存されている状態を取得し直して表示する。
           progress.reload()
           setNotice({ scope, text: "表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。" })
         } else {
@@ -140,6 +149,8 @@ export type GettingStartedState = ReturnType<typeof useGettingStarted>
 /**
  * Getting Started Checklist の接続。非表示にした場合も、完了していない必須の作業は Alert で示し続ける
  * （非表示を要件の達成として扱わない）。再表示の入口は、製品の決まった場所（ヘッダーなど）に置く。
+ * 権限がなく Checklist に表示しない必須の作業が残っている場合は、ほかの利用者（管理者）が行うことを示す
+ * （権限で除いたことを、要件の達成として扱わない。示すかどうかと文は、製品のポリシーで決める）。
  */
 export function GettingStartedConnected({
   state,
@@ -183,6 +194,12 @@ export function GettingStartedConnected({
           </AlertAction>
         </Alert>
       )}
+      {checklist && checklist.outstandingRequiredWithoutPermission.length > 0 && (
+        <Alert variant="info" data-testid="onb-required-others-notice">
+          <AlertTitle>{checklist.outstandingRequiredWithoutPermission.map((i) => i.title).join("、")}が完了していません</AlertTitle>
+          <AlertDescription>試用期間の終了後も使い続けるために必要です。この作業は、権限のある組織の管理者が行います。</AlertDescription>
+        </Alert>
+      )}
       <p role="status" className="sr-only" data-testid="onb-checklist-notice">
         {state.notice}
       </p>
@@ -196,6 +213,8 @@ export function GettingStartedConnected({
 /**
  * 閉じた Contextual Help の ID。取得が終わるまでは案内を表示しない（閉じた案内が一瞬表示されることを防ぐ）。
  * 保存に失敗した場合も、この画面の間は表示しない（閉じたものを繰り返し出さない）。
+ * 閉じた状態のスコープはアカウント（userId）。組織を切り替えても、権限が変わっても、閉じた案内を再び表示しない。
+ * 組織や役割で内容が変わる案内は、別の ID にする（例：members-role-tasks）。
  */
 export function useDismissedHelp({ userId, api }: { userId: UserId; api: OnboardingApi }) {
   const data = useBrowseData({ query: userId, scopeKey: userId, fetcher: (_, { signal }) => api.getDismissedHelp(userId, { signal }) })
@@ -212,9 +231,12 @@ export function useDismissedHelp({ userId, api }: { userId: UserId; api: Onboard
       const ticket = guard.begin(id)
       api.dismissHelp(userId, id).then(
         (saved) => {
-          if (guard.isLatest(ticket)) data.setData(() => saved, { scopeKey: userId })
+          if (!guard.isLatest(ticket)) return
+          guard.release(ticket)
+          data.setData(() => saved, { scopeKey: userId })
         },
-        () => {}
+        // 保存に失敗しても、この画面の間は表示しない（local に残す）
+        () => guard.release(ticket)
       )
     },
   }
@@ -346,24 +368,30 @@ type RunOptions<T> = { success: (v: T) => string; onSuccess?: (v: T) => void; on
  * - 二重実行を防ぐ（同じ操作の実行中は受け付けない）。操作ごとに要求の ID を付け、模擬のサーバーは同じ ID を 1 回だけ処理する。
  * - 結果が不明な場合は、同じ操作をもう一度実行させない。「処理されたかを確認する」（confirm）で要求の ID を照会し、
  *   処理されていれば成功として扱い、処理されていなければもう一度実行できるようにする。最新の状態（作業結果）も取得し直す。
+ * - 確定した失敗（MockRequestError：サーバーが拒否した）だけを失敗とし、それ以外の例外（通信の例外など）は結果が不明として扱う
+ *   （サーバーで処理が終わっている可能性があるため。もう一度実行する前に確認する）。
  * - 結果は、開始したときのスコープの最新の要求にだけ反映する（useScopeGuard）。
+ * - 画面（Sheet など）を開いたときの Snapshot（capture）を渡した場合は、そのスコープと世代が現在と一致するときだけ始める
+ *   （古い画面からの操作を、切り替えた後のスコープで始めない）。
  */
 function useActions(scope: string, api: OnboardingApi) {
   const guard = useScopeGuard(scope)
-  const [pending, setPending] = useState<{ scope: string; keys: string[] }>({ scope, keys: [] })
+  // 実行中の処理の Ticket。現在のスコープと世代で始めたものだけを「実行中」として示す（isSameScope）。
+  // scopeKey の文字列だけで持つと、A → B → A の最初の A の処理が、戻った A で「実行中」のまま残る
+  // （その応答は最初の A の世代のため反映せず、記録を消す処理にも届かない）。
+  const [pending, setPending] = useState<readonly ScopeTicket[]>([])
   const [outcome, setOutcome] = useState<{ scope: string; value: Outcome }>({ scope, value: null })
   const [unresolved, setUnresolved] = useState<{ scope: string; ids: Record<string, string> }>({ scope, ids: {} })
-  const pendingKeys = pending.scope === scope ? pending.keys : []
+  const pendingKeys = pending.filter((t) => guard.isSameScope(t)).map((t) => t.key)
   const unresolvedIds = unresolved.scope === scope ? unresolved.ids : {}
-  const inflight = useRef(new Set<string>())
+  // 実行中の処理（キー → Ticket）。前のスコープ（前の世代）の Ticket は guard.isLatest が false になるため、
+  // 描画の中で記録を消さなくても、新しいスコープの操作を妨げない。
+  const inflight = useRef(new Map<string, ScopeTicket>())
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const options = useRef(new Map<string, RunOptions<any>>())
-  // スコープが変わったら、実行中の記録を捨てる（前のスコープの処理の終了を待たない）。
-  const scopeRef = useRef(scope)
-  if (scopeRef.current !== scope) {
-    scopeRef.current = scope
-    inflight.current = new Set()
-    options.current = new Map()
+  const running = (key: string) => {
+    const t = inflight.current.get(key)
+    return t !== undefined && guard.isLatest(t)
   }
   const setUnresolvedId = (key: string, id: string | null) =>
     setUnresolved((u) => {
@@ -373,54 +401,66 @@ function useActions(scope: string, api: OnboardingApi) {
       return { scope, ids }
     })
 
-  const execute = <T,>(key: string, request: () => Promise<T>, handle: (r: { ok: true; value: T } | { ok: false; error: unknown }) => Outcome) => {
-    if (inflight.current.has(key)) return
-    inflight.current.add(key)
-    const ticket = guard.begin(key)
-    setPending((p) => ({ scope, keys: [...(p.scope === scope ? p.keys : []), key] }))
+  const execute = <T,>(
+    key: string,
+    snapshot: ScopeSnapshot | undefined,
+    request: () => Promise<T>,
+    handle: (r: { ok: true; value: T } | { ok: false; error: unknown }) => Outcome
+  ) => {
+    if (running(key)) return false
+    const ticket = snapshot ? guard.beginIfCurrent(snapshot, key) : guard.begin(key)
+    // 前のスコープの描画の関数から呼ばれた場合（無効な Ticket）も、要求を送らない
+    if (!ticket || !guard.isCurrent(ticket)) return false
+    inflight.current.set(key, ticket)
+    // 現在のスコープの Ticket だけを残す（前のスコープの記録を増やし続けない）
+    setPending((p) => [...p.filter((t) => t.key !== key && guard.isSameScope(t)), ticket])
     setOutcome({ scope, value: null })
     const done = (r: { ok: true; value: T } | { ok: false; error: unknown }) => {
-      inflight.current.delete(key)
+      if (inflight.current.get(key) === ticket) inflight.current.delete(key)
+      // スコープにかかわらず、この処理の記録を外す（後から始めた処理の記録は消さない）
+      setPending((p) => (p.includes(ticket) ? p.filter((t) => t !== ticket) : p))
       if (!guard.isSameScope(ticket)) return
-      setPending((p) => ({ scope, keys: (p.scope === scope ? p.keys : []).filter((k) => k !== key) }))
       if (!guard.isLatest(ticket)) return
+      guard.release(ticket)
       setOutcome({ scope, value: handle(r) })
     }
     request().then(
       (value) => done({ ok: true, value }),
       (error) => done({ ok: false, error })
     )
+    return true
   }
 
   const run = <T,>(
     key: string,
     // 変更の処理には AbortSignal を渡さない（中止しても、サーバーで処理されることがあるため）。
     fn: (ctx: { requestId: string }) => Promise<T>,
-    opts: RunOptions<T>
+    opts: RunOptions<T>,
+    snapshot?: ScopeSnapshot
   ) => {
     // 結果が不明な操作は、処理されたかを確かめるまで、もう一度実行しない。
-    if (unresolvedIds[key] || inflight.current.has(key)) return
+    if (unresolvedIds[key] || running(key)) return
     const requestId = crypto.randomUUID()
-    options.current.set(key, opts)
-    execute(key, () => fn({ requestId }), (r) => {
+    const started = execute(key, snapshot, () => fn({ requestId }), (r) => {
       opts.onSettled?.()
       if (r.ok) {
         opts.onSuccess?.(r.value)
         return { key, kind: "success", text: opts.success(r.value) }
       }
-      if (isUnknown(r.error)) {
+      if (!isConfirmedFailure(r.error)) {
         setUnresolvedId(key, requestId)
         return { key, kind: "unknown", text: "結果を確認できませんでした。もう一度行う前に、処理されたかを確認してください。" }
       }
-      return { key, kind: "fail", text: r.error instanceof Error ? `${r.error.message}。もう一度お試しください。` : "処理できませんでした。" }
+      return { key, kind: "fail", text: `${r.error.message}。もう一度お試しください。` }
     })
+    if (started) options.current.set(key, opts)
   }
 
   const confirm = (key: string) => {
     const requestId = unresolvedIds[key]
     const opts = options.current.get(key)
     if (!requestId || !opts) return
-    execute(key, () => api.findRequest(requestId), (r) => {
+    execute(key, undefined, () => api.findRequest(requestId), (r) => {
       if (!r.ok) return { key, kind: "unknown", text: "処理されたかを確認できませんでした。もう一度確認してください。" }
       setUnresolvedId(key, null)
       opts.onSettled?.()
@@ -433,6 +473,10 @@ function useActions(scope: string, api: OnboardingApi) {
   return {
     run,
     confirm,
+    /** 画面（Sheet など）を開くときに呼び、run に渡す（イベントの処理と useEffect の中で呼ぶ） */
+    capture: guard.capture,
+    /** Snapshot が現在のスコープと世代のものか（描画の中でも呼べる） */
+    isCurrent: guard.isCurrent,
     pending: (key: string) => pendingKeys.includes(key),
     /** 結果が不明で、処理されたかをまだ確かめていない */
     unresolved: (key: string) => Boolean(unresolvedIds[key]),
@@ -559,7 +603,14 @@ export function OnboardingProduct({
   const Title = titleAs
 
   return (
-    <div ref={rootRef} className="@container/product flex min-w-0 flex-col gap-6" data-testid="onb-product" data-scope={scope}>
+    <div
+      ref={rootRef}
+      className="@container/product flex min-w-0 flex-col gap-6"
+      data-testid="onb-product"
+      data-scope={scope}
+      // 閉じた案内の取得が終わったか（検品で、取得の後に案内が表示されないことを確かめる）
+      data-help={help.dismissed ? "ready" : "loading"}
+    >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border pb-3">
         <p className="text-ui font-medium">{api.workspaceName(viewer.workspaceId)}</p>
         <nav aria-label="製品の画面（例）" className="flex min-w-0 flex-wrap gap-1">
@@ -669,24 +720,34 @@ function CustomersScreen({
   })
   const view = getBrowseViewState({ status: list.status === "idle" ? "loading" : list.status, count: list.data?.total ?? 0, filtered: term.trim() !== "" })
   const actions = useActions(scope, api)
-  const [sheet, setSheet] = useState(false)
+  // 登録の Sheet を開いたときのスコープと世代。利用者、組織、権限、データの領域が変わったら（A → B → A を含む）、Sheet を閉じた状態として扱い、
+  // 前のスコープで入力した内容を、新しいスコープで登録しない。
+  const [sheetSnapshot, setSheetSnapshot] = useState<ScopeSnapshot | null>(null)
+  const sheet = sheetSnapshot !== null && actions.isCurrent(sheetSnapshot)
   const [name, setName] = useState("")
   const [nameError, setNameError] = useState("")
   const [discard, setDiscard] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const titleId = useId()
   // Checklist の「顧客を登録」から移った場合は、登録の Sheet を開く（登録するまで完了にしない）。
+  const openSheet = () => {
+    setName("")
+    setNameError("")
+    setSheetSnapshot(actions.capture())
+  }
   useEffect(() => {
     if (!createRequested) return
-    if (canCreate) setSheet(true)
+    if (canCreate) openSheet()
     onCreateHandled()
+    // openSheet は描画ごとに作る関数。createRequested の変化だけで実行する
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createRequested, canCreate, onCreateHandled])
   const hasAny = (list.data?.all ?? 0) > 0
   const sampleAvailable = list.data?.sampleAvailable ?? false
   const sample = space === "sample"
 
   const closeSheet = () => {
-    setSheet(false)
+    setSheetSnapshot(null)
     setName("")
     setNameError("")
   }
@@ -698,15 +759,22 @@ function CustomersScreen({
       setNameError("会社名を入力してください")
       return
     }
-    actions.run("add", (ctx) => api.addCustomer(viewer.workspaceId, space, company, ctx), {
-      success: (c) => (sample ? `サンプルに「${c.company}」を追加しました。` : `「${c.company}」を登録しました。`),
-      onSuccess: closeSheet,
-      onSettled: () => {
-        list.reload()
-        // 実際のデータの変更だけが、利用開始の準備の結果に関係する（サンプルは関係しない）。
-        if (!sample) onChanged()
+    if (!sheetSnapshot) return
+    actions.run(
+      "add",
+      (ctx) => api.addCustomer(viewer.workspaceId, space, company, ctx),
+      {
+        success: (c) => (sample ? `サンプルに「${c.company}」を追加しました。` : `「${c.company}」を登録しました。`),
+        onSuccess: closeSheet,
+        onSettled: () => {
+          list.reload()
+          // 実際のデータの変更だけが、利用開始の準備の結果に関係する（サンプルは関係しない）。
+          if (!sample) onChanged()
+        },
       },
-    })
+      // Sheet を開いたときのスコープと世代が現在と一致しない場合は、登録を始めない
+      sheetSnapshot
+    )
   }
 
   return (
@@ -725,7 +793,7 @@ function CustomersScreen({
         }
         actions={
           canCreate && (
-            <Button onClick={() => setSheet(true)} data-testid="onb-create">
+            <Button onClick={openSheet} data-testid="onb-create">
               {sample ? "サンプルに追加" : "顧客を登録"}
             </Button>
           )
@@ -735,7 +803,7 @@ function CustomersScreen({
       {sample && (
         <Alert variant="info" data-testid="onb-sample-banner">
           <AlertTitle>サンプルデータを表示しています</AlertTitle>
-          <AlertDescription>実際の顧客とは別の領域に保存しています。サンプルの顧客は、件数の集計、利用開始の準備、メールの送信などの実際の処理の対象になりません。</AlertDescription>
+          <AlertDescription>実際の顧客とは別の領域に保存しています。サンプルの顧客は、件数の集計、請求、利用開始の準備、メールの送信などの実際の処理の対象になりません。</AlertDescription>
           <AlertAction>
             <Button variant="outline" size="sm" onClick={() => onSpaceChange("real")}>
               実際のデータに戻る
@@ -830,7 +898,7 @@ function CustomersScreen({
       {/* 登録の Sheet を開いている間は、登録の結果を Sheet の中で示す（読み上げを重ねない） */}
       <ActionResult outcome={actions.outcome} keys={sheet ? ["start-sample", "delete-sample"] : ["add", "start-sample", "delete-sample"]} testId="onb-customers-result" />
 
-      <Sheet open={sheet} onOpenChange={(o) => (o ? setSheet(true) : closeSheet())} unsavedChanges={name.trim() !== ""} onDiscardRequest={() => setDiscard(true)}>
+      <Sheet open={sheet} onOpenChange={(o) => (o ? openSheet() : closeSheet())} unsavedChanges={name.trim() !== ""} onDiscardRequest={() => setDiscard(true)}>
         <SheetContent size="sm" data-testid="onb-create-sheet">
           <form
             className="contents"
@@ -975,10 +1043,19 @@ function MembersScreen({ viewer, api, onChanged, help, Title }: { viewer: Onboar
 
 function BillingScreen({ viewer, api, onChanged, Title }: { viewer: OnboardingViewer; api: OnboardingApi; onChanged: () => void; Title: Heading }) {
   const actions = useActions(viewerScope(viewer), api)
+  // 請求の対象の件数（模擬）。サーバーが実際の領域だけを数える（サンプルの顧客を含めない）。
+  const usage = useBrowseData({
+    query: viewer.workspaceId,
+    scopeKey: viewerScope(viewer),
+    fetcher: (workspaceId, { signal }) => api.getUsage(workspaceId, { signal }),
+  })
   return (
     <section className="flex min-w-0 flex-col gap-4" data-testid="onb-billing">
       <ScreenHeader Title={Title} title="支払い" />
       <p className="max-w-[40rem] text-ui text-muted-foreground">試用期間の終了後も使い続けるには、支払い方法の登録が必要です。この例では、カードの番号を入力せずに模擬の支払い方法を登録します。</p>
+      <p className="text-ui text-muted-foreground tabular-nums" data-testid="onb-billing-usage">
+        {usage.isCurrent && usage.data ? `請求の対象の顧客（模擬）：${usage.data.customers} 件。サンプルの顧客は含めません。` : "\u00a0"}
+      </p>
       <div>
         <ActionButton
           actions={actions}
@@ -1085,7 +1162,8 @@ export function CreateOrganizationSetup({
   const [loadToken, setLoadToken] = useState(0)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const moved = useRef(false)
-  const inflight = useRef(false)
+  // 実行中の作成と確認の Ticket。利用者が変わった後（前の世代）の Ticket は guard.isLatest が false になり、新しい作成を妨げない。
+  const inflight = useRef<ScopeTicket | null>(null)
   const onActiveRef = useRef(onActiveChange)
   onActiveRef.current = onActiveChange
 
@@ -1095,6 +1173,7 @@ export function CreateOrganizationSetup({
     api.loadDraft(userId, { signal: ticket.signal }).then(
       (saved) => {
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         if (saved) {
           setDraft(saved)
           setResumed(true)
@@ -1103,7 +1182,9 @@ export function CreateOrganizationSetup({
         setPhase("ready")
       },
       () => {
-        if (guard.isLatest(ticket)) setPhase("load-error")
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        setPhase("load-error")
       }
     )
   }, [userId, loadToken, api, guard])
@@ -1126,10 +1207,14 @@ export function CreateOrganizationSetup({
     setSaveNote("")
     api.saveDraft(userId, next).then(
       () => {
-        if (guard.isLatest(ticket)) onActiveRef.current?.({ hasDraft: !!next })
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        onActiveRef.current?.({ hasDraft: !!next })
       },
       () => {
-        if (guard.isLatest(ticket)) setSaveNote("途中の入力を保存できませんでした。この画面を閉じると、入力した内容は失われます。")
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        setSaveNote("途中の入力を保存できませんでした。この画面を閉じると、入力した内容は失われます。")
       }
     )
   }
@@ -1178,36 +1263,49 @@ export function CreateOrganizationSetup({
     persist(null)
   }
 
+  const busyNow = () => inflight.current !== null && guard.isLatest(inflight.current)
   const create = () => {
-    if (inflight.current) return
-    inflight.current = true
+    if (busyNow()) return
     const ticket = guard.begin("create")
+    inflight.current = ticket
     setSubmit("saving")
     const { values } = draft
     // 分岐で不要になった手順（自分だけで使う場合の招待）と、スキップした手順の入力は送信しない。
     const invites = values.usage === "team" && !draft.skipped.includes("invite") ? parseInvites(values.invites) : []
     api.createWorkspace(userId, { requestId: draft.requestId, name: values.name.trim(), invites, start: values.start }).then(
       (r) => {
-        inflight.current = false
-        if (guard.isLatest(ticket)) onComplete({ workspaceId: r.workspaceId, start: values.start })
+        if (inflight.current === ticket) inflight.current = null
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        onComplete({ workspaceId: r.workspaceId, start: values.start })
       },
       (error) => {
-        inflight.current = false
-        if (guard.isLatest(ticket)) setSubmit(isUnknown(error) ? "unknown" : "failed")
+        if (inflight.current === ticket) inflight.current = null
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        // 確定した失敗だけを、もう一度作成できる状態にする。それ以外（通信の例外など）は、作成されたかを確かめる。
+        setSubmit(isConfirmedFailure(error) ? "failed" : "unknown")
       }
     )
   }
   const confirm = () => {
+    if (busyNow()) return
     const ticket = guard.begin("create")
+    inflight.current = ticket
     setSubmit("checking")
     api.findCreated(userId, draft.requestId, { signal: ticket.signal }).then(
       (r) => {
+        if (inflight.current === ticket) inflight.current = null
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         if (r) onComplete({ workspaceId: r.workspaceId, start: draft.values.start })
         else setSubmit("not-created")
       },
       () => {
-        if (guard.isLatest(ticket)) setSubmit("unknown")
+        if (inflight.current === ticket) inflight.current = null
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        setSubmit("unknown")
       }
     )
   }

@@ -2,7 +2,7 @@
 
 利用者が最初の価値を体験するまでの時間を短くする。機能の説明より、実際の利用を優先し、必要な知識は使うときに示す。
 
-状態：初期実装（レビュー前。v0.1 確定ではない） ・ 実装：[`registry/patterns/onboarding.ts`](../../../registry/patterns/onboarding.ts)、[`registry/patterns/getting-started.tsx`](../../../registry/patterns/getting-started.tsx)、[`registry/patterns/contextual-help.tsx`](../../../registry/patterns/contextual-help.tsx) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`registry/patterns/onboarding.ts`](../../../registry/patterns/onboarding.ts)、[`registry/patterns/getting-started.tsx`](../../../registry/patterns/getting-started.tsx)、[`registry/patterns/contextual-help.tsx`](../../../registry/patterns/contextual-help.tsx) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 
@@ -32,6 +32,7 @@
 | 初回の画面の決定 | `resolveFirstScreen`（`onboarding.ts`） | `product`、`accept-invitation`、`create-workspace`、`required-setup` のどれかを返す。歓迎の画面は返さない |
 | 組織の作成 | プレビューの `CreateOrganizationSetup`（既存の `Field`、`Input`、`RadioGroup`、`Textarea`、`Button`、`Alert`） | 最小限の手順の画面。Multi-step Workflow の統合後に置き換える（「統合時に確認する事項」） |
 | Getting Started Checklist | `deriveChecklist`（`onboarding.ts`）、`GettingStartedChecklist`（`getting-started.tsx`） | 完了した件数、進捗、作業の画面への移動、折りたたみ、非表示、すべて完了の表示 |
+| 必須の条件 | `deriveRequirements`（`onboarding.ts`。`deriveChecklist` の `requirements` と同じ値） | Checklist の表示の対象とは別に、すべての作業の定義と作業結果から、必須の作業の完了を判定する |
 | 初回利用の Empty State | 既存の `Empty`、`getBrowseViewState`（Data Browsing） | 何ができるか、最初に何をするか、どこから操作するか |
 | Contextual Help | `ContextualHelp`（`contextual-help.tsx`）、`pickGuidance`（`onboarding.ts`） | 画面の流れの中の短い案内。閉じられる |
 | 初期設定の状態 | `getSetupStatus`（`onboarding.ts`） | 未開始、進行中、中断、スキップ、完了 |
@@ -43,6 +44,20 @@
 | 利用開始の前に必要な設定 | 組織名（組織を作成する場合）、組織のポリシーで必須の多要素認証 | 初回の画面。これがないと利用を始められないものだけ |
 | 利用開始の後でも可能な設定 | 表示言語、タイムゾーン、通知、プロフィールの写真 | 求めない。合理的な初期値（組織の標準、端末の設定）で始め、設定の画面で変える |
 | 特定の機能を使うときに必要な設定 | 支払い方法（試用期間の終了時）、外部のカレンダーとの連携 | その機能を使う画面。Checklist に作業として示してもよい |
+
+#### 必須の設定が完了していない場合の操作の制限
+
+- 利用開始の前に必要な設定（組織のポリシーで必須の多要素認証など）が完了していない間は、`resolveFirstScreen` が `required-setup` を返し、製品の利用画面へ移らない。製品のルーターは、認証の直後だけでなく、製品の画面へ移るたび（直接の URL、ブックマーク、通知からの移動を含む）に判定し直す。バックエンドも要求ごとに要件を確かめる（画面の制御は認可ではない）。
+- 利用を続けるための必須の作業（試用期間の終了後の支払い方法など）は、`deriveChecklist` の `requirementsMet`（または `deriveRequirements` の `met`）で判定する。Checklist の表示（非表示、`presentation: "none"`）、権限による作業の除外で、要件を達成したとして扱わない。どの時点でどの機能を制限するか（試用期間の終了日など）は製品が決める。プレビューは試用期間の終了を模擬しないため、機能の制限そのものは示していない（要件が未達成であることの表示だけを示す）。
+
+#### 任意の設定をスキップした場合の初期値
+
+| 設定 | スキップした場合、または変更しなかった場合 | 後から行う場所 |
+| --- | --- | --- |
+| 使い方（チーム、自分だけ） | チームで使う（招待の手順を含む） | 組織の作成の 1 番目の手順 |
+| メンバーの招待 | 招待しない（入力していた宛先も送信しない）。Checklist の「メンバーを招待する」は未完了のまま残る | メンバーの画面 |
+| 顧客データの始め方 | 空の状態から始める（サンプルデータを作らない。サンプルは利用者が明示的に選んだ場合だけ） | 初回利用の Empty State の「サンプルデータで試す」 |
+| 表示言語、タイムゾーン | 組織の標準（招待されたメンバー）、または端末の設定 | 個人の設定（[settings.md](settings.md)） |
 
 - 利用目的、業種、組織の規模などの質問は、実際の体験を変える場合だけ求める（例：「チームで使う／自分だけで使う」で招待の手順を省く）。
 - マーケティングの目的の質問（製品を知ったきっかけなど）を、必須の設定に混ぜない。尋ねる場合は任意にし、利用開始の後に回す。
@@ -88,9 +103,14 @@
 - 完了した件数（「5 件中 2 件完了」）と進捗（Progress）を示す。状態は「完了」の文字と、支援技術向けの「完了：」「未完了：」でも伝え、色とアイコンだけで伝えない。
 - 折りたたみ（件数と進捗だけ）、非表示、再表示ができる。再表示の入口は、非表示にしても場所の変わらない所（画面の上部、ヘルプのメニューなど）に置く。
 - 非表示は表示の状態であり、完了ではない。非表示にしても `progress` と `requirementsMet` は変わらない。必須の作業（支払い方法）が残っている場合は、非表示にした後も Alert で示し続ける。
+- 必須の条件（`requirementsMet`、`requirements`）は、Checklist の表示の対象（`items`）とは別の値で、すべての作業の定義と実際の作業結果から判定する。権限のない作業を Checklist から除いても、必須の条件は達成にならない。例：メンバーには「支払い方法を登録する」を表示しないが、支払い方法が未登録の間は `requirementsMet` が `false` のまま。この利用者が行える残りの必須の作業は `outstandingRequired`、権限がなく行えないものは `outstandingRequiredWithoutPermission` に入る。プレビューでは、権限のない利用者に「この作業は、権限のある組織の管理者が行います」と示す（操作のボタンは置かない）。権限のない利用者に示すかどうかと文は、製品のポリシー（情報の機密性）で決める。示さない場合も、要件の判定は変えない。
+- 対象の作業が 0 件の場合（権限と利用者の種類ですべて除いた）は、`progress: "none"`、`presentation: "none"` とし、「完了しました」と示さない（下の「独自に判断した事項」）。
+- 役割や権限が変わったら、同じ作業結果から対象の作業を導き直す（`permissions` を変えて `deriveChecklist` を呼ぶ）。完了の件数は、表示する作業の中だけで数える。プレビューでは `scopeKey` に権限を含めるため、権限が変わると取得をやり直し、前の権限の Checklist と完了の読み上げを引き継がない。
+- 完了は記憶せず、渡された作業結果から毎回導く。完了した作業が後から未完了になった場合（顧客をすべて削除した、支払い方法を削除した）、結果から ID が消えれば未完了に戻り、すべて完了の表示（`completed`）から、保存されている表示の状態（展開、折りたたみ）に戻る。すべて完了の後に閉じていた（`hidden`）場合は非表示のままだが、必須の作業が残れば Alert で示す。作業結果が変わったときに取得し直すこと（通知、画面の再表示など）は製品の責務である。
 - すべて完了した場合は、「利用開始の準備が完了しました」と短く示し、「閉じる」で非表示にできる。閉じた後は表示しない。
 - 権限のない作業は表示しない（作業の `permission`）。招待されたメンバー（`audience: "invited"`）には、組織で完了済みの作業を表示しない（設定済みの項目を再設定させない）。
 - アカウント単位の作業（プロフィールの写真）と組織単位の作業（顧客、取り込み、招待、支払い）を分ける。組織単位の作業は、誰が行っても組織で完了になる。アカウント単位の作業は、ほかの組織でも完了のまま示す。
+- 同じ利用者が別の組織へ切り替えた場合は、アカウント単位の結果を引き継ぎ、組織単位の結果と表示の状態（利用者 × 組織で保存）は切り替えた先の組織のものを使う。切り替えの間に、前の組織の Checklist を表示しない（`scopeKey` に組織を含める）。
 - 作業が完了したら、Checklist の中に常に置いた読み上げの領域で「「最初の顧客を登録する」が完了しました。5 件中 2 件が完了しています」と伝える。最初の表示と、利用者・組織の切り替え（`scopeKey`）では読み上げない。
 
 ### 初回利用の Empty State
@@ -113,6 +133,7 @@
 - その操作を使える状態のときだけ表示する（例：顧客の検索の案内は、顧客が 1 件以上あり、検索語が空のときだけ）。
 - 閉じるボタン（「この案内を閉じる」）を置く。閉じたときにフォーカスが案内の中にあった場合は、関係する入力欄に移す（`focusAfterDismiss`）。
 - 閉じた状態はアカウントごとに保存し、再読み込みや別の端末でも表示しない（製品の責務）。保存した状態の取得が終わるまでは表示しない（閉じた案内が一瞬表示されない）。保存に失敗しても、その画面の間は表示しない。
+- 閉じた状態のスコープはアカウント（利用者）とする。同じ利用者が別の組織へ切り替えても、役割が変わっても、閉じた案内を再び表示しない。別の利用者には引き継がない。理由：案内は製品の操作の説明であり、組織のデータに依存しないため。組織や役割で内容が変わる案内は、別の ID にする（例：メンバーの画面の `members-role-tasks`）。組織ごとに表示し直す必要がある案内を作る場合は、製品が利用者 × 組織で保存する。
 - 重要な情報を一度だけの案内に置かない。項目の説明（`FieldDescription`）やヘルプのページにも置く。
 
 ### サンプルデータ
@@ -122,6 +143,8 @@
 - 実際のデータと別の領域に保存する。サンプルへの登録は、実際の顧客の件数、利用開始の準備（Checklist の完了）、集計、請求、通知、外部への送信の対象にしない。
 - 「実際のデータに戻る」と「サンプルを削除」を、サンプルの表示の上部に常に置く。実際のデータの表示からも「サンプルを表示」で戻れる。
 - 見た目のラベルだけでは分離にならない。保存の領域、検索、集計、通知、外部への送信、請求の処理で分けることは製品の責務である。プレビューでは、模擬のサーバーの中でサンプルの領域（`sample`）を分け、サンプルからの操作が実際のデータに伝わらないことを検品している。
+- 型でも分ける。プレビューの模擬のサーバーでは、実際の顧客（`RealCustomer`、`sample: false`）とサンプルの顧客（`SampleCustomer`、`sample: true`）を別の型にし、実際の領域、請求の対象の件数（`getUsage`、実際の領域だけを数える）、外部への送信の記録は `RealCustomer` だけを受け付ける。サンプルの顧客を実際の顧客として渡すと、型の検査で失敗する（単体の検品の `@ts-expect-error`）。製品では、サンプルの記録を請求、外部への送信（メール、Webhook、連携先）、正式な集計に渡す関数の引数の型と、バックエンドの処理の対象の条件の両方で除く。
+- サンプルを表示している間も、ほかの作業の画面（取り込み、メンバー、支払い、プロフィール）は実際のデータを対象にする。作業の画面から顧客の画面へ戻ると、実際のデータを表示する。プレビューの支払いの画面は、請求の対象の顧客の件数（サンプルを含めない）を示す。
 
 ### 結果が不明な操作
 
@@ -129,6 +152,7 @@
 
 - 実行中は同じ操作を受け付けない（ボタンは Loading）。
 - 操作ごとに要求の ID を付ける。バックエンドは同じ ID の要求を 1 回だけ処理する（冪等）。プレビューの模擬のサーバーも、要求の ID で 1 回だけ処理する。
+- 確定した失敗（サーバーが拒否した。プレビューの `MockRequestError`）だけを失敗として、もう一度実行できる状態にする。それ以外の例外（通信の例外、予期しない例外）は、サーバーで処理が終わっている可能性があるため、結果が不明として扱う（Forms & Workflows の `FormSaveError` と同じ既定値）。組織の作成と表示の状態の保存も同じ規則にした。
 - 結果が不明な場合（応答が届かなかった）は、成功として表示しない。同じ操作のボタンの代わりに「処理されたかを確認する」を置き、もう一度実行させない（Enter で送信した場合も確認になる）。あわせて作業結果を取得し直し、実際の状態を表示する。
 - 確認では要求の ID を照会する。処理されていれば成功として扱い（「処理されていました。3 件を取り込みました。」）、処理されていなければ、もう一度実行できるようにする（「処理されていませんでした。もう一度行えます。」）。確認にも失敗した場合は、確認の操作を残す。
 - 顧客の登録の Sheet では、結果が不明な場合も Sheet を閉じず、Sheet の中で結果と確認の操作を示す。
@@ -174,6 +198,10 @@
 - アカウント単位の進捗（`results.account`）と組織単位の進捗（`results.workspace`）を分けて渡す。`deriveChecklist` は、作業の `scope` と異なる範囲の結果を完了として数えない。
 - 表示の状態、スキップ、途中の入力、閉じた案内は製品が保存する（サーバーなど）。ページの再読み込みや別の端末で、初期状態に戻さない。Registry の部品は状態を保存しない（LocalStorage、URL、Cookie に依存しない）。
 - 利用者、組織、権限が変わったら、前の利用者の Checklist を 1 回の描画でも表示しない。プレビューでは、取得に `useBrowseData`（`scopeKey` に利用者、組織、権限）、表示の状態の保存に `useScopeGuard` を使い、A → B → A と切り替えても、最後の A の結果だけを反映する。
+- 古い画面からの操作の開始を防ぐ。顧客の登録の Sheet は、開いたときに `capture()` した Snapshot を持ち、`isCurrent(snapshot)` が `false` になったら（利用者、組織、権限、データの領域の変更。A → B → A を含む）閉じた状態として扱う。登録は `beginIfCurrent(snapshot, "add")` で始め、Snapshot が現在と一致しない場合は始めない（前のスコープで入力した会社名を、新しいスコープで登録しない）。
+- 処理の終わりに `release(ticket)` を呼び、処理のキーの記録を消す（最後の `isLatest` の照合の後）。実行中の判定は、描画の中で記録を消さず、記録した Ticket の `isLatest` で行う（前の世代の Ticket は最新ではないため、新しいスコープの操作を妨げない。破棄された描画や StrictMode の 2 回目の描画で、表示中のスコープの実行中の記録を消さない）。
+- 画面に示す実行中の状態（ボタンの Loading）と、保存中の表示の状態（Checklist の表示・非表示）も、処理を始めたときの Ticket と組で持ち、`isSameScope(ticket)` が `true` のものだけを使う。処理が終わったら、スコープにかかわらず、その Ticket の記録を外す。v0.1 の最終調整までは `scopeKey` の文字列と組で持っていたため、A → B → A の最初の A で始めた操作が、戻った A で「実行中」のまま残った（その応答は最初の A の世代のため反映せず、記録を消す処理にも届かなかった）。
+- 前のスコープの描画の関数から呼ばれた場合（`useScopeGuard` の無効な Ticket）は、要求を送らない（プレビューの `useActions` と表示の状態の保存）。
 - 保存の要求（表示の状態、閉じた案内、途中の入力、作成）は、画面を閉じても中止しない（中止しても、サーバーで処理されることがあるため）。結果は、開始したときのスコープの最新の要求にだけ反映し、アンマウントの後は反映しない。
 - 表示の状態の保存に失敗した場合は、保存されている状態に戻して知らせる。結果が不明な場合は、保存されている状態を取得し直す。
 - 作業の変更の操作の結果が不明な場合は、操作ごとに「確認が必要」（要求の ID）を持ち、確認が終わるまで同じ操作を実行しない（プレビューの `useActions`）。確認が必要な状態も、開始したときのスコープの中だけで持つ。
@@ -187,7 +215,10 @@
 | `progress` | `not-started`、`in-progress`、`completed` |
 | `visibility` | 利用者が選んだ表示（`expanded`、`collapsed`、`hidden`） |
 | `presentation` | 実際に表示する形（`none`、`hidden`、`completed`、`expanded`、`collapsed`）。上の図の表の順に判定する |
-| `requirementsMet`、`outstandingRequired` | この利用者が行える必須の作業が完了したか、完了していない必須の作業。非表示にしても変わらない |
+| `progress` の `none` | 対象の作業が 0 件。完了（`completed`）ではない |
+| `requirementsMet`、`requirements` | 必須の作業がすべて完了したか（`requirements.met`）と、完了していない必須の作業の一覧（`requirements.outstanding`、権限のないものを含む）。権限、利用者の種類、表示の状態で変わらない。`deriveRequirements` で Checklist なしでも求められる |
+| `outstandingRequired` | 完了していない必須の作業のうち、この利用者が行えるもの（Checklist に表示する作業） |
+| `outstandingRequiredWithoutPermission` | 完了していない必須の作業のうち、この利用者に権限がないもの（`id`、`title`、`scope`、`permission`）。Checklist に表示しない |
 
 ## 評価指標
 
@@ -233,7 +264,8 @@
 - 実際の作業結果の取得（顧客の件数、取り込み、招待、支払い方法、プロフィールの写真）と、`results.account` と `results.workspace` への振り分け。サンプルを含めない。
 - 利用開始の前に必要な設定の判定（組織のポリシー、規約など）と、`resolveFirstScreen` の結果に応じたルーティング。
 - 最初の価値体験の定義と計測（評価指標）。
-- 必須の作業が残る場合の機能の制限（試用期間の終了時など）と、その案内。
+- 必須の作業が残る場合の機能の制限（試用期間の終了時など）と、その案内。判定には `requirementsMet` を使い、Checklist の表示や権限による除外で判断しない。権限のない利用者に未完了の必須の作業を示すかどうか（情報の機密性）。
+- 作業結果が変わったとき（ほかの利用者の操作、削除）の再取得。
 - サンプルデータの保存の領域の分離、削除、処理の対象からの除外。
 - 招待の検証、権限の検査、変更の要求の冪等性（要求の ID）と、要求の ID による処理の照会（バックエンド）。
 
@@ -269,6 +301,8 @@ const checklist = deriveChecklist({
   actionLabel={(item) => taskActionLabels[item.id]}
 />
 {checklist.presentation === "hidden" && checklist.outstandingRequired.length > 0 && <RequiredTaskAlert items={checklist.outstandingRequired} />}
+// 利用の制限は requirementsMet で判定する（Checklist の表示や、権限による作業の除外で判断しない）
+const restricted = trialEnded && !checklist.requirementsMet
 
 // Contextual Help：閉じた状態は製品がアカウントごとに保存する
 <ContextualHelp dismissed={dismissed.includes("customers-search")} onDismiss={() => dismissHelp("customers-search")} focusAfterDismiss={searchRef}>
@@ -291,7 +325,7 @@ const checklist = deriveChecklist({
 
 | 区分 | 内容 | 理由 |
 | --- | --- | --- |
-| Registry のコード | `onboarding.ts`：`resolveFirstScreen`、`deriveChecklist`、`getSetupStatus`、`pickGuidance`<br>`getting-started.tsx`：`GettingStartedChecklist`<br>`contextual-help.tsx`：`ContextualHelp` | 非表示と完了の混同、別の範囲の結果の混入、権限のない作業の表示、完了の読み上げ、閉じた後のフォーカスは、製品ごとに書き直すと誤りやすい。判定は純粋な関数にし、ブラウザを使わずに検品できるようにした |
+| Registry のコード | `onboarding.ts`：`resolveFirstScreen`、`deriveChecklist`、`deriveRequirements`、`getSetupStatus`、`pickGuidance`<br>`getting-started.tsx`：`GettingStartedChecklist`<br>`contextual-help.tsx`：`ContextualHelp` | 非表示と完了の混同、別の範囲の結果の混入、権限のない作業の表示、完了の読み上げ、閉じた後のフォーカスは、製品ごとに書き直すと誤りやすい。判定は純粋な関数にし、ブラウザを使わずに検品できるようにした |
 | 組み合わせの例（プレビュー） | 組織の作成、Checklist の接続、初回利用の Empty State、Contextual Help の例、サンプルデータの領域、招待されたメンバーの利用開始、小さな製品の画面 | 画面の構成と作業の内容は製品で変わる。組織の作成は Multi-step Workflow（未統合）の領域のため、Registry に置かない |
 | 設計の資料だけ | Setup Layout（既存の `MinimalShell` と `Field` で足りる）、Product Tour の判断基準、初期設定の 3 種類、評価指標、利用者ごとの違い | 部品にする必要がないか、画面ごとの判断である。汎用の Product Tour の仕組みは対象外 |
 | 製品の責務 | 状態の永続化、実際の作業結果の取得、サンプルの分離、招待の検証、権限の検査、計測 | 製品の基盤に依存する |
@@ -302,7 +336,10 @@ const checklist = deriveChecklist({
 | --- | --- |
 | 作業が 1 件以下の場合は Checklist を使わない（`minTasks` の既定 2） | 指示書の「複数の初期作業が必要な場合のみ」を判定にした。閲覧者や、組織の作業が完了した組織に招待されたメンバーは、Checklist を表示しない |
 | 招待されたメンバーには、組織で完了済みの作業を表示しない（完了として数えることもしない） | 他人が行った作業を自分の進捗として示すと、件数と意味がずれる。組織で完了していない作業は、権限があれば表示する |
-| `requirementsMet` は、この利用者が行える必須の作業だけで判定する | 権限のないメンバーに、支払い方法の未登録を作業として示さない。組織全体の要件の判定は製品が行う |
+| `requirementsMet` は、すべての作業の定義から判定する（権限のない作業を含む）。権限のない作業は `outstandingRequiredWithoutPermission` に分ける | 初期実装では「この利用者が行える必須の作業だけ」で判定していたため、メンバーでは支払い方法が未登録でも `true` になり、製品が利用の制限の解除に使うと誤る。Checklist に表示しない（作業として求めない）ことと、要件を達成したことは別である |
+| 対象の作業が 0 件の場合と、すべて完了した場合を区別する（0 件は `progress: "none"`、`presentation: "none"`。`minTasks` が 0 でも Checklist を表示しない） | 0 件の利用者は作業をしていないため、「利用開始の準備が完了しました」と示すと事実と異なる。`progress` を `completed` にすると、製品が Onboarding の完了の判断や計測に使った場合に、作業をしていない利用者を完了として数える。初期実装では 0 件を `not-started` にしており、`minTasks: 0` では空の Checklist を表示していた。必須の条件は、0 件でも `requirementsMet` で別に判定する |
+| Contextual Help の閉じた状態は、アカウント単位で持つ | 案内は製品の操作の説明で、組織のデータに依存しない。組織を切り替えるたびに同じ案内を表示すると、繰り返しが負担になる |
+| 確定した失敗だけを失敗とし、ほかの例外は結果が不明として扱う | 通信の例外を確定した失敗にすると、サーバーで処理が終わっていても新しい要求の ID で再実行でき、取り込みや招待が重複する。Forms & Workflows の `FormSaveError` の既定値と合わせた |
 | 支払い方法を必須の作業にした（プレビューの `requiredTaskIds`） | model.ts の作業に必須の区別がないため。「特定の機能を使うときに必要な設定」の例として、非表示と要件の区別を示す |
 | すべて完了した後は、完了を短く示して閉じられるようにし、自動では消さない | 完了したことを確かめられるようにする。閉じた後は表示しない |
 | `getSetupStatus` は、途中の入力を保存していない間は「未開始」とする | 保存していない入力は、再読み込みや別の端末で再開できないため |
@@ -316,13 +353,23 @@ const checklist = deriveChecklist({
 
 ## 統合時に確認する事項
 
-- **Multi-step Workflow（Forms & Workflows）**：組織の作成（`CreateOrganizationSetup`）は、既存の Components で作った最小限の手順の画面である。統合後は、手順の表示（Stepper）、必須と任意、スキップ、戻る、途中の入力の保持と再開、分岐で不要になった手順の扱いを、Multi-step Workflow の部品に置き換える。置き換えの後も、手順の見出しへのフォーカス、作成の要求の ID、結果の不明の確認を保つ。
-- **Create & Edit、Unsaved Changes（Forms & Workflows）**：顧客の登録の Sheet は、既存の `Sheet` の `unsavedChanges` と、プレビューの `DiscardAlert` を使っている。統合後は Forms & Workflows の部品に置き換える。
-- **Import & Export（Forms & Workflows）**：「既存の顧客を取り込む」の画面は、模擬の CSV を取り込むだけの例である。統合後は Import & Export の画面へ移るようにし、完了は取り込みの結果（成功した件数）で判定する。
+Forms & Workflows は未統合（`origin/feat/forms-and-workflows-patterns`、確認した版は 40df108）。次の内容は、そのブランチのファイルを読んで確かめた（このブランチには持ち込んでいない。再実装していない）。
+
+- **Multi-step Workflow（`registry/patterns/step-flow.ts` の `useStepFlow`、`stepper.tsx` の `Stepper`）**：組織の作成（`CreateOrganizationSetup`）を次のように置き換える。
+  - 手順の並びと移動：`setupStepsOf` と `SetupDraft.step`、`moveTo`、`back` を、`useStepFlow({ steps, isComplete, initial })` の `next`、`back`、`goTo` に置き換える。`steps` には現在の条件で必要な手順だけを渡す（「自分だけで使う」では招待の手順を除く）。表示中の手順が不要になった場合の移動先は、現在の `steps.includes(draft.step) ? draft.step : "data"` を廃止し、`useStepFlow` の規則（同じ位置、手前に未完了があればそこへ）に合わせる。
+  - 位置の表示：`onb-setup-position` の「手順 2 / 3・任意」を `Stepper` に置き換える。`StepDefinition` は `id` と `label` だけで、必須と任意の区別を持たないため、「任意」の示し方（`label` に含めるか、手順の見出しの近くに残すか）を統合時に決める。
+  - スキップ：`useStepFlow` にはスキップの概念がない。任意の手順のスキップ（`SetupDraft.skipped`、入力がないまま「次へ」を押した場合もスキップ）は、Onboarding 側で `isComplete` を `true` とし、スキップした手順の値を送信から除く形で残す。スキップした作業が Checklist に残ることは変えない。
+  - 入力の値と送信の対象：`values` と `parseInvites` による招待の除外を、`useFormState` と項目の `active`（分岐で不要になった項目を送信と検証から除き、値は残す）に置き換える。
+  - 途中の入力と再開：`SetupDraft` の `step` を `flow.snapshot()`（`current`、`reached`、`completed`）に置き換え、再開は `flow.restore(snapshot)` と `form.reset(values)` で行う。再開の時点の権限と選択肢で、到達していた手順を確かめ直す（`form.reveal`）。
+  - 最終の送信：`create` を `handleSubmit` に置き換え、確定した失敗は `FormSaveError`（`failed`）で返す。作成の要求の ID（`SetupDraft.requestId`）、結果が不明な場合の「作成されたかを確認する」（`findCreated`）、二重の実行の防止は保つ。
+  - 置き換えの後も保つもの：手順の見出しへのフォーカス（`useStepFlow` の `headingRef`）、作成の後に成功の画面を挟まないこと、アンマウントと利用者の変更の後の応答を反映しないこと（`useScopeGuard`）。
+- **Create & Edit、Unsaved Changes（`unsaved-changes.tsx` の `useUnsavedChanges`、`DiscardChangesAlert`）**：顧客の登録の Sheet の `unsavedChanges` とプレビューの `DiscardAlert` を置き換える。組織の作成の「画面を閉じる」も、手順の中の保存していない入力がある場合は Unsaved Changes で確かめる（現在は手順の境界でだけ保存し、閉じると現在の手順の入力は失われる）。
+- **Import & Export（`import-review.tsx` の `ImportResultSummary`、`importOutcome`）**：「既存の顧客を取り込む」の画面は、模擬の CSV を取り込むだけの例である。統合後は Import & Export の画面へ移るようにし、完了は取り込みの結果（成功した件数が 1 件以上）で判定する。
+- **即時の保存（`save-modes.ts` の `useInstantSave`）**：Checklist の表示の状態の保存（`useGettingStarted` の `setVisibility`）は、即時の保存と同じ性質（保存中、失敗、結果が不明、確認）を持つ。統合後に `useInstantSave` と比べ、共通化に価値がある場合だけ置き換える。世代の管理（`useScopeGuard`）と責務が重なる箇所も、統合後に比べる。
 - **Authentication**：`resolveFirstScreen` の前後の遷移（認証の後の戻り先、多要素認証の設定の画面）を [authentication.md](authentication.md) と合わせる。
 - **Settings**：初期値（表示言語、タイムゾーン、組織の標準）と、利用開始の後に変える画面を [settings.md](settings.md) と合わせる。
-- **Permission States**：権限のない作業を表示しない判定（作業の `permission`）と、権限が変わった直後の描画を [permission-states.md](permission-states.md) と合わせる。
-- **統合の検証画面**：`OnboardingViewer`（利用者、組織、ロールの権限、`joinedBy`）を現在の利用者から作り、`useGettingStarted` の `results` に製品のデータから作った作業結果を渡す。
+- **Permission States**：権限のない作業を表示しない判定（作業の `permission`）と、権限が変わった直後の描画を [permission-states.md](permission-states.md) と合わせる。権限の再確認中（`refreshing`、`stale`）に Checklist の対象を前の権限で導かないこと。
+- **統合の検証画面**：`OnboardingViewer`（利用者、組織、ロールの権限、`joinedBy`）を現在の利用者から作り、`useGettingStarted` の `results` に製品のデータから作った作業結果を渡す。必須の条件による利用の制限を示す場合は `requirementsMet` を使う。
 
 ## 検品
 
@@ -338,16 +385,37 @@ const checklist = deriveChecklist({
 | 分岐 | 「自分だけで使う」で手順が 2 つになり、入力していた招待を送信しない |
 | 失敗と結果の不明、二重実行 | 失敗で入力が残る。結果の不明では作成のボタンを止め、確認の後に利用画面へ移る。二重に押しても組織は 1 つ |
 | 作業の操作の結果の不明 | 取り込み（処理されていた）、招待（処理されていなかった、Enter でも確認）、顧客の登録（Sheet の中で確認）で、同じ操作のボタンを置かず、確認の後のデータが重複しない。模擬のサーバーの要求の ID による冪等性と照会（単体の検品） |
-| アンマウント後の古い応答 | AbortSignal に従わない模擬の API でも、閉じた後の応答で利用画面へ移らない |
+| アンマウント後の古い応答 | AbortSignal に従わない模擬の API でも、閉じた後の応答で利用画面へ移らない（作成の応答を保留し、閉じた後に解放する） |
 | Checklist の実際の完了判定 | 作業のボタン、Sheet を開いて閉じる、支払いの画面への移動では完了にならない。実際の登録で完了し、読み上げる |
 | 折りたたみ・非表示・再表示 | `aria-expanded`、フォーカスの移動、模擬のサーバーへの保存、再マウントの後も同じ表示 |
 | 非表示と完了の区別 | 非表示でも進捗は進行中、必須の作業は未完了で、Alert が残る（単体の検品でも確認） |
+| 必須の条件と権限による除外 | メンバーと閲覧者は支払いの作業を表示しないが、必須の条件は未達成で、管理者が行うことを示す（操作のボタンなし）。管理者が登録すると、メンバーも達成になる。単体の検品で、権限、利用者の種類、表示の状態の全組み合わせで `requirementsMet` が作業結果だけで決まること、`deriveRequirements` が同じ値を返すこと |
+| 対象の作業が 0 件 | `progress: "none"`、`presentation: "none"`（`minTasks` が 0、1、2 のどれでも）。必須の条件は未達成のまま。招待されたメンバーで残りが組織で完了済みの場合も完了にしない（単体の検品） |
+| 役割の変更、完了した作業が未完了に戻る | 同じ作業結果で管理者 → メンバー → 管理者と変えると、対象の作業と件数を導き直す。支払い方法の結果が消えると未完了に戻り、すべて完了の表示から保存されている表示に戻る（単体の検品） |
+| 同じ利用者の別の組織 | アカウント単位の結果を引き継ぎ、組織単位の結果と表示の状態は組織ごと（模擬のサーバーの単体の検品）。閉じた案内は組織を切り替えても表示しない |
+| 古い画面からの操作の開始 | 登録の Sheet を開いたまま利用者を A → B → A と切り替えると、Sheet は閉じ、戻った A で開き直さない。登録の要求を送らない。開き直すと入力は空 |
+| A → B → A の間の実行中の操作 | 「サンプルを削除」の要求を保留したまま利用者を A → B → A と切り替えると、戻った A でボタンが Loading のまま残らない。最初の A の応答を解放しても Loading にならず、結果の文を示さない。もう一度操作でき、2 回目の要求で削除される |
 | 全件完了後の表示 | すべて完了の表示と読み上げ、閉じた後に再マウントしても表示しない |
 | 表示の状態の保存の失敗 | 保存されている状態に戻し、知らせる |
 | 初回 Empty State、検索結果 0件との区別 | 何ができるか・どこから操作するかの文、Page Header と重複しない、検索結果 0件と取得失敗の表示 |
-| Contextual Help の非表示 | 閉じる、フォーカスが検索欄に移る、再マウントの後も表示しない、Empty State と同時に表示しない |
+| Contextual Help の非表示 | 閉じる、フォーカスが検索欄に移る、再マウントの後も（閉じた案内の取得が終わった後も）表示しない、Empty State と同時に表示しない |
+| Contextual Help の表示の状態のスコープ | 閉じた案内は、同じ利用者の別の組織でも表示しない。同じ組織の別の利用者には表示する |
 | サンプルデータと実データの分離 | 識別の表示、サンプルへの登録が実際の顧客・作業結果・外部への送信に伝わらない、戻る、削除 |
+| サンプルデータと請求 | 支払いの画面の請求の対象の件数にサンプルを含めない（実際の顧客を登録すると 1 件）。作業の画面から戻ると実際のデータを表示する。単体の検品で `getUsage` と、`SampleCustomer` を `RealCustomer` として扱えないこと（`@ts-expect-error`） |
+| 任意の設定のスキップの初期値 | スキップして作成した組織に、招待とサンプルデータがない（画面と単体の検品） |
 | 管理者と招待ユーザーの違い、権限のない初期作業の除外 | 管理者 5 件、メンバー 3 件（招待と支払いを除く）、閲覧者は Checklist なし・登録の操作なし。招待されたメンバーは組織の設定を求められない |
 | アカウントと組織の進捗の分離 | 組織の作業は他のメンバーの完了で除かれ、アカウントの作業は利用者ごと。別の組織の状態は変わらない（単体の検品でも、別の範囲の結果を数えないことを確認） |
-| 利用者の A → B → A の切り替え | 遅い応答と AbortSignal を無視する模擬の API で、B の取得中に A を表示せず、最後の A だけを表示する。切り替えでは読み上げない |
+| 利用者の A → B → A の切り替え | B の要求を保留し（`holdWhen`）、AbortSignal を無視する模擬の API で、B の取得中に A を表示しない。A に戻った後で B の応答を解放し（`releaseHeld`）、最後の A だけを表示する。切り替えでは読み上げない |
 | 共通 | h1 が 1 つ、操作の名前、横スクロールなし（320px を含む）、比較の見本が inert、Reduced Motion、Desktop・Mobile・WebKit |
+
+### 時間に依存しない検品
+
+模擬のサーバーの `holdWhen`（条件に合う要求を保留する）と `releaseHeld`（解放し、応答の処理と画面の更新を待つ）で、応答の順序を検品の側で決める。固定の待ち時間（`waitForTimeout`）は使わない。初期実装にあった 4 か所（アンマウントの後の応答、作業のボタンで完了にならないこと、A → B → A、再マウントの後の案内）は、それぞれ保留と解放、変更の要求が送られていないことの確認、閉じた案内の取得の完了（`onb-product` の `data-help="ready"`）を待つ方式に変えた。`open()` は模擬のサーバーの応答の時間を 40ms にしているが、期待値は応答の時間に依存しない。
+
+### 実施した検品と既知の制約
+
+- 実施：`npm run typecheck`（Onboarding の担当のファイルに型の誤りがないこと。ほかの領域のファイルの誤りは、並行して編集中のため対象外）。`PREVIEW_TEST_PORT=5206 npx playwright test -c preview/playwright.config.ts system-account-onboarding --workers=2`（desktop、mobile、webkit）。
+- 実機（iOS Safari、Android）とスクリーンリーダー（VoiceOver、NVDA）による確認は行っていない。
+- 試用期間の終了による機能の制限は模擬していない（要件の判定と表示だけを示す）。
+- 作業結果が後から未完了に戻る場合は、単体の検品（`deriveChecklist`）だけで確かめた。模擬のサーバーには、支払い方法や顧客を削除する操作を置いていない。
+

@@ -10,15 +10,18 @@ import { MinimalShell } from "@/patterns/app-shell"
 import { AuthFormError, AuthStatus, type AuthFormErrorValue } from "@/patterns/auth-feedback"
 import {
   checkEmailFormat,
+  checkPasswordInput,
+  checkVerificationCode,
   evaluatePasswordRequirements,
   resolveReturnTo,
   type AuthErrorKind,
   type PasswordRequirement,
   type ReturnToResult,
+  type VerificationCodeFormat,
 } from "@/patterns/auth-flow"
 import { AuthLayout, type AuthLayoutVariant } from "@/patterns/auth-layout"
 import { PasswordInput } from "@/patterns/password-input"
-import { useScopeGuard } from "@/patterns/scope-guard"
+import { useScopeGuard, type ScopeTicket } from "@/patterns/scope-guard"
 import { VerificationCodeInput } from "@/patterns/verification-code-input"
 
 import {
@@ -101,16 +104,21 @@ export function signInMethodsFor(org: AuthOrg, product: "password" | "magic-link
 
 const providerLabels = { google: "Google でログイン", microsoft: "Microsoft でログイン" } as const
 
-// 非同期の操作。二重の実行を防ぎ（ref で同期的に判定する）、アンマウントの後の結果を反映しない（useScopeGuard）。
-function useAuthAction() {
-  const guard = useScopeGuard("auth-screen")
-  const running = useRef(false)
-  const [pending, setPending] = useState<string | null>(null)
+// 非同期の操作（プレビューの例）。
+// - 同じキー（"verify"、"send" など）の操作は、同じスコープで 1 つだけ実行する（ref の Ticket で同期的に判定し、二重に送信しない）。
+// - scope は、結果を反映してよい範囲（多要素認証では、確認の ID、方式、送信したコードの世代）。scope が変わったら、前の scope の
+//   操作の結果を反映しない（方式の変更の後の古い応答、再送信の後の古い確認の結果）。前の scope の実行中の操作は、新しい scope の操作を止めない。
+// - アンマウントの後の結果を反映しない。AbortSignal に従わない応答も反映しない（useScopeGuard の isLatest で照合する）。
+function useAuthAction(scope = "auth-screen") {
+  const guard = useScopeGuard(scope)
+  const running = useRef(new Map<string, ScopeTicket>())
+  const [tickets, setTickets] = useState<readonly ScopeTicket[]>([])
   const run = <T,>(key: string, task: (signal: AbortSignal) => Promise<T>, done: (value: T) => void, fail: (error: unknown) => void) => {
-    if (running.current) return false
-    running.current = true
-    setPending(key)
+    const current = running.current.get(key)
+    if (current && guard.isSameScope(current)) return false
     const ticket = guard.begin(key)
+    running.current.set(key, ticket)
+    setTickets((list) => [...list.filter((t) => t.key !== key), ticket])
     task(ticket.signal)
       .then(
         (value) => {
@@ -121,13 +129,17 @@ function useAuthAction() {
         }
       )
       .finally(() => {
-        if (!guard.isSameScope(ticket)) return
-        running.current = false
-        setPending(null)
+        if (running.current.get(key) === ticket) running.current.delete(key)
+        setTickets((list) => list.filter((t) => t !== ticket))
+        // 最後の照合（isLatest）の後に、キーの記録を消す
+        guard.release(ticket)
       })
     return true
   }
-  return { run, pending }
+  // 現在のスコープで実行中の操作だけを「実行中」として示す（前のスコープの操作で Loading を続けない）
+  const isPending = (key: string) => tickets.some((t) => t.key === key && guard.isSameScope(t))
+  const pending = tickets.find((t) => guard.isSameScope(t))?.key ?? null
+  return { run, pending, isPending }
 }
 
 let errorSeq = 0
@@ -424,7 +436,8 @@ export function SignInScreen({
     if (pending) return
     // 必要な入力が揃うまで、要求を送らない。ログインのパスワードには、新規の設定の規則を適用しない。
     const emailMessage = emailErrorOf(email)
-    const passwordMessage = password === "" ? "パスワードを入力してください" : null
+    // purpose: "current"：空かどうかだけを確かめる（強度の規則を適用しない。値を変換しない）
+    const passwordMessage = checkPasswordInput(password, { purpose: "current" }).ok ? null : "パスワードを入力してください"
     setEmailError(emailMessage)
     setPasswordError(passwordMessage)
     if (emailMessage || passwordMessage) {
@@ -582,7 +595,12 @@ export function SignInScreen({
                     setEmailLocked(false)
                     setEmail("")
                     setPassword("")
-                    requestAnimationFrame(() => emailRef.current?.focus())
+                    // このボタンは消えるため、フォーカスをメールアドレスへ移す。次の描画までに利用者が別の入力欄へ
+                    // 移った場合は、そのフォーカスを奪わない（フォーカスが body に落ちている場合だけ移す）
+                    requestAnimationFrame(() => {
+                      const active = document.activeElement
+                      if (!active || active === document.body) emailRef.current?.focus()
+                    })
                   }}
                   data-testid={`${testId}-switch-account`}
                 >
@@ -645,10 +663,22 @@ export function SignInScreen({
 }
 
 // ---------------------------------------------------------------- 多要素認証
-const methodCopy: Record<MfaMethod, { label: string; choose: string; format: "numeric" | "alphanumeric" }> = {
-  totp: { label: "確認コード", choose: "認証アプリのコードを使う", format: "numeric" },
-  sms: { label: "確認コード", choose: "SMS でコードを受け取る", format: "numeric" },
-  "recovery-code": { label: "リカバリーコード", choose: "リカバリーコードを使う", format: "alphanumeric" },
+const methodCopy: Record<MfaMethod, { label: string; choose: string }> = {
+  totp: { label: "確認コード", choose: "認証アプリのコードを使う" },
+  sms: { label: "確認コード", choose: "SMS でコードを受け取る" },
+  "recovery-code": { label: "リカバリーコード", choose: "リカバリーコードを使う" },
+}
+
+/**
+ * 確認コードの扱い（製品の指定の例）。Registry の既定は区切りを取り除くだけで、全角の変換と大文字への変換をしない。
+ * この製品では、確認コードとリカバリーコードの全角の英数字を半角と同じ意味として扱う。リカバリーコードの大文字・小文字を
+ * 区別するかは、製品の設定（recoveryCaseSensitive）で決める。
+ */
+type CodePolicy = { format: VerificationCodeFormat; length: number; uppercase: boolean; fullWidth: "convert" | "keep"; unit: string }
+
+function codePolicyFor(method: MfaMethod, challenge: MfaChallenge, recoveryCaseSensitive: boolean): CodePolicy {
+  if (method === "recovery-code") return { format: "alphanumeric", length: 8, uppercase: !recoveryCaseSensitive, fullWidth: "convert", unit: "文字（ハイフンを除く）" }
+  return { format: "numeric", length: challenge.codeLength, uppercase: false, fullWidth: "convert", unit: "桁" }
 }
 
 function methodDescription(method: MfaMethod, challenge: MfaChallenge) {
@@ -664,11 +694,28 @@ export type MfaScreenProps = AuthScreenLayout & {
   onAuthenticated: (userId: string) => void
   /** ログインの最初に戻る */
   onCancel: () => void
+  /** コードの文字数が揃ったら自動で送信する（製品の指定。IME の変換中は送信しない。二重に送信しない） */
+  autoSubmit?: boolean
+  /** リカバリーコードの大文字・小文字を区別する（製品の指定）。区別する場合は大文字にそろえない */
+  recoveryCaseSensitive?: boolean
   testId?: string
 }
 
-export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = "minimal", headingLevel = 1, aside = defaultAside, testId = "auth-mfa" }: MfaScreenProps) {
+export function MfaScreen({
+  api,
+  challenge,
+  onAuthenticated,
+  onCancel,
+  autoSubmit = false,
+  recoveryCaseSensitive = false,
+  layout = "minimal",
+  headingLevel = 1,
+  aside = defaultAside,
+  testId = "auth-mfa",
+}: MfaScreenProps) {
   const [method, setMethod] = useState<MfaMethod>(challenge.method)
+  // 送信したコードの世代。再送信のたびに進め、前のコードの確認の結果を反映しない
+  const [issue, setIssue] = useState(0)
   const [code, setCode] = useState("")
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [error, setError] = useState<AuthFormErrorValue | null>(null)
@@ -678,13 +725,15 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
   const [status, setStatus] = useState("")
   const [resendAt, setResendAt] = useState<number | null>(null)
   const resendLeft = useCountdown(resendAt)
-  const { run, pending } = useAuthAction()
+  // 結果を反映する範囲：確認の ID、方式、送信したコードの世代。方式を変えた後、再送信した後の古い応答を反映しない
+  const { run, isPending } = useAuthAction(`${challenge.id}:${method}:${issue}`)
   const codeRef = useRef<HTMLInputElement>(null)
   const copy = methodCopy[method]
+  const policy = codePolicyFor(method, challenge, recoveryCaseSensitive)
 
   // SMS のコードを送った直後は、再送信までの待ち時間を示す（時刻は効果の中で読む）
   useEffect(() => {
-    if (challenge.method === "sms" && challenge.resendAfterMs) setResendAt(Date.now() + challenge.resendAfterMs)
+    if (challenge.method === "sms" && challenge.resendAfterMs !== null) setResendAt(Date.now() + challenge.resendAfterMs)
   }, [challenge])
 
   const backToSignIn = (
@@ -693,18 +742,27 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
     </Button>
   )
 
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    if (pending || ended) return
-    if (code === "") {
-      setFieldError(`${copy.label}を入力してください`)
+  // 送信の前に、製品の指定した形式と桁数を確かめる。値は変えない（切り詰めない、想定外の文字を取り除かない）
+  const codeErrorOf = (value: string) => {
+    const check = checkVerificationCode(value, { format: policy.format, length: policy.length })
+    if (check.ok) return null
+    if (check.reason === "empty") return `${copy.label}を入力してください`
+    if (check.reason === "unexpected-character")
+      return policy.format === "numeric" ? `${copy.label}は数字だけで入力してください` : `${copy.label}は英字と数字だけで入力してください`
+    return `${copy.label}は ${policy.length} ${policy.unit}で入力してください（入力：${check.length} ${policy.unit}）`
+  }
+
+  const verify = (value: string) => {
+    if (ended || isPending("verify")) return
+    const message = codeErrorOf(value)
+    setFieldError(message)
+    if (message) {
       codeRef.current?.focus()
       return
     }
-    setFieldError(null)
     run(
       "verify",
-      (signal) => api.verifyMfa({ challengeId: challenge.id, method, code }, { signal }),
+      (signal) => api.verifyMfa({ challengeId: challenge.id, method, code: value }, { signal }),
       (result) => {
         if (result.kind === "authenticated") onAuthenticated(result.userId)
       },
@@ -741,18 +799,27 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
     )
   }
 
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    verify(code)
+  }
+
   const sendSms = (switching: boolean) =>
     run(
       "send",
       (signal) => api.sendMfaCode({ challengeId: challenge.id, method: "sms" }, { signal }),
       (r) => {
         setMethod("sms")
+        // 新しいコードを送った：前のコードの確認の結果を反映しない（スコープを進める）
+        setIssue((n) => n + 1)
         setChoosing(false)
         setCode("")
+        setFieldError(null)
         setError(null)
         setResendAt(Date.now() + r.retryAfterMs)
         setStatus(`${challenge.smsDestination ?? "登録した"}の電話番号に、${switching ? "" : "新しい"}コードを送信しました。`)
-        codeRef.current?.focus()
+        // 方式を変えると入力欄を作り直すため、描画の後にフォーカスを移す
+        requestAnimationFrame(() => codeRef.current?.focus())
       },
       (err) => {
         if (codeOf(err) === "too-soon") {
@@ -772,6 +839,7 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
     setMethod(next)
     setChoosing(false)
     setCode("")
+    setFieldError(null)
     setError(null)
     setStatus("")
     requestAnimationFrame(() => codeRef.current?.focus())
@@ -797,10 +865,15 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
           <Field invalid={!!fieldError || error?.kind === "invalid-credentials"}>
             <FieldLabel>{copy.label}</FieldLabel>
             <VerificationCodeInput
+              // 方式ごとに入力欄を作り直す（変換中の文字や onComplete の記録を、別の方式に持ち越さない）
+              key={method}
               ref={codeRef}
               name={method === "recovery-code" ? "recovery-code" : "one-time-code"}
-              format={copy.format}
-              uppercase={method === "recovery-code"}
+              format={policy.format}
+              uppercase={policy.uppercase}
+              fullWidth={policy.fullWidth}
+              length={autoSubmit ? policy.length : undefined}
+              onComplete={autoSubmit ? verify : undefined}
               value={code}
               onValueChange={(v) => {
                 setCode(v)
@@ -809,10 +882,14 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
               disabled={ended}
               data-testid={`${testId}-code`}
             />
-            {method === "recovery-code" && <FieldDescription>「XXXX-XXXX」の形式です。ハイフンは省略できます。</FieldDescription>}
+            {method === "recovery-code" && (
+              <FieldDescription>
+                「XXXX-XXXX」の形式です。ハイフンは省略できます。{recoveryCaseSensitive ? "大文字と小文字を区別します。" : "大文字と小文字は区別しません。"}
+              </FieldDescription>
+            )}
             {fieldError && <FieldError>{fieldError}</FieldError>}
           </Field>
-          <Button type="submit" className="w-full" loading={pending === "verify"} disabled={ended} data-testid={`${testId}-submit`}>
+          <Button type="submit" className="w-full" loading={isPending("verify")} disabled={ended} data-testid={`${testId}-submit`}>
             確認する
           </Button>
         </form>
@@ -824,7 +901,7 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
               type="button"
               variant="outline"
               size="sm"
-              loading={pending === "send"}
+              loading={isPending("send")}
               disabled={resendLeft > 0}
               onClick={() => sendSms(false)}
               data-testid={`${testId}-resend`}
@@ -855,7 +932,7 @@ export function MfaScreen({ api, challenge, onAuthenticated, onCancel, layout = 
               <ul className="flex flex-col gap-2" data-testid={`${testId}-methods`}>
                 {others.map((m) => (
                   <li key={m}>
-                    <Button type="button" variant="outline" className="w-full" loading={pending === "send" && m === "sms"} onClick={() => choose(m)}>
+                    <Button type="button" variant="outline" className="w-full" loading={isPending("send") && m === "sms"} onClick={() => choose(m)}>
                       {methodCopy[m].choose}
                     </Button>
                   </li>
@@ -911,10 +988,10 @@ export function SignUpScreen({
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (pending) return
-    const requirements = evaluatePasswordRequirements(password, passwordRequirementsFor(email))
+    const passwordCheck = checkPasswordInput(password, { purpose: "new", requirements: passwordRequirementsFor(email) })
     const next = {
       email: emailErrorOf(email),
-      password: password === "" ? "パスワードを入力してください" : requirements.allMet ? null : "パスワードの条件を満たしていません。上の条件を確かめてください",
+      password: passwordCheck.ok ? null : passwordCheck.reason === "empty" ? "パスワードを入力してください" : "パスワードの条件を満たしていません。上の条件を確かめてください",
       // 必要な同意（利用規約）。任意のお知らせの受け取りとは分ける
       terms: terms ? null : "利用を開始するには、利用規約とプライバシーポリシーへの同意が必要です",
     }
@@ -1453,8 +1530,8 @@ export function NewPasswordScreen({
           onSubmit={(e) => {
             e.preventDefault()
             if (pending) return
-            const { allMet } = evaluatePasswordRequirements(password, passwordRequirementsFor(email))
-            const message = password === "" ? "新しいパスワードを入力してください" : allMet ? null : "パスワードの条件を満たしていません。上の条件を確かめてください"
+            const check = checkPasswordInput(password, { purpose: "new", requirements: passwordRequirementsFor(email) })
+            const message = check.ok ? null : check.reason === "empty" ? "新しいパスワードを入力してください" : "パスワードの条件を満たしていません。上の条件を確かめてください"
             setPasswordError(message)
             if (message) return passwordRef.current?.focus()
             run(

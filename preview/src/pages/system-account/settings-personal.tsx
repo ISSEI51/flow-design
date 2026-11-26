@@ -20,12 +20,14 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Section, SectionDescription, SectionHeader, SectionHeading, SectionTitle } from "@/patterns/section-layout"
 import { applyReset, planReset, resolveDependent, resolveSetting } from "@/patterns/setting-resolve"
-import { useInstantSettings, useSettingsForm } from "@/patterns/setting-save"
+import { partialSaveResult, useInstantSettings, useSettingsForm, withVersion } from "@/patterns/setting-save"
 import { SettingRow, SettingSaveStatus } from "@/patterns/setting-status"
+import { useScopeGuard } from "@/patterns/scope-guard"
 import { cn } from "@/lib/utils"
 
 import { demoPassword, mandatoryNotifications, notificationTypeLabels, channelLabels, users, type Language, type Theme } from "../../data/system-account/model"
-import { displayDefaults, type DisplayValues, type InstantKey, type Profile } from "../../data/system-account/settings-server"
+import { MockRequestError } from "../../data/system-account/mock"
+import { displayDefaults, type DisplayValues, type InstantKey, type PersonalRecord, type Profile } from "../../data/system-account/settings-server"
 import {
   FormFooter,
   hours,
@@ -48,21 +50,41 @@ import {
 
 type InstantApi = ReturnType<typeof useInstantSettings<DisplayValues>>
 
-function useDisplaySettings({ scope, api, initial, onPermissionDenied }: SettingsSectionProps & { initial: DisplayValues }) {
+function useDisplaySettings({ scope, api, record, onPermissionDenied, saveContract = "ordered" }: SettingsSectionProps & { record: PersonalRecord }) {
+  const versioned = saveContract === "versioned"
   return useInstantSettings<DisplayValues>({
-    values: initial,
+    values: record.display,
     scopeKey: scope.userId,
+    // 版の照合：取得した版を渡すと、項目ごとに保存を直列にし、ifMatch に最後に確認できた版を渡す（模擬のサーバーの versioned）
+    versions: versioned ? (record.displayVersions ?? {}) : undefined,
     // 変更の要求には、画面の移動やアンマウントで中止される signal を渡さない（中止してもサーバーで処理される場合があり、
     // 画面を移っただけで変更が失われることがないようにする）。結果の反映は hook が、開始したスコープと最新の要求に限る
-    save: (key, value) => api.saveDisplay(scope.userId, key, value),
-    verify: (key, { signal }) => api.getPersonal(scope.userId, { signal }).then((p) => p.display[key]),
-    onSettled: (_key, status) => status.state === "forbidden" && onPermissionDenied?.(),
+    save: (key, value, { ifMatch }) =>
+      versioned
+        ? api.saveDisplayVersioned(scope.userId, key, value, { ifMatch: ifMatch as number | undefined }).then((r) => withVersion(r.value, r.version))
+        : api.saveDisplay(scope.userId, key, value),
+    verify: (key, { signal }) =>
+      api.getPersonal(scope.userId, { signal }).then((p) => (versioned ? withVersion(p.display[key], p.displayVersions?.[key] ?? 0) : p.display[key])),
+    // 権限不足は、前の保存の結果が不明なため結果の不明として示す場合（cause が forbidden）も、権限を取り直す
+    onSettled: (_key, status) => (status.state === "forbidden" || (status.state === "unknown" && status.cause === "forbidden")) && onPermissionDenied?.(),
   })
 }
 
 const status = (s: InstantApi, key: InstantKey, testId: string) => (
   <SettingSaveStatus status={s.statusOf(key)} onVerify={() => s.verify(key)} data-testid={testId} />
 )
+
+/** 標準の設定へ戻す要求（一括）の応答を、項目ごとの結果にする（拒否された項目と、応答に含まれない項目を区別する） */
+function toPartial(keys: InstantKey[], r: { values: Partial<DisplayValues>; versions: Record<InstantKey, number>; rejected: Partial<Record<InstantKey, { code: string; message: string }>> }, versioned: boolean) {
+  const saved: { [K in InstantKey]?: DisplayValues[K] | ReturnType<typeof withVersion<DisplayValues[K]>> } = {}
+  const errors: { [K in InstantKey]?: unknown } = {}
+  for (const k of keys) {
+    const rejected = r.rejected[k]
+    if (rejected) errors[k] = new MockRequestError(rejected.message, rejected.code)
+    else if (k in r.values) (saved as Record<string, unknown>)[k] = versioned ? withVersion(r.values[k], r.versions[k]) : r.values[k]
+  }
+  return partialSaveResult<DisplayValues>(saved, errors)
+}
 
 // ---------------------------------------------------------------- 表示と言語（即時保存）
 const themes: { value: Theme; label: string }[] = [
@@ -100,26 +122,31 @@ export function DisplaySettingsSection(props: SettingsSectionProps) {
   if (!personal.isCurrent || !(org.isCurrent || org.status === "error")) return <SectionLoading rows={3} testId="set-display-loading" />
   return (
     <DisplayForm
-      key={props.scope.userId}
+      key={`${props.scope.userId}:${props.saveContract ?? "ordered"}`}
       {...props}
-      initial={personal.data!.display}
+      record={personal.data!}
       // 組織の設定を取得できない場合は、製品の標準値を使う（個人の設定の変更は止めない）
       orgLanguage={org.isCurrent ? org.data!.info.defaultLanguage : undefined}
     />
   )
 }
 
-function DisplayForm(props: SettingsSectionProps & { initial: DisplayValues; orgLanguage: Language | undefined }) {
-  const { scope, api, orgLanguage } = props
+function DisplayForm(props: SettingsSectionProps & { record: PersonalRecord; orgLanguage: Language | undefined }) {
+  const { scope, api, orgLanguage, saveContract } = props
   const s = useDisplaySettings(props)
   const [density, setDensity] = useState<"standard" | "compact">("standard")
   const [resetNote, setResetNote] = useState("")
   const [resetting, setResetting] = useState(false)
+  const [reloadNote, setReloadNote] = useState("")
+  // サーバーの設定の取得し直し（最後に始めた取得だけを反映する）。DisplayForm は利用者と保存の方式ごとに作り直す
+  const reloadGuard = useScopeGuard(props.scope.userId)
   const language = resolveSetting<Language>({ productDefault: "ja", orgDefault: orgLanguage, userValue: s.values.language ?? undefined })
   const orgDefaultLabel = `${orgLanguage ? "組織" : "製品"}の標準（${languageLabels[language.inherited.value]}）`
   const resetKeys = ["theme", "language", "timezone"] as const
   const plan = planReset(s.values, displayDefaults, resetKeys)
   const saving = resetKeys.some((k) => s.statusOf(k).state === "saving")
+  // 結果が不明か競合の項目がある間は、標準に戻す要求を送らない（確認してから戻す）
+  const unresolved = resetKeys.filter((k) => !s.canChange(k))
 
   const reset = () => {
     if (resetting || plan.changes.length === 0) return
@@ -129,7 +156,12 @@ function DisplayForm(props: SettingsSectionProps & { initial: DisplayValues; org
     const changed = Object.fromEntries(plan.changes.map((c) => [c.key, next[c.key]])) as Partial<DisplayValues>
     const names = plan.changes.map((c) => resetLabels[c.key as (typeof resetKeys)[number]]).join("、")
     // 項目ごとの保存と同じ規則で反映する。戻している間に利用者が変えた項目には、この応答を反映しない
-    s.changeMany(changed, (values) => api.saveDisplayBatch(scope.userId, values)).then((outcome) => {
+    const versioned = saveContract === "versioned"
+    s.changeMany(changed, (values, { ifMatch }) =>
+      api
+        .saveDisplayBatch(scope.userId, values, { ifMatch: ifMatch as Partial<Record<InstantKey, number>> })
+        .then((r) => toPartial(Object.keys(values) as InstantKey[], r, versioned))
+    ).then((outcome) => {
       setResetting(false)
       if (outcome === "aborted") return
       setResetNote(
@@ -137,13 +169,44 @@ function DisplayForm(props: SettingsSectionProps & { initial: DisplayValues; org
           ? `${names}を標準に戻しました。`
           : outcome === "superseded"
             ? `${names}を標準に戻しました。戻している間に変えた項目は、変えた値を保存しています。`
-            : outcome === "unknown"
-              ? "標準の設定に戻せたかを確認できませんでした。各項目の「確認する」で確かめてください。"
-              : outcome === "forbidden"
-                ? "変更する権限がないため、標準の設定に戻せませんでした。設定は変わっていません。"
-                : "標準の設定に戻せませんでした。設定は変わっていません。"
+            : outcome === "partial"
+              ? "一部の項目だけを標準に戻しました。項目ごとの状態を確かめてください。"
+              : outcome === "unknown"
+                ? "標準の設定に戻せたかを確認できませんでした。各項目の「確認する」で確かめてください。"
+                : outcome === "blocked"
+                  ? "保存できたかを確認していない項目があるため、標準に戻していません。先に「確認する」で確かめてください。"
+                  : outcome === "conflict"
+                    ? "ほかの場所で変更されていたため、標準に戻していません。各項目の「確認する」で、現在の設定を確かめてください。"
+                    : outcome === "forbidden"
+                      ? "変更する権限がないため、標準の設定に戻せませんでした。設定は変わっていません。"
+                      : "標準の設定に戻せませんでした。設定は変わっていません。"
       )
     })
+  }
+
+  // サーバーの値を取得し直して反映する（replace）。保存中の要求の応答は、この後に届いても、表示と最後に確認できた値を上書きしない。
+  // 取得の後に呼ぶ replace は、取得を始めた時点の描画の関数。スコープが変わっていれば、hook が何もせずに false を返す
+  // 取得を続けて押した場合は、最後に始めた取得の応答だけを反映する（応答の順が入れ替わっても、古い取得の値で上書きしない）。
+  // 取得を始めた後に送った保存の結果より新しい値であることは、製品の API が保証する（版の照合、または保存の後に取得し直す）。
+  const reload = () => {
+    const ticket = reloadGuard.begin("reload")
+    setReloadNote("サーバーの設定を取得しています…")
+    const versioned = saveContract === "versioned"
+    api.getPersonal(scope.userId).then(
+      (p) => {
+        const latest = reloadGuard.isLatest(ticket)
+        reloadGuard.release(ticket)
+        if (!latest) return
+        const values = Object.fromEntries(resetKeys.map((k) => [k, p.display[k]])) as Partial<DisplayValues>
+        const versions = versioned ? Object.fromEntries(resetKeys.map((k) => [k, p.displayVersions?.[k] ?? 0])) : undefined
+        if (s.replace(values, versions)) setReloadNote("サーバーに保存されている設定を表示しています。")
+      },
+      () => {
+        const latest = reloadGuard.isLatest(ticket)
+        reloadGuard.release(ticket)
+        if (latest) setReloadNote("サーバーの設定を取得できませんでした。")
+      }
+    )
   }
 
   return (
@@ -162,6 +225,7 @@ function DisplayForm(props: SettingsSectionProps & { initial: DisplayValues; org
             <div className="@container/theme max-w-lg">
             <RadioGroup
               value={s.values.theme}
+              readOnly={!s.canChange("theme")}
               onValueChange={(v) => s.change("theme", v as Theme)}
               className="grid grid-cols-1 gap-3 @sm/theme:grid-cols-3"
               data-testid="set-theme"
@@ -198,6 +262,7 @@ function DisplayForm(props: SettingsSectionProps & { initial: DisplayValues; org
             <Select
               items={[{ value: "inherit", label: orgDefaultLabel }, ...(["ja", "en"] as Language[]).map((l) => ({ value: l, label: languageLabels[l] }))]}
               value={s.values.language ?? "inherit"}
+              readOnly={!s.canChange("language")}
               onValueChange={(v) => s.change("language", v === "inherit" || v == null ? null : (v as Language))}
             >
               <SelectTrigger className="w-64 max-w-full" data-testid="set-language">
@@ -212,7 +277,7 @@ function DisplayForm(props: SettingsSectionProps & { initial: DisplayValues; org
           </SettingRow>
 
           <SettingRow data-setting-id="timezone" label="タイムゾーン" description="予定と通知の時刻の表示に使います。" status={status(s, "timezone", "set-timezone-status")}>
-            <Select items={timezones} value={s.values.timezone} onValueChange={(v) => v && s.change("timezone", String(v))}>
+            <Select items={timezones} value={s.values.timezone} readOnly={!s.canChange("timezone")} onValueChange={(v) => v && s.change("timezone", String(v))}>
               <SelectTrigger className="w-64 max-w-full" data-testid="set-timezone">
                 <SelectValue />
               </SelectTrigger>
@@ -228,17 +293,31 @@ function DisplayForm(props: SettingsSectionProps & { initial: DisplayValues; org
 
           <div className="flex flex-col gap-2" data-testid="set-display-reset" data-resetting={resetting || undefined}>
             <div className="flex flex-wrap items-center gap-3">
-              <Button variant="outline" onClick={reset} loading={resetting} disabled={plan.changes.length === 0 || saving} data-testid="set-display-reset-button">
+              <Button variant="outline" onClick={reset} loading={resetting} disabled={plan.changes.length === 0 || saving || unresolved.length > 0} data-testid="set-display-reset-button">
                 表示の設定を標準に戻す
               </Button>
             </div>
             <p className="text-ui text-muted-foreground">
-              {plan.changes.length === 0
+              {unresolved.length > 0
+                ? `${unresolved.map((k) => resetLabels[k]).join("、")}の保存の結果を確認するまで、標準に戻せません。`
+                : plan.changes.length === 0
                 ? "テーマ、表示言語、タイムゾーンは標準の設定です。"
                 : `${plan.changes.map((c) => resetLabels[c.key as (typeof resetKeys)[number]]).join("、")}を標準に戻します。プロフィール、通知、セキュリティの設定は変わりません。`}
             </p>
             <p role="status" className="text-ui text-muted-foreground" data-testid="set-display-reset-status">
               {resetNote}
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2" data-testid="set-display-reload">
+            <div>
+              <Button variant="outline" onClick={reload} data-testid="set-display-reload-button">
+                サーバーの設定を取得し直す
+              </Button>
+            </div>
+            <p className="text-ui text-muted-foreground">ほかの端末で変更した場合に、テーマ、表示言語、タイムゾーンの保存されている値を表示します。</p>
+            <p role="status" className="text-ui text-muted-foreground" data-testid="set-display-reload-status">
+              {reloadNote}
             </p>
           </div>
         </div>
@@ -281,10 +360,10 @@ export function QuietHoursSection(props: SettingsSectionProps) {
   const personal = usePersonalData(props.scope, props.api)
   if (personal.status === "error") return <SectionLoadError title="通知の設定を取得できませんでした" onRetry={personal.reload} />
   if (!personal.isCurrent) return <SectionLoading rows={2} testId="set-quiet-loading" />
-  return <QuietHoursForm key={props.scope.userId} {...props} initial={personal.data!.display} />
+  return <QuietHoursForm key={`${props.scope.userId}:${props.saveContract ?? "ordered"}`} {...props} record={personal.data!} />
 }
 
-function QuietHoursForm(props: SettingsSectionProps & { initial: DisplayValues }) {
+function QuietHoursForm(props: SettingsSectionProps & { record: PersonalRecord }) {
   const s = useDisplaySettings(props)
   const child = resolveDependent({
     parentEnabled: s.values.quietEnabled,
@@ -293,7 +372,7 @@ function QuietHoursForm(props: SettingsSectionProps & { initial: DisplayValues }
   })
   const mandatory = mandatoryNotifications.map((m) => `${notificationTypeLabels[m.type].replace(/（.*）/, "")}（${channelLabels[m.channel]}）`)
   const hourSelect = (key: "quietStart" | "quietEnd", testId: string) => (
-    <Select items={hours} value={s.values[key]} onValueChange={(v) => v && s.change(key, String(v))}>
+    <Select items={hours} value={s.values[key]} readOnly={!s.canChange(key)} onValueChange={(v) => v && s.change(key, String(v))}>
       <SelectTrigger className="w-32" data-testid={testId}>
         <SelectValue />
       </SelectTrigger>
@@ -322,7 +401,7 @@ function QuietHoursForm(props: SettingsSectionProps & { initial: DisplayValues }
           description={`${mandatory.join("、")}は、組織のポリシーで必須のため、この時間帯にも届きます。`}
           status={status(s, "quietEnabled", "set-quiet-status")}
         >
-          <Switch checked={s.values.quietEnabled} onCheckedChange={(v) => s.change("quietEnabled", v)} data-testid="set-quiet-switch" />
+          <Switch checked={s.values.quietEnabled} readOnly={!s.canChange("quietEnabled")} onCheckedChange={(v) => s.change("quietEnabled", v)} data-testid="set-quiet-switch" />
         </SettingRow>
         <div className="flex flex-col gap-6 border-s border-border ps-4" data-testid="set-quiet-children" data-active={child.active || undefined}>
           <SettingRow
@@ -359,6 +438,8 @@ function ProfileForm({ scope, api, onDirtyChange, onPermissionDenied, initial }:
     // 変更の要求には、アンマウントで中止される signal を渡さない（即時保存と同じ方針）
     save: (values) => api.saveProfile(scope.userId, values),
     verify: ({ signal }) => api.getPersonal(scope.userId, { signal }).then((p) => p.profile),
+    // 変更がない場合は送らない（Forms & Workflows の requireChanges と同じ規則）
+    requireChanges: true,
     onSettled: (s) => s.state === "forbidden" && onPermissionDenied?.(),
   })
   const [showErrors, setShowErrors] = useState(false)
@@ -368,7 +449,7 @@ function ProfileForm({ scope, api, onDirtyChange, onPermissionDenied, initial }:
     e.preventDefault()
     setShowErrors(true)
     if (nameError) return
-    form.submit()
+    void form.submit()
   }
   return (
     <form onSubmit={submit} noValidate data-testid="set-profile">
@@ -536,7 +617,7 @@ export function LoginSecuritySection(props: SettingsSectionProps) {
     <LoginSecurityForm
       key={`${props.scope.userId}:${props.scope.workspaceId}`}
       {...props}
-      initial={personal.data!.display}
+      record={personal.data!}
       passwordChangedOn={personal.data!.passwordChangedOn}
       google={personal.data!.google}
       policy={org.data!.security}
@@ -546,7 +627,7 @@ export function LoginSecuritySection(props: SettingsSectionProps) {
 
 function LoginSecurityForm(
   props: SettingsSectionProps & {
-    initial: DisplayValues
+    record: PersonalRecord
     passwordChangedOn: string
     google: { connected: boolean; account: string | null }
     policy: { requireMfa: boolean; allowSocialLogin: boolean; requireSso: boolean }
@@ -635,6 +716,7 @@ function LoginSecurityForm(
             <Switch
               checked={mfa.value}
               disabled={mfa.locked}
+              readOnly={!s.canChange("mfa")}
               onCheckedChange={(v) => (v ? s.change("mfa", true) : setConfirmOff(true))}
               data-testid="set-mfa"
             />

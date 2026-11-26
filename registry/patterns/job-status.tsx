@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 
-import { isJobActive, jobStateLabels, normalizeJobProgress, type JobProgress, type JobState } from "@/patterns/system-status"
+import { isJobActive, jobProgressRatio, jobStateLabels, normalizeJobProgress, normalizeJobState, type JobProgress, type JobState } from "@/patterns/system-status"
 
 // Flow Design Background Job Status（Patterns / System & Account / System States）
 // 長時間の処理（書き出し、取り込み、一括の更新など）の状態の一覧。ページを離れても続く処理を、後から確かめられるようにする。
@@ -16,6 +16,8 @@ import { isJobActive, jobStateLabels, normalizeJobProgress, type JobProgress, ty
 // この部品が守ること
 // - 待機中、処理中、キャンセルの要求中、キャンセルの完了、成功、部分的な失敗、失敗、結果が不明を、文とアイコンで区別する。
 // - 実際の進捗（progress）がある場合だけ、進捗率と件数を示す。ない場合は、進捗率を作らない。
+//   正しくない進捗（負、合計を超える件数、100 % を超える進捗率、NaN）は示さず、「進み具合を確認できません」と示す（normalizeJobProgress）。
+// - 成功と部分的な失敗は、進捗と件数が正しい場合だけ示す。製品は state に displayJobState の結果を渡す（正しくない場合は unknown）。
 // - キャンセルを要求した後は「キャンセルを要求しました」と示し、停止したとは示さない（サーバーが停止を確かめるまで）。
 //   キャンセルの操作は、待機中と処理中の間だけ置く。
 // - 状態の変化（終わった、キャンセルした）は、常に置いた領域（role="status"）で 1 回だけ伝える。進捗の変化は読み上げない
@@ -26,6 +28,7 @@ import { isJobActive, jobStateLabels, normalizeJobProgress, type JobProgress, ty
 // - 結果の確認の操作（ダウンロード、失敗した行の確認など）。actions で渡す。
 
 const fmt = new Intl.NumberFormat("ja-JP")
+const pct = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 1 })
 
 const stateIcons: Record<JobState, { icon: typeof CircleCheck; className: string; spin?: boolean }> = {
   queued: { icon: Clock, className: "text-muted-foreground" },
@@ -38,7 +41,8 @@ const stateIcons: Record<JobState, { icon: typeof CircleCheck; className: string
   unknown: { icon: CircleHelp, className: "text-warning" },
 }
 
-function JobStateLabel({ state, className }: { state: JobState; className?: string }) {
+function JobStateLabel({ state: stateProp, className }: { state: JobState; className?: string }) {
+  const state = normalizeJobState(stateProp)
   const { icon: Icon, className: tone, spin } = stateIcons[state]
   return (
     <span data-slot="job-state" data-state={state} className={cn("inline-flex items-center gap-2 text-ui", className)}>
@@ -50,9 +54,10 @@ function JobStateLabel({ state, className }: { state: JobState; className?: stri
 
 function JobStatusItem({
   name,
-  state,
+  state: stateProp,
   progress,
   unit = "件",
+  progressUnknownLabel = "進み具合を確認できません",
   description,
   onCancel,
   cancelLabel = "キャンセル",
@@ -68,6 +73,8 @@ function JobStatusItem({
   progress: JobProgress | null
   /** 進捗の単位 */
   unit?: string
+  /** 進捗が正しくない値の場合に示す文 */
+  progressUnknownLabel?: string
   /** 補足（開始した時刻、成功と失敗の件数、失敗の理由など） */
   description?: React.ReactNode
   /** キャンセルを要求する。待機中と処理中の間だけ示す */
@@ -76,11 +83,14 @@ function JobStatusItem({
   /** 結果の確認の操作（ダウンロード、結果を確認など） */
   actions?: React.ReactNode
 }) {
+  const state = normalizeJobState(stateProp)
   const real = normalizeJobProgress(progress)
+  const ratio = jobProgressRatio(real)
+  const invalid = progress != null && real === null
   const active = isJobActive(state)
   const cancellable = onCancel && (state === "queued" || state === "running")
   return (
-    <li data-slot="job-status-item" data-state={state} className={cn("flex flex-col gap-3 py-4", className)} {...props}>
+    <li data-slot="job-status-item" data-state={state} data-progress={real ? "real" : invalid ? "invalid" : "none"} className={cn("flex flex-col gap-3 py-4", className)} {...props}>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="flex min-w-0 flex-col gap-1">
           <p className="text-ui font-medium [word-break:auto-phrase]">{name}</p>
@@ -98,11 +108,16 @@ function JobStatusItem({
         )}
       </div>
       {/* 実際の進捗がある間だけ進捗率を示す。終わった後は、件数を説明に書く（製品） */}
-      {active && real && (
-        <Progress value={(real.done / real.total) * 100} status={state === "cancel-requested" ? "paused" : "default"} className="max-w-md gap-1">
+      {active && real && ratio !== null && (
+        <Progress value={ratio * 100} status={state === "cancel-requested" ? "paused" : "default"} className="max-w-md gap-1">
           <ProgressLabel className="sr-only">{name}の進捗</ProgressLabel>
-          <ProgressValue>{() => `${fmt.format(real.done)} / ${fmt.format(real.total)}${unit}`}</ProgressValue>
+          <ProgressValue>{() => (real.percent !== undefined ? `${pct.format(real.percent)} %` : `${fmt.format(real.done)} / ${fmt.format(real.total)}${unit}`)}</ProgressValue>
         </Progress>
+      )}
+      {active && invalid && (
+        <p data-slot="job-progress-unknown" className="text-ui text-muted-foreground">
+          {progressUnknownLabel}
+        </p>
       )}
       {description && <div className="text-ui text-muted-foreground [word-break:auto-phrase]">{description}</div>}
     </li>
@@ -126,12 +141,15 @@ function useJobAnnouncement(
   include: (state: JobState) => boolean = () => true
 ) {
   const includeRef = React.useRef(include)
-  includeRef.current = include
   const seen = React.useRef<Map<string, JobState> | null>(null)
   const [text, setText] = React.useState("")
   const key = jobs.map((j) => `${j.id}:${j.state}`).join("|")
   const latest = React.useRef(jobs)
-  latest.current = jobs
+  // 描画の中では ref を書き換えない（破棄された描画の値を使わないため）。下の effect より前に、commit の後に更新する
+  React.useEffect(() => {
+    includeRef.current = include
+    latest.current = jobs
+  })
   React.useEffect(() => {
     const prev = seen.current
     const next = new Map(latest.current.map((j) => [j.id, j.state]))

@@ -79,6 +79,35 @@ const accountMenu = async (page: Page) => (await sidebar(page)).getByTestId("acc
 
 const go = (page: Page, query: string) => page.evaluate((q) => (window.location.hash = `#/account-app?${q}`), query)
 
+// 模擬のサーバーの応答の保留と解放（固定の応答時間や操作の速さに依存せず、順序を検品の側で決める）
+type NtfServer = {
+  hold: Record<string, boolean>
+  ignoreAbort: boolean
+  holdDeliveries: boolean
+  heldCount: (kind?: string) => number
+  heldRequests: () => { seq: number; kind: string; ids?: string[]; workspaceId?: string }[]
+  release: (kind: string, opts?: { which?: "first" | "last" | "all"; outcome?: string; workspaceId?: string }) => number
+  releaseDeliveries: () => number
+  push: (w: string, p: object) => void
+  outcomeNext: Record<string, string>
+  deliveries: { workspaceId: string; ids: string[]; results: { label: string; accepted: boolean }[] }[]
+}
+const ntf = <T,>(page: Page, fn: (s: NtfServer) => T) =>
+  page.evaluate(`(${fn.toString()})(window.__fdSaNotificationsServer)`) as Promise<Awaited<T>>
+const ntfHeld = (page: Page, kind: string) => page.evaluate((k) => (window as unknown as { __fdSaNotificationsServer: NtfServer }).__fdSaNotificationsServer.heldCount(k), kind)
+const ntfRelease = (page: Page, kind: string, opts: { which?: "first" | "last" | "all"; outcome?: string; workspaceId?: string } = {}) =>
+  page.evaluate(([k, o]) => (window as unknown as { __fdSaNotificationsServer: NtfServer }).__fdSaNotificationsServer.release(k as string, o as object), [kind, opts] as const)
+type PermServer = {
+  hold: Record<string, boolean>
+  held: { kind: string; scope: string }[]
+  release: (kind: string, opts?: { scope?: string; last?: boolean }) => number
+  simulate: { setRole: (u: string, w: string, r: string) => void }
+}
+const permHeld = (page: Page, kind: string) =>
+  page.evaluate((k) => (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer.held.filter((h) => h.kind === k).length, kind)
+/** 応答を解放した後、受け取った側の処理と描画が進むのを待つ（時間ではなく、描画の 2 フレームと次のタスク） */
+const settle = (page: Page) => page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0)))))
+
 // ------------------------------------------------------------------ 認証と初回利用
 test.describe("Account app: sign-in and first use", () => {
   test("sign-in page: one h1, named controls, autocomplete, no horizontal scroll @webkit", { tag: "@webkit" }, async ({ page }) => {
@@ -257,10 +286,8 @@ test.describe("Account app: scope boundaries", () => {
   test("workspace A -> B -> A: no notification from another workspace is ever shown", async ({ page }) => {
     await signInAs(page, sato)
     // 西日本営業部の取得を遅らせ、中止に従わない応答にする（古い応答を破棄できるかの検品）
-    await page.evaluate(() => {
-      const s = (window as unknown as { __fdSaNotificationsServer: { ignoreAbort: boolean; listLatencyByWorkspace: Record<string, number> } }).__fdSaNotificationsServer
+    await ntf(page, (s) => {
       s.ignoreAbort = true
-      s.listLatencyByWorkspace = { west: 700, hq: 60 }
     })
     // 別のワークスペースの通知の文が、一度でも表示されたら記録する
     await page.evaluate(() => {
@@ -276,35 +303,80 @@ test.describe("Account app: scope boundaries", () => {
     await trigger(page).click()
     await expect(page.getByTestId("ntf-center")).toContainText("顧客の書き出しが完了しました（1,240 件）")
     await page.keyboard.press("Escape")
+    // A（本社営業部）→ B（西日本営業部）：B の一覧の応答を保留する
+    await ntf(page, (s) => {
+      s.hold.list = true
+    })
+    const before = await ntfHeld(page, "list")
     await go(page, "page=home&ws=west")
-    // 西日本営業部では、本社営業部の通知を示さない（遅い応答が届く前に開く）
+    await expect.poll(() => ntfHeld(page, "list")).toBe(before + 1)
+    // B の応答が届く前も、A の通知を示さない
     await trigger(page).click()
-    await expect(page.getByTestId("ntf-center")).toContainText("取り込みが一部失敗", { timeout: 5000 })
     await expect(page.getByTestId("ntf-center")).not.toContainText("1,240 件")
     await page.keyboard.press("Escape")
+    // B → A：A の一覧も保留する（B の要求は AbortSignal を無視して残る）
     await go(page, "page=home&ws=hq")
-    await page.waitForTimeout(1000)
-    // 未読の件数も、本社営業部の値（n-101、n-102、n-103 の 3 件）に戻る。西日本営業部の件数を足さない
+    // 現在の A の応答を先に解放し、その後で古い B の応答をすべて解放する
+    await expect.poll(() => ntf(page, (s) => s.heldRequests().filter((h) => h.workspaceId === "hq").length)).toBeGreaterThan(0)
+    // この後の要求は保留しない（保留した要求の順序だけを決める）
+    await ntf(page, (s) => {
+      s.hold.list = false
+    })
+    expect(await ntfRelease(page, "list", { which: "all", workspaceId: "hq" })).toBeGreaterThan(0)
+    await settle(page)
+    expect(await ntfRelease(page, "list", { which: "all", workspaceId: "west" })).toBeGreaterThan(0)
+    await settle(page)
+    // 未読の件数は、本社営業部の値（n-101、n-102、n-103 の 3 件）。西日本営業部の件数を足さない
     await expect(trigger(page)).toHaveAccessibleName(/未読 3 件/)
     await trigger(page).click()
     await expect(page.getByTestId("ntf-center")).toContainText("顧客の書き出しが完了しました（1,240 件）")
     await expect(page.getByTestId("ntf-center")).not.toContainText("取り込みが一部失敗")
+    await page.keyboard.press("Escape")
+    // B を開くと、B の通知だけを示す
+    await go(page, "page=home&ws=west")
+    await trigger(page).click()
+    await expect(page.getByTestId("ntf-center")).toContainText("取り込みが一部失敗")
+    await expect(page.getByTestId("ntf-center")).not.toContainText("1,240 件")
     expect(await page.evaluate(() => (window as unknown as { __seen: string[] }).__seen)).toEqual([])
   })
 
   test("switching workspaces while a notification target is being checked does not move back to the old workspace", async ({ page }) => {
     await signInAs(page, sato)
-    await page.evaluate(() => {
-      const s = (window as unknown as { __fdSaNotificationsServer: { latency: Record<string, number>; ignoreAbort: boolean } }).__fdSaNotificationsServer
-      s.latency.resolve = 1500
+    await ntf(page, (s) => {
+      s.hold.resolve = true
       s.ignoreAbort = true
     })
     await trigger(page).click()
     await page.getByTestId("ntf-center").getByRole("button", { name: /メンションしました/ }).first().click()
+    // 対象の確認の要求が送られ、保留されている間に、ワークスペースを切り替える
+    await expect.poll(() => ntfHeld(page, "resolve")).toBe(1)
     await go(page, "page=home&ws=west")
-    await page.waitForTimeout(2200)
+    await expect(page.getByTestId("acct-workspace")).toHaveText("西日本営業部")
+    // 切り替えた後に、古い確認の結果（対象は閲覧できる）を届ける
+    expect(await ntfRelease(page, "resolve", { which: "all" })).toBe(1)
+    await settle(page)
     await expect(page).toHaveURL(/page=home&ws=west/)
     await expect(page.getByTestId("acct-workspace")).toHaveText("西日本営業部")
+  })
+
+  test("a permission change while a notification target is being checked cancels the navigation", async ({ page }) => {
+    await signInAs(page, sato)
+    // 中止された確認の要求も、AbortSignal を無視して後から応答を返す（応答が届いても移動しないことを確かめる）
+    await ntf(page, (s) => {
+      s.hold.resolve = true
+      s.ignoreAbort = true
+    })
+    await trigger(page).click()
+    await page.getByTestId("ntf-center").getByRole("button", { name: /メンションしました/ }).first().click()
+    await expect.poll(() => ntfHeld(page, "resolve")).toBe(1)
+    // 確認を待つ間に、同じワークスペースのロールが変わる（権限の取得し直しが終わるまで待つ）
+    await page.evaluate(() => (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer.simulate.setRole("u-sato", "hq", "viewer"))
+    await expect(page.getByTestId("acct-permission-notice")).not.toBeEmpty()
+    expect(await ntfRelease(page, "resolve", { which: "all" })).toBe(1)
+    await settle(page)
+    // 開始したときの権限のスコープの移動は行わない（現在の権限で、もう一度選び直す）
+    await expect(page).not.toHaveURL(/page=customer&/)
+    await expect(h1(page)).toHaveText("ホーム")
   })
 
   test("while permissions are being re-checked after a role change, an export cannot be started with the old permission", async ({ page }) => {
@@ -313,13 +385,98 @@ test.describe("Account app: scope boundaries", () => {
     const start = main(page).getByRole("button", { name: "顧客を書き出す" })
     await expect(start).toBeEnabled()
     await page.evaluate(() => {
-      const s = (window as unknown as { __fdSaPermissionServer: { latency: Record<string, number>; simulate: { setRole: (u: string, w: string, r: string) => void } } }).__fdSaPermissionServer
-      s.latency.access = 2000
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
       s.simulate.setRole("u-suzuki", "hq", "viewer")
     })
-    // 再確認の応答が届く前（前の権限が残っている間）も、開始させない
-    await expect(start).toBeDisabled({ timeout: 1000 })
-    await expect(main(page)).toContainText("顧客を書き出す権限がありません。", { timeout: 5000 })
+    // 再確認の応答を保留している間（前の権限が残っている間）は、開始させない。理由は「権限がない」ではなく確認中と示す
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await expect(start).toBeDisabled()
+    await expect(main(page)).toContainText("最新の権限を確認できるまで、開始できません。")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    await expect(main(page)).toContainText("顧客を書き出す権限がありません。")
+    await expect(start).toBeDisabled()
+  })
+
+  test("an export pressed in the same task as a permission change notice is not started", async ({ page }) => {
+    await signInAs(page, "ichiro.suzuki@example.com")
+    await go(page, "page=jobs&ws=hq")
+    const start = main(page).getByRole("button", { name: "顧客を書き出す" })
+    await expect(start).toBeEnabled()
+    // 変更の知らせと押下を同じ JS のタスクで行う（画面の更新の前に押された場合）。開始の要求を数える
+    const calls = await page.evaluate(() => {
+      const w = window as unknown as {
+        __fdSaPermissionServer: PermServer
+        __fdSaSystemServer: { startJob: (...a: unknown[]) => unknown }
+        __startCalls: number
+      }
+      w.__startCalls = 0
+      const original = w.__fdSaSystemServer.startJob.bind(w.__fdSaSystemServer)
+      w.__fdSaSystemServer.startJob = (...a: unknown[]) => {
+        w.__startCalls++
+        return original(...a)
+      }
+      w.__fdSaPermissionServer.hold.access = true
+      w.__fdSaPermissionServer.simulate.setRole("u-suzuki", "hq", "viewer")
+      const button = [...document.querySelectorAll<HTMLButtonElement>("[data-testid=acct-main] button")].find((b) => b.textContent?.includes("顧客を書き出す"))
+      button?.click()
+      return w.__startCalls
+    })
+    expect(calls).toBe(0)
+    await settle(page)
+    expect(await page.evaluate(() => (window as unknown as { __startCalls: number }).__startCalls)).toBe(0)
+  })
+
+  test("an unknown read result is shown as being verified, and the header count is not guessed", async ({ page }) => {
+    await signInAs(page, sato)
+    await trigger(page).click()
+    const center = page.getByTestId("ntf-center")
+    const n101 = center.locator('[data-notification-id="n-101"]')
+    await expect(n101).toBeVisible()
+    // 一覧を読み込んだ後に、既読の結果を不明にし、確認のための取得し直しを保留する
+    await ntf(page, (s) => {
+      s.outcomeNext.read = "unknown"
+      s.hold.list = true
+    })
+    await n101.locator("[data-slot=notification-read-toggle]").click()
+    await expect.poll(() => ntfHeld(page, "list")).toBeGreaterThan(0)
+    await expect(n101).toHaveAttribute("data-verifying", "")
+    await expect(n101).toContainText("状態を確認中")
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読あり")
+    await ntf(page, (s) => {
+      s.hold.list = false
+      s.release("list", { which: "all" })
+    })
+    await expect(n101).not.toHaveAttribute("data-verifying")
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読 2 件")
+  })
+
+  test("a delivery from the subscription of the first workspace A is rejected after A → B → A", async ({ page }) => {
+    await signInAs(page, sato)
+    // 配信を保留する。保留した配信は、配信した時点の購読者（最初の A の購読）に届く
+    await ntf(page, (s) => {
+      s.holdDeliveries = true
+      s.push("hq", { title: "古い購読への配信の確認用", type: "mention" })
+    })
+    await go(page, "page=home&ws=west")
+    await expect(page.getByTestId("acct-workspace")).toHaveText("西日本営業部")
+    await go(page, "page=home&ws=hq")
+    await expect(page.getByTestId("acct-workspace")).toHaveText("本社営業部")
+    await ntf(page, (s) => {
+      s.holdDeliveries = false
+      s.releaseDeliveries()
+    })
+    await settle(page)
+    const last = await ntf(page, (s) => s.deliveries.at(-1))
+    // 最初の A の購読は解除済み：受け付けない（現在の A の購読は、配信した時点では存在しない）
+    const fromApp = last?.results.filter((r) => r.label === "account-app") ?? []
+    // 配信を受けた購読者が 1 つ以上あり、そのすべてが受け付けなかった（空の一覧で成功にしない）
+    expect(fromApp.length).toBeGreaterThan(0)
+    expect(fromApp.every((r) => !r.accepted)).toBe(true)
   })
 
   test("new notifications are held while the notification center is open", async ({ page }) => {
@@ -328,6 +485,16 @@ test.describe("Account app: scope boundaries", () => {
     const center = page.getByTestId("ntf-center")
     const first = center.locator("[data-notification-id=n-101]")
     await expect(first).toBeVisible()
+    // 通知センターを開くときのアニメーション（位置と大きさの変化）が終わってから、位置を測る
+    await page.evaluate(() =>
+      Promise.all(
+        document
+          .getAnimations()
+          .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+          .map((a) => a.finished.catch(() => undefined))
+      )
+    )
+    await settle(page)
     const before = (await first.boundingBox())!.y
     await page.evaluate(() => {
       const s = (window as unknown as { __fdSaNotificationsServer: { push: (w: string, p: object) => void } }).__fdSaNotificationsServer

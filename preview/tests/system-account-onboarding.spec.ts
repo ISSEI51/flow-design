@@ -4,6 +4,7 @@ import { collectPageErrors } from "./page-errors"
 
 // Patterns / System & Account / Onboarding の検品（資料のページ #/onboarding の例）。
 // 模擬のサーバーは window.__fdSaOnboardingServer で設定する（応答の時間、結果、ignoreAbort、受け付けた要求、保存内容の写し）。
+// 応答の順序に依存する検品は、固定の待ち時間ではなく、holdWhen（要求の保留）と releaseHeld（解放）で順序を決める。
 // 期待値は資料（docs/web/patterns/onboarding.md）と model.ts の値から決める。画面の表示から期待値を作らない。
 collectPageErrors(test)
 
@@ -18,6 +19,9 @@ const invitedDemo = (page: Page) => page.getByTestId("onb-invited-demo")
 const checklistIn = (root: Locator) => root.getByTestId("onb-checklist")
 const item = (root: Locator, id: string) => checklistIn(root).locator(`[data-task-id="${id}"]`)
 const viewer = (page: Page, name: string) => checklistDemo(page).getByRole("radio", { name, exact: true })
+/** 保留している要求の数 */
+const heldCount = (page: Page) => server(page, (s) => s.held.length)
+const MUTATIONS = ["add-customer", "import", "invite", "billing", "avatar", "start-sample", "delete-sample"]
 
 const SATO_NEW = "佐藤 花子・新しい組織（組織を作成した管理者）"
 const SUZUKI_NEW = "鈴木 一郎・新しい組織（招待されたメンバー）"
@@ -140,6 +144,8 @@ test.describe("Onboarding: create organization", () => {
     const id = Object.values(snap.created)[0]
     expect(snap.workspaces[id].name).toBe("スキップの組織")
     expect(snap.workspaces[id].invitations).toEqual([])
+    // スキップした任意の手順と、変更しなかったデータの始め方は初期値（招待なし、サンプルなし）
+    expect(snap.workspaces[id].sample).toBeNull()
     expect(snap.sent).toEqual([])
     await expect(item(product, "invite-members")).not.toHaveAttribute("data-done", "true")
     await expect(item(product, "invite-members")).toBeVisible()
@@ -195,9 +201,15 @@ test.describe("Onboarding: create organization", () => {
     await expect(demo.getByTestId("onb-setup-error")).toHaveAttribute("role", "alert")
     expect(Object.keys((await snapshot(page)).created)).toHaveLength(0)
     await demo.getByRole("radio", { name: "結果が不明（作成はされる）" }).check()
-    await server(page, (s) => (s.latency["create-workspace"] = 400))
-    // 二重に押しても、要求は 1 回だけ
+    // 応答を保留して、作成の要求が処理中の間に二重に押す。要求は 1 回だけ（失敗した 1 回目と合わせて 2 回）
+    await server(page, (s) => (s.holdWhen = (r) => r.kind === "create-workspace"))
     await demo.getByTestId("onb-setup-create").dblclick()
+    await expect.poll(() => heldCount(page)).toBe(1)
+    expect((await server(page, (s) => s.requests)).filter((r) => r.kind === "create-workspace")).toHaveLength(2)
+    await server(page, (s) => {
+      s.holdWhen = null
+      return s.releaseHeld()
+    })
     await expect(demo.getByTestId("onb-setup-unknown")).toBeVisible()
     expect((await server(page, (s) => s.requests)).filter((r) => r.kind === "create-workspace")).toHaveLength(2)
     // 結果が不明な間は、もう一度作成するボタンを押せない（確かめてから）
@@ -213,14 +225,19 @@ test.describe("Onboarding: create organization", () => {
     const demo = setupDemo(page)
     await server(page, (s) => {
       s.ignoreAbort = true
-      s.latency["create-workspace"] = 800
+      s.holdWhen = (r) => r.kind === "create-workspace"
     })
     await demo.getByTestId("onb-setup-name").fill("閉じた後の組織")
     await demo.getByRole("button", { name: "次へ" }).click()
     await demo.getByRole("button", { name: "スキップ" }).click()
     await demo.getByTestId("onb-setup-create").click()
+    await expect.poll(() => heldCount(page)).toBe(1)
+    // 応答が届く前に画面を閉じる（アンマウント）。その後で応答を解放する
     await demo.getByTestId("onb-setup-close").click()
-    await page.waitForTimeout(1100)
+    await expect(demo.getByTestId("onb-setup")).toHaveCount(0)
+    expect(await server(page, (s) => s.releaseHeld())).toBe(1)
+    // サーバーでは作成された（応答は成功）が、閉じた画面の結果として利用画面へ移らない
+    expect(Object.keys((await snapshot(page)).created)).toHaveLength(1)
     await expect(demo.getByTestId("onb-product")).toHaveCount(0)
     await expect(demo.getByTestId("onb-setup-open")).toBeVisible()
   })
@@ -243,7 +260,8 @@ test.describe("Onboarding: checklist", () => {
     await expect(sheet).toBeHidden()
     await item(demo, "set-billing").getByRole("button", { name: "支払いの画面へ" }).click()
     await expect(demo.getByTestId("onb-billing")).toBeVisible()
-    await page.waitForTimeout(200)
+    // 作業のボタンと Sheet の開閉では、変更の要求を送らない（完了の元になる作業結果は変わらない）
+    expect((await server(page, (s) => s.requests)).filter((r) => MUTATIONS.includes(r.kind))).toEqual([])
     await expect(item(demo, "first-customer")).not.toHaveAttribute("data-done", "true")
     await expect(item(demo, "set-billing")).not.toHaveAttribute("data-done", "true")
     await expect(list.getByText("5 件中 1 件完了")).toBeVisible()
@@ -365,21 +383,109 @@ test.describe("Onboarding: checklist", () => {
   test("switching users A→B→A with slow responses shows only A, never B, and nothing of A while B loads", async ({ page }) => {
     await open(page)
     const demo = checklistDemo(page)
+    // B（鈴木 一郎）の要求を保留する。AbortSignal に従わない API の代わりに、中止された後も応答を返す
     await server(page, (s) => {
       s.ignoreAbort = true
-      s.latencyByUser["u-suzuki"] = 1500
+      s.holdWhen = (r) => r.userId === "u-suzuki"
     })
     await viewer(page, SUZUKI_NEW).check()
     // B の取得中は、A の Checklist を表示しない
     await expect(checklistIn(demo)).toHaveCount(0)
     await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-scope", /^u-suzuki:new:/)
+    await expect.poll(() => heldCount(page)).toBeGreaterThanOrEqual(2)
     await viewer(page, SATO_NEW).check()
     await expect(checklistIn(demo).getByText("5 件中 1 件完了")).toBeVisible()
-    await page.waitForTimeout(1800)
+    // A に戻った後で、B の古い応答を解放する
+    expect(await server(page, (s) => s.releaseHeld())).toBeGreaterThanOrEqual(2)
+    await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-scope", /^u-sato:new:/)
     await expect(checklistIn(demo).getByText("5 件中 1 件完了")).toBeVisible()
     expect(await checklistIn(demo).locator("[data-task-id]").count()).toBe(5)
     // 切り替えでは完了を読み上げない
     await expect(checklistIn(demo).getByRole("status")).toHaveText("")
+  })
+
+  test("excluding a required task for lack of permission does not meet the requirement", async ({ page }) => {
+    await open(page)
+    const demo = checklistDemo(page)
+    const others = demo.getByTestId("onb-required-others-notice")
+    const state = demo.getByTestId("onb-checklist-state")
+    // 管理者は Checklist の作業として示す（ほかの利用者が行う作業の案内はない）
+    await expect(item(demo, "set-billing")).toBeVisible()
+    await expect(others).toHaveCount(0)
+    // メンバー：支払いの作業は表示しないが、必須の条件は未達成のまま
+    await viewer(page, SUZUKI_NEW).check()
+    await expect(checklistIn(demo).getByText("3 件中 0 件完了")).toBeVisible()
+    await expect(item(demo, "set-billing")).toHaveCount(0)
+    await expect(state).toContainText("必須の作業：未完了（権限のある管理者が行う）")
+    await expect(others).toContainText("支払い方法を登録するが完了していません")
+    await expect(others.getByRole("button")).toHaveCount(0)
+    // 閲覧者：Checklist を使わない場合も、必須の条件は達成にならない
+    await viewer(page, TANAKA_NEW).check()
+    await expect(state).toContainText("Checklist を使わない")
+    await expect(state).toContainText("必須の作業：未完了（権限のある管理者が行う）")
+    await expect(others).toBeVisible()
+    // 管理者が実際に登録すると、メンバーにも達成として示す
+    await viewer(page, SATO_NEW).check()
+    await item(demo, "set-billing").getByRole("button", { name: "支払いの画面へ" }).click()
+    await demo.getByRole("button", { name: "模擬の支払い方法を登録する" }).click()
+    await expect(item(demo, "set-billing")).toHaveAttribute("data-done", "true")
+    await viewer(page, SUZUKI_NEW).check()
+    await expect(checklistIn(demo).getByText("3 件中 0 件完了")).toBeVisible()
+    await expect(state).toContainText("必須の作業：完了")
+    await expect(others).toHaveCount(0)
+  })
+
+  test("a registration sheet opened for one viewer is not reused after switching viewers (A → B → A)", async ({ page }) => {
+    await open(page)
+    const demo = checklistDemo(page)
+    const sheet = page.getByTestId("onb-create-sheet")
+    // Sheet はモーダルのため、利用者の切り替え（通知や別の画面からのスコープの変更の代わり）は DOM の操作で行う
+    const switchTo = (name: string) =>
+      checklistDemo(page).getByRole("radio", { name, exact: true, includeHidden: true }).evaluate((el) => (el as HTMLInputElement).click())
+    await demo.getByTestId("onb-create").click()
+    await sheet.getByTestId("onb-create-name").fill("前の利用者の入力")
+    await switchTo(SUZUKI_NEW)
+    await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-scope", /^u-suzuki:new:/)
+    await expect(sheet).toBeHidden()
+    await switchTo(SATO_NEW)
+    await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-scope", /^u-sato:new:/)
+    await expect(checklistIn(demo).getByText("5 件中 1 件完了")).toBeVisible()
+    // 最初の A で開いた Sheet を、戻った A で開き直さない。開き直すと入力は空
+    await expect(sheet).toBeHidden()
+    await demo.getByTestId("onb-create").click()
+    await expect(sheet.getByTestId("onb-create-name")).toHaveValue("")
+    expect((await server(page, (s) => s.requests)).filter((r) => r.kind === "add-customer")).toEqual([])
+  })
+
+  // 実行中の状態は、操作を始めたスコープの世代（Ticket）と組で持つ。scopeKey の文字列だけで持つと、A → B → A の最初の A の操作が
+  // 戻った A で「実行中」のまま残り（その応答は最初の A の世代のため反映せず、記録も消さない）、操作できなくなる。
+  test("an action started in A, then A → B → A: the first A's action does not stay in progress in the current A", async ({ page }) => {
+    await open(page)
+    const demo = checklistDemo(page)
+    await demo.getByRole("button", { name: "サンプルデータで試す" }).click()
+    await expect(demo.getByTestId("onb-sample-banner")).toBeVisible()
+    await server(page, (s) => (s.holdWhen = (r) => r.kind === "delete-sample"))
+    const remove = demo.getByRole("button", { name: "サンプルを削除" })
+    await remove.click()
+    await expect.poll(() => heldCount(page)).toBe(1)
+    await expect(remove).toHaveAttribute("data-loading", "true")
+    await viewer(page, SUZUKI_NEW).check()
+    await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-scope", /^u-suzuki:new:/)
+    await viewer(page, SATO_NEW).check()
+    await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-scope", /^u-sato:new:/)
+    // 戻った A は、最初の A の操作を実行中として示さない
+    await expect(demo.getByTestId("onb-sample-banner")).toBeVisible()
+    await expect(remove).not.toHaveAttribute("data-loading")
+    // 最初の A の応答を解放しても、実行中にならず、結果を示さない
+    expect(await server(page, (s) => s.releaseHeld())).toBe(1)
+    await expect(remove).not.toHaveAttribute("data-loading")
+    await expect(demo.getByTestId("onb-customers-result")).toHaveText("")
+    // もう一度操作できる
+    await server(page, (s) => (s.holdWhen = null))
+    await remove.click()
+    await expect(demo.getByTestId("onb-customers")).toHaveAttribute("data-space", "real")
+    expect((await server(page, (s) => s.requests)).filter((r) => r.kind === "delete-sample")).toHaveLength(2)
+    expect((await snapshot(page)).workspaces.new.sample).toBeNull()
   })
 })
 
@@ -428,8 +534,29 @@ test.describe("Onboarding: empty state, help and sample data", () => {
     await expect.poll(async () => (await snapshot(page)).dismissedHelp["u-sato"]).toEqual(["customers-search"])
     await remount(page)
     await expect(demo.getByTestId("onb-list")).toHaveAttribute("data-view", "ready")
-    await page.waitForTimeout(200)
+    // 閉じた案内の取得が終わった後も表示しない
+    await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-help", "ready")
     await expect(demo.getByTestId("onb-help-search")).toHaveCount(0)
+  })
+
+  test("the dismissed state of contextual help belongs to the account: kept across workspaces, not shared with other accounts", async ({ page }) => {
+    await open(page)
+    const demo = checklistDemo(page)
+    await viewer(page, SATO_HQ).check()
+    const help = demo.getByTestId("onb-help-search")
+    await help.getByRole("button", { name: "この案内を閉じる" }).click()
+    await expect(help).toHaveCount(0)
+    await expect.poll(async () => (await snapshot(page)).dismissedHelp["u-sato"]).toEqual(["customers-search"])
+    // 同じ利用者で別の組織へ切り替え、案内の表示の条件（顧客が 1 件以上）を満たしても、表示しない
+    await viewer(page, SATO_NEW).check()
+    await registerCustomer(demo, "株式会社つぎ")
+    await expect(demo.getByTestId("onb-list")).toHaveAttribute("data-view", "ready")
+    await expect(demo.getByTestId("onb-product")).toHaveAttribute("data-help", "ready")
+    await expect(demo.getByTestId("onb-help-search")).toHaveCount(0)
+    // 別の利用者（同じ組織）は閉じていないため、表示する
+    await viewer(page, SUZUKI_NEW).check()
+    await expect(demo.getByTestId("onb-help-search")).toBeVisible()
+    expect((await snapshot(page)).dismissedHelp["u-suzuki"]).toEqual([])
   })
 
   test("sample data: explicit, always identified, separate from real data, easy to leave and delete", async ({ page }) => {
@@ -458,6 +585,28 @@ test.describe("Onboarding: empty state, help and sample data", () => {
     snap = await snapshot(page)
     expect(snap.workspaces.new.sample).toBeNull()
     expect(snap.workspaces.new.real).toHaveLength(0)
+  })
+
+  test("sample data is not counted for billing; other screens always work on real data", async ({ page }) => {
+    await open(page)
+    const demo = checklistDemo(page)
+    const nav = demo.getByRole("navigation", { name: "製品の画面（例）" })
+    const usage = demo.getByTestId("onb-billing-usage")
+    await demo.getByRole("button", { name: "サンプルデータで試す" }).click()
+    await expect(demo.getByTestId("onb-sample-banner")).toContainText("請求")
+    await registerCustomer(demo, "サンプルの会社")
+    await nav.getByRole("button", { name: "支払い", exact: true }).click()
+    await expect(usage).toHaveText("請求の対象の顧客（模擬）：0 件。サンプルの顧客は含めません。")
+    // 作業の画面から顧客の画面へ戻ると、実際のデータを表示する（サンプルの表示を続けない）
+    await nav.getByRole("button", { name: "顧客", exact: true }).click()
+    await expect(demo.getByTestId("onb-customers")).toHaveAttribute("data-space", "real")
+    await registerCustomer(demo, "株式会社ほんもの")
+    await nav.getByRole("button", { name: "支払い", exact: true }).click()
+    await expect(usage).toHaveText("請求の対象の顧客（模擬）：1 件。サンプルの顧客は含めません。")
+    const snap = await snapshot(page)
+    expect(snap.workspaces.new.real.map((c) => c.company)).toEqual(["株式会社ほんもの"])
+    expect(snap.workspaces.new.sample?.map((c) => c.company)).toContain("サンプルの会社")
+    expect(snap.sent).toEqual([])
   })
 })
 

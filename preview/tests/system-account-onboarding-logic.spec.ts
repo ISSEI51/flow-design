@@ -1,9 +1,16 @@
 import { expect, test } from "@playwright/test"
 
-import { deriveChecklist, getSetupStatus, pickGuidance, resolveFirstScreen, type OnboardingTaskDefinition } from "../../registry/patterns/onboarding"
+import {
+  deriveChecklist,
+  deriveRequirements,
+  getSetupStatus,
+  pickGuidance,
+  resolveFirstScreen,
+  type OnboardingTaskDefinition,
+} from "../../registry/patterns/onboarding"
 import { roles, type OnboardingTaskId, type Permission } from "../src/data/system-account/model"
 import { onboardingTaskDefinitions } from "../src/data/system-account/onboarding-data"
-import { onboardingApi, onboardingServer } from "../src/data/system-account/onboarding-server"
+import { onboardingApi, onboardingServer, type RealCustomer, type SampleCustomer } from "../src/data/system-account/onboarding-server"
 import { collectPageErrors } from "./page-errors"
 
 // Onboarding の純粋な関数（registry/patterns/onboarding.ts）と、模擬のサーバーのデータの分離の検品。ブラウザを使わない。
@@ -104,14 +111,119 @@ test.describe("Onboarding: checklist derivation", () => {
     expect(deriveChecklist({ tasks, permissions: admin, audience: "creator", results: none, visibility: "collapsed" }).presentation).toBe("collapsed")
   })
 
-  test("required tasks the viewer cannot do do not block the viewer's requirements; minTasks is configurable", () => {
+  test("excluding a required task for lack of permission does not meet the requirement; minTasks is configurable", () => {
+    // 以前は「この利用者が行える必須の作業だけ」で requirementsMet を判定していた（メンバーは支払い方法が未登録でも true）。
+    // 必須の条件は、Checklist の表示の対象とは別に、すべての作業の定義と実際の作業結果から判定する。
     const m = deriveChecklist({ tasks, permissions: member, audience: "creator", results: none, visibility: "expanded" })
-    expect(m.requirementsMet).toBe(true)
+    expect(ids(m)).not.toContain("set-billing")
+    expect(m.requirementsMet).toBe(false)
+    expect(m.outstandingRequired).toEqual([])
+    expect(m.outstandingRequiredWithoutPermission.map((r) => [r.id, r.permission, r.permitted])).toEqual([["set-billing", "billing.manage", false]])
+    expect(m.requirements.met).toBe(false)
     const custom: OnboardingTaskDefinition<"a" | "b", Permission>[] = [
       { id: "a", title: "A", scope: "account" },
       { id: "b", title: "B", scope: "workspace", permission: "billing.manage" },
     ]
     expect(deriveChecklist({ tasks: custom, permissions: [], audience: "creator", results: { account: [], workspace: [] }, visibility: "expanded", minTasks: 1 }).presentation).toBe("expanded")
+  })
+})
+
+test.describe("Onboarding: required conditions are separate from checklist progress", () => {
+  const billingDone = { account: [] as OnboardingTaskId[], workspace: ["set-billing"] as OnboardingTaskId[] }
+
+  test("the requirement depends only on task definitions and results, not on permissions, audience or visibility", () => {
+    for (const permissions of [admin, member, viewer])
+      for (const audience of ["creator", "invited"] as const)
+        for (const visibility of ["expanded", "collapsed", "hidden"] as const) {
+          expect(deriveChecklist({ tasks, permissions, audience, results: none, visibility }).requirementsMet).toBe(false)
+          expect(deriveChecklist({ tasks, permissions, audience, results: billingDone, visibility }).requirementsMet).toBe(true)
+        }
+    // 閲覧者：Checklist を使わない（presentation: none）が、必須の条件は未達成のまま
+    const v = deriveChecklist({ tasks, permissions: viewer, audience: "invited", results: none, visibility: "expanded" })
+    expect(v.presentation).toBe("none")
+    expect(v.requirementsMet).toBe(false)
+    expect(v.outstandingRequiredWithoutPermission.map((r) => r.id)).toEqual(["set-billing"])
+    // Checklist を使わなくても、deriveRequirements だけで同じ値を求められる（画面の利用制限の判定に使う）
+    expect(deriveRequirements({ tasks, permissions: viewer, results: none })).toEqual(v.requirements)
+    expect(deriveRequirements({ tasks, permissions: admin, results: billingDone })).toEqual({ met: true, outstanding: [] })
+  })
+
+  test("an account-scoped required task is met only by the account result", () => {
+    const custom: OnboardingTaskDefinition<"mfa" | "x", Permission>[] = [
+      { id: "mfa", title: "多要素認証", scope: "account", required: true },
+      { id: "x", title: "X", scope: "workspace" },
+    ]
+    expect(deriveRequirements({ tasks: custom, permissions: [], results: { account: [], workspace: ["mfa"] } }).met).toBe(false)
+    expect(deriveRequirements({ tasks: custom, permissions: [], results: { account: ["mfa"], workspace: [] } }).met).toBe(true)
+  })
+})
+
+test.describe("Onboarding: zero target tasks are not 'all done'", () => {
+  const gated: OnboardingTaskDefinition<"a" | "b", Permission>[] = [
+    { id: "a", title: "A", scope: "workspace", permission: "billing.manage", required: true },
+    { id: "b", title: "B", scope: "workspace", permission: "members.manage" },
+  ]
+
+  test("zero tasks: progress none and presentation none, even with minTasks 0; the requirement stays unmet", () => {
+    for (const minTasks of [0, 1, 2]) {
+      const c = deriveChecklist({ tasks: gated, permissions: [], audience: "creator", results: { account: [], workspace: [] }, visibility: "expanded", minTasks })
+      expect(c.total).toBe(0)
+      expect(c.progress).toBe("none")
+      expect(c.presentation).toBe("none")
+      expect(c.requirementsMet).toBe(false)
+    }
+  })
+
+  test("invited member whose remaining tasks were all done by the workspace: no tasks, not completed", () => {
+    const wsOnly: OnboardingTaskDefinition<"a" | "b", Permission>[] = [
+      { id: "a", title: "A", scope: "workspace" },
+      { id: "b", title: "B", scope: "workspace" },
+    ]
+    const c = deriveChecklist({ tasks: wsOnly, permissions: [], audience: "invited", results: { account: [], workspace: ["a", "b"] }, visibility: "expanded", minTasks: 0 })
+    expect(c.total).toBe(0)
+    expect(c.progress).toBe("none")
+    expect(c.presentation).toBe("none")
+    // 組織を作成した利用者には、同じ結果がすべて完了として示される
+    const creator = deriveChecklist({ tasks: wsOnly, permissions: [], audience: "creator", results: { account: [], workspace: ["a", "b"] }, visibility: "expanded" })
+    expect(creator.progress).toBe("completed")
+    expect(creator.presentation).toBe("completed")
+  })
+})
+
+test.describe("Onboarding: recalculation from the current role and the current results", () => {
+  const some = { account: ["complete-profile"] as OnboardingTaskId[], workspace: ["invite-members"] as OnboardingTaskId[] }
+
+  test("a role change recalculates the target tasks from the same results (admin → member → admin)", () => {
+    const a1 = deriveChecklist({ tasks, permissions: admin, audience: "creator", results: some, visibility: "expanded" })
+    const m = deriveChecklist({ tasks, permissions: member, audience: "creator", results: some, visibility: "expanded" })
+    const a2 = deriveChecklist({ tasks, permissions: admin, audience: "creator", results: some, visibility: "expanded" })
+    expect([a1.total, a1.doneCount]).toEqual([5, 2])
+    // メンバーには招待（完了済み）と支払いを示さない。完了の件数は、表示する作業の中だけで数える
+    expect(ids(m).sort()).toEqual(["complete-profile", "first-customer", "import-customers"])
+    expect([m.total, m.doneCount]).toEqual([3, 1])
+    expect(a2).toEqual(a1)
+    // 必須の条件は役割で変わらない
+    expect([a1.requirementsMet, m.requirementsMet]).toEqual([false, false])
+  })
+
+  test("a task completed earlier becomes incomplete when its result disappears (derived from results, not remembered)", () => {
+    const all = { account: ["complete-profile"] as OnboardingTaskId[], workspace: ["first-customer", "import-customers", "invite-members", "set-billing"] as OnboardingTaskId[] }
+    const lost = { account: all.account, workspace: all.workspace.filter((id) => id !== "set-billing") }
+    const before = deriveChecklist({ tasks, permissions: admin, audience: "creator", results: all, visibility: "collapsed" })
+    expect([before.progress, before.presentation, before.requirementsMet]).toEqual(["completed", "completed", true])
+    const after = deriveChecklist({ tasks, permissions: admin, audience: "creator", results: lost, visibility: "collapsed" })
+    expect([after.progress, after.presentation, after.requirementsMet]).toEqual(["in-progress", "collapsed", false])
+    expect(after.outstandingRequired.map((i) => i.id)).toEqual(["set-billing"])
+    // すべて完了の後に閉じていた（hidden）場合も、必須の作業が残ったことは outstandingRequired で示せる
+    const closed = deriveChecklist({ tasks, permissions: admin, audience: "creator", results: lost, visibility: "hidden" })
+    expect(closed.presentation).toBe("hidden")
+    expect(closed.outstandingRequired.map((i) => i.id)).toEqual(["set-billing"])
+    // 招待されたメンバーには、組織で未完了に戻った作業を、権限があれば再び示す
+    const reopened = { account: [] as OnboardingTaskId[], workspace: ["import-customers", "invite-members", "set-billing"] as OnboardingTaskId[] }
+    expect(ids(deriveChecklist({ tasks, permissions: member, audience: "invited", results: reopened, visibility: "expanded" })).sort()).toEqual([
+      "complete-profile",
+      "first-customer",
+    ])
   })
 })
 
@@ -183,6 +295,51 @@ test.describe("Onboarding mock server: sample data is separate from real data", 
     await expect(onboardingApi.invite("new", "y@example.com", { requestId: "u-2" })).rejects.toThrow()
     expect(await onboardingApi.findRequest("u-2")).toBeNull()
     expect(onboardingServer.snapshot().workspaces.new.invitations).toEqual([])
+  })
+
+  test("the same user in another workspace: account results carry over, workspace results do not", async () => {
+    const hq = await onboardingApi.getResults("u-sato", "hq")
+    const created = await onboardingApi.getResults("u-sato", "new")
+    expect(hq.account).toEqual(["complete-profile"])
+    expect(created.account).toEqual(["complete-profile"])
+    expect([...hq.workspace].sort()).toEqual(["first-customer", "import-customers", "invite-members", "set-billing"])
+    expect(created.workspace).toEqual([])
+    const v = await onboardingApi.getProgress("u-sato", "new")
+    expect(v.visibility).toBe("expanded")
+    expect((await onboardingApi.getProgress("u-sato", "hq")).visibility).toBe("hidden")
+  })
+
+  test("sample data does not enter billing usage or external sending; the types keep them apart", async () => {
+    await onboardingApi.startSample("new")
+    await onboardingApi.addCustomer("new", "sample", "サンプルの追加")
+    expect(await onboardingApi.getUsage("new")).toEqual({ customers: 0 })
+    await onboardingApi.addCustomer("new", "real", "株式会社じっさい")
+    expect(await onboardingApi.getUsage("new")).toEqual({ customers: 1 })
+    expect(onboardingServer.snapshot().sent).toEqual([])
+    const sample: SampleCustomer = { id: "S-9", company: "サンプル", sample: true }
+    // @ts-expect-error サンプルの顧客は、実際の顧客（集計、請求、外部への送信の対象）の型にならない
+    const asReal: RealCustomer = sample
+    expect(asReal.sample).toBe(true)
+  })
+
+  test("skipping the optional steps creates the workspace with the defaults: no invitations, no sample data", async () => {
+    const { workspaceId } = await onboardingApi.createWorkspace("u-sato", { requestId: "r-skip", name: "初期値の組織", invites: [], start: "empty" })
+    const snap = onboardingServer.snapshot()
+    expect(snap.workspaces[workspaceId]).toMatchObject({ invitations: [], sample: null, billing: false, imports: 0 })
+    expect(snap.sent).toEqual([])
+  })
+
+  test("held requests are processed only when released, in the order the test chooses", async () => {
+    onboardingServer.holdWhen = (r) => r.kind === "add-customer"
+    const first = onboardingApi.addCustomer("new", "real", "一番目")
+    const second = onboardingApi.addCustomer("new", "real", "二番目")
+    expect(onboardingServer.held).toHaveLength(2)
+    expect(onboardingServer.snapshot().workspaces.new.real).toHaveLength(0)
+    expect(await onboardingServer.releaseHeld((r) => r === onboardingServer.held[1])).toBe(1)
+    expect((await second).company).toBe("二番目")
+    expect(await onboardingServer.releaseHeld()).toBe(1)
+    expect((await first).company).toBe("一番目")
+    expect(onboardingServer.snapshot().workspaces.new.real.map((c) => c.company)).toEqual(["一番目", "二番目"])
   })
 
   test("creating a workspace twice with the same request ID creates it once", async () => {

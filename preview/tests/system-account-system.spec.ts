@@ -16,20 +16,68 @@ const fast: Init = {
   statusPollInterval: 300,
 }
 
-async function open(page: Page, init: Init = {}) {
+async function open(page: Page, init: Init = {}, { waitRows = true }: { waitRows?: boolean } = {}) {
   const merged = { ...fast, ...init, latency: { ...fast.latency, ...init.latency } }
   await page.addInitScript((value) => {
     window.__fdSaSystemServerInit = value
   }, merged)
   await page.goto("/#/system-states")
   await expect(page.getByRole("heading", { level: 1, name: "System States" })).toBeVisible()
-  await expect(rows(page)).toHaveCount(5)
+  if (waitRows) await expect(rows(page)).toHaveCount(5)
 }
 
 const call = <K extends keyof Server>(page: Page, method: K, ...args: Server[K] extends (...a: infer A) => unknown ? A : never) =>
   page.evaluate(([m, a]) => (window.__fdSaSystemServer as unknown as Record<string, (...x: unknown[]) => unknown>)[m as string](...(a as unknown[])), [method, args] as const)
 const read = <T,>(page: Page, fn: string) => page.evaluate((src) => new Function("s", `return (${src})(s)`)(window.__fdSaSystemServer), fn) as Promise<T>
 const requests = (page: Page, kind: string) => read<{ kind: string }[]>(page, "(s) => s.requests").then((r) => r.filter((x) => x.kind === kind).length)
+/**
+ * 保留している要求（応答の順序を検品で決める）。既定では、中止された要求（StrictMode の仮のアンマウント、新しい確認、
+ * タイムアウト）を除く。ignoreAbort の場合、中止された要求も解放するまで応答しない。
+ */
+const heldRequests = (page: Page, kind: "probe" | "list" | "save" | "job-list" | "job-start" | "register", detail?: string, { includeAborted = false } = {}) =>
+  read<{ id: number; kind: string; detail?: string; settled: boolean; aborted: boolean }[]>(page, "(s) => s.held()").then((list) =>
+    list.filter((h) => h.kind === kind && !h.settled && (includeAborted || !h.aborted) && (detail === undefined || h.detail === detail))
+  )
+/**
+ * 先に予約された React の描画の処理が終わるまで待つ（MessageChannel のタスクを 2 回往復する。React の Scheduler も
+ * MessageChannel を使う）。page.clock で止めた時計に影響されない。時間の長さには頼らない。
+ */
+const flush = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const round = (n: number) => {
+          if (n === 0) return resolve()
+          const ch = new MessageChannel()
+          ch.port1.onmessage = () => round(n - 1)
+          ch.port2.postMessage(null)
+        }
+        round(2)
+      })
+  )
+
+/**
+ * 偽の時計（page.clock.install の後。止めるまでは実時間で進む）を止める。以後は advance で進める。
+ * 読んだ時刻から pauseAt までの間に時計が進み、過去の時刻になった場合は、時刻を読み直す。
+ */
+async function pauseClock(page: Page) {
+  for (let i = 0; ; i++) {
+    const t = await page.evaluate(() => Date.now())
+    try {
+      await page.clock.pauseAt(t + 20)
+      return
+    } catch (error) {
+      if (i >= 5 || !String(error).includes("past")) throw error
+    }
+  }
+}
+/** 止めた偽の時計を、step ごとに進めて描画を待つ（実時間の長さに頼らない） */
+async function advance(page: Page, ms: number, step = 50) {
+  for (let t = 0; t < ms; t += step) {
+    await page.clock.runFor(Math.min(step, ms - t))
+    await flush(page)
+  }
+}
 
 const app = (page: Page) => page.getByTestId("sys-app")
 const banner = (page: Page) => app(page).getByTestId("sys-banner")
@@ -76,34 +124,56 @@ test.describe("System States page", { tag: "@webkit" }, () => {
 // ------------------------------------------------------------------ 状態と表示位置
 test.describe("System States: conditions and placement", () => {
   test("operational: nothing about the normal state is shown; the banner and its live region are present and empty", async ({ page }) => {
+    await page.clock.install()
     await open(page, { maintenance: [] })
-    await page.waitForTimeout(1500)
+    await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "online")
+    // 表示の遅延（1 秒）より長く、偽の時計を進める。その間に状態の取得（300ms ごと）が続いていることも確かめる
+    await pauseClock(page)
+    const polls = await requests(page, "status")
+    await advance(page, 1500)
+    expect(await requests(page, "status")).toBeGreaterThanOrEqual(polls + 4)
     await expect(banner(page)).toHaveAttribute("data-empty", "true")
     await expect(live(banner(page))).toHaveAttribute("role", "status")
     await expect(live(banner(page))).toHaveAttribute("aria-live", "polite")
     await expect(live(banner(page))).toHaveText("")
     await expect(app(page)).not.toContainText("正常")
-    // 接続の常時表示：一度も疎通を確認していない間は「正常」と示さない
-    await expect(page.getByTestId("sys-indicator")).toHaveText("接続を確認していません")
-    await expect(page.getByTestId("sys-indicator")).toHaveAttribute("data-condition", "unknown")
-    await page.getByTestId("sys-indicator-frame").getByRole("button", { name: "接続を確認" }).click()
-    await expect(page.getByTestId("sys-indicator")).toContainText("通話のサーバーに接続しています")
+  })
+
+  test("connection indicator: unconfirmed until its probe succeeds; calls are not allowed before that", async ({ page }) => {
+    await open(page, { maintenance: [], hold: { probe: true } })
+    const indicator = page.getByTestId("sys-indicator")
+    // 接続の常時表示：疎通を確認していない間は「正常」と示さず、通話を開始させない（v0.1 の最終調整 8 章：最初の状態は未確認）
+    await expect(indicator).toHaveText("接続を確認しています")
+    await expect(indicator).toHaveAttribute("data-condition", "unknown")
+    await expect(indicator).toHaveAttribute("data-status", "unknown")
+    await expect(page.getByTestId("sys-call-start")).toBeDisabled()
+    await expect(page.getByTestId("sys-call-reason")).toHaveText("接続を確認できるまで、通話を開始できません。")
+    expect(await heldRequests(page, "probe", "tokyo")).toHaveLength(1)
+    await call(page, "releaseAll", "probe", "success")
+    await expect(indicator).toContainText("東京の通話サーバーに接続しています")
+    await expect(indicator).toHaveAttribute("data-confirmed-by", "probe")
+    await expect(page.getByTestId("sys-call-start")).toBeEnabled()
   })
 
   test("offline: restrictions apply at once; the banner appears after it persists; existing data stays with its time; focus is kept", async ({ page }) => {
+    await page.clock.install()
     await open(page)
+    // 時計を止め、表示の遅延を偽の時計で確かめる（実時間の速さに頼らない）
+    await pauseClock(page)
     const search = app(page).getByRole("textbox", { name: "会社名で検索" })
     await search.focus()
     const before = await requests(page, "job-start")
     await call(page, "setBrowserOnline", false)
-    // 安全性に必要な制限は遅らせない
-    await expect(exportButton(page)).toBeDisabled({ timeout: 300 })
-    await expect(app(page).getByRole("button", { name: "検索" })).toBeDisabled({ timeout: 300 })
+    // 安全性に必要な制限は遅らせない（時計を進めずに反映される）
+    await expect(exportButton(page)).toBeDisabled()
+    await expect(app(page).getByRole("button", { name: "検索" })).toBeDisabled()
     // 表示は 1 秒続いてから
-    await page.waitForTimeout(400)
+    await advance(page, 950)
     await expect(banner(page)).not.toContainText("オフラインです")
+    await advance(page, 100)
     await expect(banner(page)).toContainText("オフラインです")
     await expect(banner(page)).toContainText("表示中の内容は、最後に取得した時点のものです。")
+    await advance(page, 1000)
     await expect(live(banner(page))).toContainText("オフラインです")
     // 既存のデータを残し、取得した時刻を示す
     await expect(rows(page)).toHaveCount(5)
@@ -125,7 +195,8 @@ test.describe("System States: conditions and placement", () => {
     await call(page, "setBrowserOnline", true)
     // online の通知を受けても、疎通を確認できるまで接続とせず、保存を受け付けない
     await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "connecting")
-    await page.waitForTimeout(600)
+    // 疎通の確認の失敗の応答が届いた後も（失敗の回数で確かめる。待つ時間の長さに頼らない）、接続としない
+    await expect(page.getByTestId("sys-retry-attempt")).toHaveText(/^[1-9] 回/)
     await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "connecting")
     await expect(exportButton(page)).toBeDisabled()
     await expect(banner(page)).toContainText("再接続しています")
@@ -136,6 +207,7 @@ test.describe("System States: conditions and placement", () => {
 
   test("safe retry: probes back off and stop at the limit; attempts are not re-announced; manual retry recovers", async ({ page }) => {
     test.setTimeout(40_000)
+    await page.clock.install()
     await open(page, { maintenance: [] })
     await call(page, "setReachable", false)
     const probesBefore = await requests(page, "probe")
@@ -153,8 +225,12 @@ test.describe("System States: conditions and placement", () => {
     await expect(page.getByTestId("sys-retry-next")).toHaveText("予定していません")
     const probes = (await requests(page, "probe")) - probesBefore
     expect(probes).toBe(4)
-    await page.waitForTimeout(3000)
+    // 上限の後は確認を送らない。偽の時計を、間隔の上限（8 秒）の 3 倍を超えて進めて確かめる（実時間で待たない）
+    await pauseClock(page)
+    await advance(page, 30_000, 500)
     expect((await requests(page, "probe")) - probesBefore).toBe(4)
+    await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "offline")
+    await page.clock.resume()
     await expect(banner(page)).toContainText("サービスに接続できません")
     // 回復：利用者の操作で確認し、接続できたら知らせる（表示した問題が解消したため）
     await call(page, "setReachable", true)
@@ -239,29 +315,37 @@ test.describe("System States: conditions and placement", () => {
 // ------------------------------------------------------------------ 回復と通知
 test.describe("System States: recovery and notifications", () => {
   test("after reconnecting, data is fetched again and recovering is kept until the fetch ends; then a recovery notice", async ({ page }) => {
-    await open(page, { maintenance: [], latency: { list: 1800 } })
+    await open(page, { maintenance: [] })
     await call(page, "setBrowserOnline", false)
     await expect(banner(page)).toContainText("オフラインです")
     const lists = await requests(page, "list")
+    // 回復の後の取得し直しを保留する（取得が終わるまで「確認しています」を保つことを、応答の時間に頼らずに確かめる）
+    await call(page, "set", { hold: { list: true } })
     await call(page, "setBrowserOnline", true)
+    await expect.poll(async () => (await heldRequests(page, "list")).length).toBe(1)
     await expect(banner(page)).toContainText("接続が回復しました。最新の内容を確認しています")
     expect(await requests(page, "list")).toBe(lists + 1)
-    await expect(app(page).getByTestId("sys-customers-time")).toHaveText("", { timeout: 4000 })
+    await expect(banner(page).locator("[data-slot=system-banner-notice]")).toHaveCount(0)
+    await call(page, "set", { hold: {} })
+    await call(page, "releaseAll", "list", "success")
+    await expect(app(page).getByTestId("sys-customers-time")).toHaveText("")
     await expect(banner(page).locator("[data-slot=system-banner-notice]")).toContainText("接続が回復しました", { timeout: 6000 })
     await expect(live(banner(page))).toContainText("接続が回復しました", { timeout: 3000 })
   })
 
   test("a short failure that resolves by itself shows nothing and no recovery notice", async ({ page }) => {
+    await page.clock.install()
     await open(page, { maintenance: [] })
+    await pauseClock(page)
     await page.evaluate(() => {
       const el = document.querySelector("[data-testid=sys-app] [data-slot=system-banner]")!
       const seen: string[] = ((window as unknown as { __sysSeen: string[] }).__sysSeen = [])
       new MutationObserver(() => seen.push(el.textContent ?? "")).observe(el, { subtree: true, childList: true, characterData: true })
     })
     await call(page, "setBrowserOnline", false)
-    await page.waitForTimeout(400)
+    await advance(page, 400)
     await call(page, "setBrowserOnline", true)
-    await page.waitForTimeout(4000)
+    await advance(page, 4000)
     const seen = await page.evaluate(() => (window as unknown as { __sysSeen: string[] }).__sysSeen)
     expect(seen.join("|")).not.toContain("オフライン")
     expect(seen.join("|")).not.toContain("回復")
@@ -269,13 +353,19 @@ test.describe("System States: recovery and notifications", () => {
   })
 
   test("flapping: restrictions follow immediately; the banner is shown once and announcements are not repeated", async ({ page }) => {
-    test.setTimeout(30_000)
+    test.setTimeout(60_000)
+    await page.clock.install()
     await open(page, { maintenance: [], latency: { probe: 50 } })
+    await pauseClock(page)
     const demo = page.getByTestId("sys-flapping")
     await demo.getByRole("button", { name: "接続と切断を 5 回繰り返す" }).click()
-    await expect(demo.getByTestId("sys-flapping-allowed")).toHaveAttribute("data-allowed", "false", { timeout: 300 })
-    await expect(demo.getByRole("button", { name: "接続と切断を 5 回繰り返す" })).toBeEnabled({ timeout: 6000 })
-    await page.waitForTimeout(4500)
+    // 最初の切断（0ms）の制限は、表示の遅延を待たずに反映する
+    await advance(page, 50)
+    await expect(demo.getByTestId("sys-flapping-allowed")).toHaveAttribute("data-allowed", "false")
+    // 400ms ごとに 10 回の切り替え（偽の時計）
+    await advance(page, 4000)
+    await expect(demo.getByRole("button", { name: "接続と切断を 5 回繰り返す" })).toBeEnabled()
+    await advance(page, 4500)
     const n = async (id: string) => Number((await demo.getByTestId(id).textContent())!.replace(/\D/g, ""))
     expect(await n("sys-flapping-blocked")).toBeGreaterThanOrEqual(4)
     expect(await n("sys-flapping-shown")).toBe(1)
@@ -309,10 +399,12 @@ test.describe("System States: recovery and notifications", () => {
     // 状態の取得に失敗した間は、問題が消えたように見せない（最後に取得した状態を時点つきで示す）
     await expect(banner(page)).toContainText(/\d{1,2}:\d{2}の時点の状態です。最新の状態を確認できません/)
     await expect(banner(page)).toContainText("顧客の閲覧と編集の動作が遅くなっています")
-    // 実際には解消していても、確かめられないうちは解消したと示さない
-    await page.waitForTimeout(400)
+    // 実際には解消していても、確かめられないうちは解消したと示さない。
+    // 解消した後に、状態の取得（失敗する）が 2 回以上行われたことを、要求の回数で確かめてから判定する
     await call(page, "applyScenario", "operational")
-    await page.waitForTimeout(1200)
+    const polls = await requests(page, "status")
+    await expect.poll(() => requests(page, "status")).toBeGreaterThanOrEqual(polls + 2)
+    await flush(page)
     await expect(banner(page)).toContainText("顧客の閲覧と編集の動作が遅くなっています")
     await expect(page.getByTestId("sys-status-page")).not.toHaveAttribute("data-overall", "operational")
   })
@@ -373,17 +465,21 @@ test.describe("System States: offline input and unknown results", () => {
     await form.getByRole("button", { name: "端末に保存" }).click()
     const item = form.getByTestId("sys-offline-queue").locator("li")
     await expect(item).toHaveAttribute("data-sync", "saved-locally")
+    // 端末に保存した状態は、サーバーで登録された状態として扱わない（isRegisteredOnServer）
+    await expect(item).toHaveAttribute("data-registered", "false")
     await expect(item).toContainText("端末に保存しました（まだ登録されていません）")
     await expect(item).not.toContainText("登録しました")
     expect(await read<number>(page, "(s) => s.registeredCount()")).toBe(0)
     await call(page, "setBrowserOnline", true)
     await expect(item).toHaveAttribute("data-sync", "synced")
+    await expect(item).toHaveAttribute("data-registered", "true")
     await expect(item).toContainText("登録しました")
     expect(await read<number>(page, "(s) => s.registeredCount()")).toBe(1)
     expect(await requests(page, "register")).toBe(1)
   })
 
   test("offline registration: an unknown sync result is checked before sending again; a conflict is shown", async ({ page }) => {
+    await page.clock.install()
     await open(page, { syncOutcome: "unknown" })
     const form = register(page)
     await form.getByLabel("オフライン登録（端末に保存し、後で同期）").check()
@@ -394,9 +490,12 @@ test.describe("System States: offline input and unknown results", () => {
     const item = form.getByTestId("sys-offline-queue").locator("li").first()
     await expect(item).toHaveAttribute("data-sync", "unknown")
     await expect(item).toContainText("登録されたかを確認できません")
-    await page.waitForTimeout(800)
-    // 結果を確かめる前に、送り直さない
+    // 結果を確かめる前に、送り直さない。送る前の待機（300ms）と自動の再送の間隔の上限（4 秒）を超えて、偽の時計を進める
+    await pauseClock(page)
+    await advance(page, 5000, 250)
     expect(await requests(page, "register")).toBe(1)
+    await expect(item).toHaveAttribute("data-sync", "unknown")
+    await page.clock.resume()
     await item.getByRole("button", { name: "登録されたかを確認" }).click()
     await expect(item).toHaveAttribute("data-sync", "synced")
     expect(await requests(page, "register")).toBe(1)
@@ -415,6 +514,7 @@ test.describe("System States: offline input and unknown results", () => {
   const memoOnServer = (page: Page) => read<string>(page, "(s) => s.memoOf('hq', s.customersOf('hq')[0].id).text")
 
   test("unknown save result: not shown as saved, no retry button, checking confirms against the server", async ({ page }) => {
+    await page.clock.install()
     await open(page, { saveOutcome: "unknown" })
     await expect(memo(page)).toHaveValue("次回の訪問で、契約の更新を相談する。")
     await memo(page).fill("見積もりを送る")
@@ -427,8 +527,14 @@ test.describe("System States: offline input and unknown results", () => {
     expect(await memoOnServer(page)).toBe("見積もりを送る")
     await expect(save(page).getByRole("button", { name: "保存", exact: true })).toBeDisabled()
     await expect(save(page).getByRole("button", { name: /再試行|もう一度/ })).toHaveCount(0)
-    await page.waitForTimeout(800)
+    // 結果が不明な保存を、自動で送り直さない。状態の取得（300ms ごと）が続く間、偽の時計を進めて確かめる
+    await pauseClock(page)
+    const polls = await requests(page, "status")
+    await advance(page, 5000, 250)
+    expect(await requests(page, "status")).toBeGreaterThan(polls)
     expect(await requests(page, "save")).toBe(1)
+    await expect(status).toHaveAttribute("data-status", "unknown")
+    await page.clock.resume()
     await save(page).getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(status).toHaveAttribute("data-status", "saved")
     await expect(status).toHaveText("保存しました。")
@@ -449,6 +555,7 @@ test.describe("System States: offline input and unknown results", () => {
   })
 
   test("failed save keeps the input and is not retried automatically; offline blocks saving at once", async ({ page }) => {
+    await page.clock.install()
     await open(page, { saveOutcome: "fail" })
     await memo(page).fill("契約書を送る")
     await save(page).getByRole("button", { name: "保存" }).click()
@@ -456,9 +563,14 @@ test.describe("System States: offline input and unknown results", () => {
     await expect(status).toHaveAttribute("data-status", "failed")
     await expect(status).toHaveText("保存できませんでした。入力した内容は残っています。")
     await expect(memo(page)).toHaveValue("契約書を送る")
-    await page.waitForTimeout(1200)
+    // 失敗した保存を、自動で送り直さない。状態の取得（300ms ごと）が続く間、偽の時計を進めて確かめる
+    await pauseClock(page)
+    const polls = await requests(page, "status")
+    await advance(page, 5000, 250)
+    expect(await requests(page, "status")).toBeGreaterThan(polls)
     expect(await requests(page, "save")).toBe(1)
     expect(await memoOnServer(page)).toBe("次回の訪問で、契約の更新を相談する。")
+    await page.clock.resume()
 
     await call(page, "setBrowserOnline", false)
     await expect(save(page).getByRole("button", { name: "保存" })).toBeDisabled({ timeout: 300 })
@@ -472,10 +584,13 @@ test.describe("System States: offline input and unknown results", () => {
   })
 
   test("workspace A → B → A: a late save result from the first A is not shown; the draft is not carried across workspaces", async ({ page }) => {
-    await open(page, { ignoreAbort: true, latency: { save: 1500 } })
+    // 保存の応答を保留し、A → B → A の後に解放する（応答の時間に頼らない）
+    await open(page, { ignoreAbort: true, hold: { save: true } })
     await memo(page).fill("本社の下書き")
     await save(page).getByRole("button", { name: "保存" }).click()
     await expect(save(page).getByTestId("sys-save-status")).toHaveAttribute("data-status", "saving")
+    await expect.poll(async () => (await heldRequests(page, "save")).length).toBe(1)
+    const [pending] = await heldRequests(page, "save")
     await save(page).getByLabel("西日本営業部").check()
     // 別のワークスペースに、前の入力と状態を表示しない（同じ描画から）
     await expect(save(page)).toHaveAttribute("data-workspace", "west")
@@ -483,7 +598,11 @@ test.describe("System States: offline input and unknown results", () => {
     await expect(save(page).getByTestId("sys-save-status")).toHaveAttribute("data-status", "idle")
     await save(page).getByLabel("本社営業部").check()
     await expect(save(page)).toHaveAttribute("data-workspace", "hq")
-    await page.waitForTimeout(2000)
+    await expect(save(page).getByTestId("sys-save-status")).toHaveAttribute("data-loaded", "true")
+    // 最初の A の保存を、サーバーで処理して応答する（AbortSignal に従わない）
+    await call(page, "release", pending.id, "success")
+    await expect.poll(() => memoOnServer(page)).toBe("本社の下書き")
+    await flush(page)
     // サーバーでは処理されたが、最初の A の結果（保存しました）は反映しない
     await expect(save(page).getByTestId("sys-save-status")).toHaveAttribute("data-status", "idle")
     await expect(save(page).getByTestId("sys-save-status")).toHaveText("")
@@ -550,6 +669,7 @@ test.describe("System States: background jobs", () => {
   })
 
   test("jobs continue after leaving the page; old responses and other workspaces' results are not shown", async ({ page }) => {
+    await page.clock.install()
     await open(page, { jobStep: 500, ignoreAbort: true })
     await jobsDemo(page).getByRole("button", { name: "顧客を書き出す" }).click()
     await expect(item(page)).toHaveAttribute("data-state", "running")
@@ -558,8 +678,11 @@ test.describe("System States: background jobs", () => {
     await expect(jobsDemo(page)).toHaveAttribute("data-workspace", "west")
     await expect(jobsDemo(page).locator("[data-slot=job-status-item]")).toHaveCount(0)
     await expect.poll(() => read<string>(page, "(s) => s.jobsOf('hq')[0].state"), { timeout: 6000 }).toBe("succeeded")
-    await page.waitForTimeout(500)
+    // 切り替える前に送った本社の状況の取得（AbortSignal に従わない）の応答が、すべて届くまで偽の時計を進めてから確かめる
+    await pauseClock(page)
+    await advance(page, 1000, 100)
     await expect(page.locator("[data-slot=toast]").filter({ hasText: "完了しました" })).toHaveCount(0)
+    await page.clock.resume()
     await page.getByTestId("sys-jobs-demo").getByLabel("本社営業部").check()
     await expect(item(page)).toHaveAttribute("data-state", "succeeded")
     await expect(page.locator("[data-slot=toast]").filter({ hasText: "完了しました" })).toHaveCount(0)
@@ -567,30 +690,49 @@ test.describe("System States: background jobs", () => {
     // ページを離れても処理は続き、戻ったときに状況を取得し直す
     await jobsDemo(page).getByRole("button", { name: "顧客を書き出す" }).click()
     await expect(item(page)).toContainText("処理 2")
+    const revisionOf2 = () => read<number>(page, "(s) => s.jobsOf('hq').find((j) => j.id === 'job-export-2').revision")
+    const rev = await revisionOf2()
     await page.goto("/#/data-states")
     await expect(page.getByRole("heading", { level: 1, name: "Data States" })).toBeVisible()
-    await page.waitForTimeout(800)
+    // 画面を離れている間に、サーバーで処理が進んだこと（版が増えたこと）を確かめてから戻る
+    await expect.poll(revisionOf2, { timeout: 6000 }).toBeGreaterThan(rev)
     await page.goto("/#/system-states")
     await expect(jobsDemo(page).locator("[data-job=job-export-2]")).toBeVisible()
     await expect(jobsDemo(page).locator("[data-job=job-export-2]")).toHaveAttribute("data-state", /running|succeeded/)
   })
 
   test("out-of-order job responses do not move progress backwards", async ({ page }) => {
-    await open(page, { jobStep: 350, ignoreAbort: true, jobListLatencies: [] })
+    // 状況の取得の応答を保留し、新しい応答の後に古い応答を届ける（応答の時間に頼らない）
+    await open(page, { jobStep: 1000, ignoreAbort: true })
     await jobsDemo(page).getByRole("button", { name: "顧客を書き出す" }).click()
     await expect(item(page)).toHaveAttribute("data-state", "running")
-    // 次の要求を遅く、その次を速くして、古い状態を後から届かせる
-    await call(page, "set", { jobListLatencies: [1400, 40, 1400, 40, 1400, 40] })
-    const values: number[] = []
-    for (let i = 0; i < 14; i++) {
-      if (i % 3 === 0) await jobsDemo(page).getByRole("button", { name: "状況を更新" }).click()
-      const bar = item(page).getByRole("progressbar")
-      if ((await bar.count()) > 0) values.push(Number(await bar.getAttribute("aria-valuenow")))
-      await page.waitForTimeout(150)
+    await call(page, "set", { hold: { "job-list": true } })
+    const newHeld = async (known: number[]) => {
+      await expect.poll(async () => (await heldRequests(page, "job-list", "hq", { includeAborted: true })).some((h) => !known.includes(h.id))).toBe(true)
+      return (await heldRequests(page, "job-list", "hq", { includeAborted: true })).find((h) => !known.includes(h.id))!.id
     }
-    expect(values.length).toBeGreaterThan(3)
-    for (let i = 1; i < values.length; i++) expect(values[i]).toBeGreaterThanOrEqual(values[i - 1])
-    await expect(item(page)).toHaveAttribute("data-state", "succeeded", { timeout: 6000 })
+    const ids = async () => (await heldRequests(page, "job-list", "hq", { includeAborted: true })).map((h) => h.id)
+    const revision = () => read<number>(page, "(s) => s.jobsOf('hq')[0].revision")
+    const before = await ids()
+    await jobsDemo(page).getByRole("button", { name: "状況を更新" }).click()
+    const older = await newHeld(before)
+    // サーバーで処理が進む（版が増える）のを待ってから、新しい要求を送る
+    const rev = await revision()
+    await expect.poll(revision, { timeout: 5000 }).toBeGreaterThan(rev)
+    const known = await ids()
+    await jobsDemo(page).getByRole("button", { name: "状況を更新" }).click()
+    const newer = await newHeld(known)
+    await call(page, "release", newer, "success")
+    const bar = item(page).getByRole("progressbar")
+    await expect.poll(async () => Number(await bar.getAttribute("aria-valuenow"))).toBeGreaterThan(0)
+    const latest = Number(await bar.getAttribute("aria-valuenow"))
+    await call(page, "release", older, "success")
+    await flush(page)
+    // 古い応答（前の版）で進捗を戻さない
+    expect(Number(await bar.getAttribute("aria-valuenow"))).toBe(latest)
+    await call(page, "set", { hold: {} })
+    await call(page, "releaseAll", "job-list", "success")
+    await expect(item(page)).toHaveAttribute("data-state", "succeeded", { timeout: 10_000 })
   })
 })
 
@@ -613,17 +755,23 @@ test.describe("System States: review fixes", () => {
   const startButton = (page: Page) => jobsDemo(page).getByRole("button", { name: "顧客を書き出す" })
 
   test("switching workspaces while a job start is pending: the busy state belongs to its workspace and is released by the response", async ({ page }) => {
-    await open(page, { latency: { "job-start": 1500 } })
+    await open(page, { hold: { "job-start": true } })
     await startButton(page).click()
     await expect(startButton(page)).toHaveAttribute("aria-busy", "true")
+    // 開始の要求を保留している間に、ワークスペースを切り替える
+    await expect.poll(async () => (await heldRequests(page, "job-start")).length).toBe(1)
     await jobsFrame(page).getByLabel("西日本営業部").check()
     await expect(jobsDemo(page)).toHaveAttribute("data-workspace", "west")
     // 別のワークスペースでは、開始の要求中として示さない
     await expect(startButton(page)).toBeEnabled()
     await expect(startButton(page)).not.toHaveAttribute("aria-busy", "true")
     await jobsFrame(page).getByLabel("本社営業部").check()
+    // A → B → A と戻った後も、最初の A の要求が終わるまでは開始を受け付けない（サーバーで処理されている可能性があるため）
+    await expect(startButton(page)).toHaveAttribute("aria-busy", "true")
     // 応答が届いたら、どちらのワークスペースでも解除する。サーバーで始まった処理は、一覧の取得で示す
-    await expect(startButton(page)).toBeEnabled({ timeout: 4000 })
+    await call(page, "set", { hold: {} })
+    await call(page, "releaseAll", "job-start", "success")
+    await expect(startButton(page)).toBeEnabled()
     await expect(startButton(page)).not.toHaveAttribute("aria-busy", "true")
     await expect(jobsDemo(page).locator("[data-job=job-export-1]")).toBeVisible()
     await jobsFrame(page).getByLabel("西日本営業部").check()
@@ -641,12 +789,17 @@ test.describe("System States: review fixes", () => {
     await expect(jobsDemo(page).getByTestId("sys-jobs-message")).toHaveCount(0)
 
     // 応答の前に切り替えた場合、届いた失敗をどちらのワークスペースにも示さない
-    await call(page, "set", { latency: { "job-start": 1000 } })
+    await call(page, "set", { hold: { "job-start": true } })
     await startButton(page).click()
+    await expect.poll(async () => (await heldRequests(page, "job-start")).length).toBe(1)
     await jobsFrame(page).getByLabel("西日本営業部").check()
-    await page.waitForTimeout(1400)
+    await expect(jobsDemo(page)).toHaveAttribute("data-workspace", "west")
+    expect(await call(page, "releaseAll", "job-start", "fail")).toBe(1)
+    await flush(page)
     await expect(jobsDemo(page).getByTestId("sys-jobs-message")).toHaveCount(0)
     await expect(startButton(page)).toBeEnabled()
+    await jobsFrame(page).getByLabel("本社営業部").check()
+    await expect(jobsDemo(page).getByTestId("sys-jobs-message")).toHaveCount(0)
   })
 
   test("with toast notifications, failed, partial and unknown results are still announced by the list; success goes to the toast only", async ({ page }) => {
@@ -677,7 +830,7 @@ test.describe("System States: review fixes", () => {
   })
 
   test("direct registration cannot be sent twice, also with an unknown result before it is checked", async ({ page }) => {
-    await open(page, { latency: { register: 800 } })
+    await open(page, { hold: { register: true } })
     const form = page.getByTestId("sys-offline-register")
     const submit = form.getByRole("button", { name: "登録", exact: true })
     await form.getByLabel("会社名").fill("テスト商事")
@@ -686,8 +839,13 @@ test.describe("System States: review fixes", () => {
       ;(b as HTMLButtonElement).click()
       ;(b as HTMLButtonElement).click()
     })
+    // 応答を保留している間（送信中）は、押せない。強制した押下も送らない
+    await expect.poll(async () => (await heldRequests(page, "register")).length).toBe(1)
     await expect(submit).toBeDisabled()
     await submit.click({ force: true })
+    expect(await requests(page, "register")).toBe(1)
+    await call(page, "set", { hold: {} })
+    await call(page, "releaseAll", "register", "success")
     await expect(form.getByTestId("sys-offline-message")).toHaveText("テスト商事を登録しました。")
     expect(await requests(page, "register")).toBe(1)
     expect(await read<number>(page, "(s) => s.registeredCount()")).toBe(1)
@@ -700,7 +858,7 @@ test.describe("System States: review fixes", () => {
     await expect(message).toHaveText("登録できたかを確認できません。入力した内容は残っています。登録されたかを確かめてください。")
     await expect(submit).toBeDisabled()
     await submit.click({ force: true })
-    await page.waitForTimeout(500)
+    await flush(page)
     expect(await requests(page, "register")).toBe(2)
     await form.getByRole("button", { name: "登録されたかを確認" }).click()
     await expect(message).toHaveText("みらい物産は登録されていました。")
@@ -763,5 +921,270 @@ test.describe("System States: review fixes", () => {
     await expect(rows(page)).toHaveCount(5)
     await warning.getByRole("button", { name: "再試行" }).click()
     await expect(warning).toHaveCount(0)
+  })
+})
+
+// ------------------------------------------------------------------ 接続の確認（v0.1 の最終調整 8 章）
+// 応答の順序は、模擬のサーバーの保留と解放（hold、release）で決める。時間に依存する箇所は page.clock で進める。
+test.describe("System States: connectivity confirmation", () => {
+  const indicator = (page: Page) => page.getByTestId("sys-indicator")
+  const callFrame = (page: Page) => page.getByTestId("sys-indicator-frame")
+
+  test("first load while the browser is offline: offline at once, no probe, nothing allowed; recovers after the probe", async ({ page }) => {
+    await open(page, { browserOnline: false, maintenance: [] }, { waitRows: false })
+    await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "offline")
+    await expect(page.getByTestId("sys-retry-status")).toHaveText("オフライン（端末）")
+    await expect(exportButton(page)).toBeDisabled()
+    await expect(app(page).getByTestId("sys-jobs-reason")).toHaveText("オフラインのため、書き出しを開始できません。")
+    await expect(indicator(page)).toHaveText("接続していません")
+    await expect(banner(page)).toContainText("オフラインです")
+    // ブラウザが offline の間は疎通を確認しない
+    expect(await requests(page, "probe")).toBe(0)
+    await call(page, "setBrowserOnline", true)
+    await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "online")
+    // 最初の取得は失敗しているため、接続を確認できたら取得し直す
+    await expect(rows(page)).toHaveCount(5)
+    await expect(exportButton(page)).toBeEnabled()
+  })
+
+  test("first load while the service is unreachable: never allowed before a confirmation; data is fetched after it", async ({ page }) => {
+    // 書き出しのボタンが一度でも有効になったかを、最初の描画から記録する
+    await page.addInitScript(() => {
+      const w = window as unknown as { __exportEverEnabled: boolean }
+      w.__exportEverEnabled = false
+      new MutationObserver(() => {
+        const buttons = document.querySelectorAll<HTMLButtonElement>("[data-testid=sys-app] [data-testid=sys-export-jobs] button")
+        for (const b of buttons) if (!b.disabled && b.getAttribute("aria-disabled") !== "true") w.__exportEverEnabled = true
+      }).observe(document, { subtree: true, childList: true, attributes: true })
+    })
+    await open(page, { reachable: false, maintenance: [] }, { waitRows: false })
+    await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "connecting")
+    // 一度も接続を確認していないため「再接続」としない
+    await expect(banner(page)).toContainText("サービスに接続しています")
+    await expect(exportButton(page)).toBeDisabled()
+    await expect(page.getByTestId("sys-retry-attempt")).toHaveText(/^[1-9] 回/)
+    expect(await page.evaluate(() => (window as unknown as { __exportEverEnabled: boolean }).__exportEverEnabled)).toBe(false)
+    await call(page, "setReachable", true)
+    await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "online", { timeout: 10_000 })
+    await expect(rows(page)).toHaveCount(5)
+    await expect(exportButton(page)).toBeEnabled()
+  })
+
+  test("probe timeout: a probe that ignores AbortSignal and answers after the timeout is not applied", async ({ page }) => {
+    await page.clock.install()
+    await open(page, { maintenance: [], hold: { probe: true }, ignoreAbort: true })
+    await expect(indicator(page)).toHaveAttribute("data-status", "unknown")
+    const [first] = await heldRequests(page, "probe", "tokyo")
+    expect(first).toBeTruthy()
+    // 通話の例の待ち時間の上限は 3 秒
+    await page.clock.fastForward(3000)
+    await expect(indicator(page)).toHaveAttribute("data-status", "connecting")
+    await expect(callFrame(page)).toHaveAttribute("data-attempt", "1")
+    // タイムアウトの後に届いた成功は反映しない
+    await call(page, "release", first.id, "success")
+    await flush(page)
+    await expect(indicator(page)).toHaveAttribute("data-status", "connecting")
+    // 自動の確認（1 秒後）：失敗すると 2 回目になる（後から届いた成功を反映していれば、回数は 0 に戻る）
+    await page.clock.fastForward(1000)
+    await expect.poll(async () => (await heldRequests(page, "probe", "tokyo")).length).toBe(1)
+    await call(page, "releaseAll", "probe", "fail")
+    await expect(callFrame(page)).toHaveAttribute("data-attempt", "2")
+    await expect(indicator(page)).toHaveAttribute("data-status", "connecting")
+    await page.clock.fastForward(2000)
+    await expect.poll(async () => (await heldRequests(page, "probe", "tokyo")).length).toBe(1)
+    await call(page, "releaseAll", "probe", "success")
+    await expect(indicator(page)).toHaveAttribute("data-status", "online")
+  })
+
+  test("an older probe response does not overwrite the result of the user's newer check", async ({ page }) => {
+    await open(page, { maintenance: [], hold: { probe: true }, ignoreAbort: true })
+    const [first] = await heldRequests(page, "probe", "tokyo")
+    await callFrame(page).getByRole("button", { name: "接続を確認" }).click()
+    await expect.poll(async () => (await heldRequests(page, "probe", "tokyo")).length).toBe(2)
+    const second = (await heldRequests(page, "probe", "tokyo")).find((h) => h.id !== first.id)!
+    // 古い確認の成功を先に、新しい確認の失敗を後に届ける。古い応答を反映していれば online のまま
+    await call(page, "release", first.id, "success")
+    await call(page, "release", second.id, "fail")
+    await expect(indicator(page)).toHaveAttribute("data-status", "connecting")
+    await expect(callFrame(page)).toHaveAttribute("data-attempt", "1")
+    await expect(page.getByTestId("sys-call-start")).toBeDisabled()
+  })
+
+  test("target A → B → A: responses for the first A and for B are not applied to the current A", async ({ page }) => {
+    await open(page, { maintenance: [], hold: { probe: true }, ignoreAbort: true })
+    const call_ = page.getByTestId("sys-call")
+    const [tokyo1] = await heldRequests(page, "probe", "tokyo")
+    await call_.getByLabel("大阪の通話サーバー").check()
+    await expect(callFrame(page)).toHaveAttribute("data-target", "osaka")
+    await expect(indicator(page)).toHaveAttribute("data-status", "unknown")
+    await expect.poll(async () => (await heldRequests(page, "probe", "osaka")).length).toBe(1)
+    const [osaka1] = await heldRequests(page, "probe", "osaka")
+    await call_.getByLabel("東京の通話サーバー").check()
+    await expect.poll(async () => (await heldRequests(page, "probe", "tokyo")).length).toBe(2)
+    const tokyo2 = (await heldRequests(page, "probe", "tokyo")).find((h) => h.id !== tokyo1.id)!
+    // 最初の A と B の成功を先に、現在の A の失敗を後に届ける
+    await call(page, "release", tokyo1.id, "success")
+    await call(page, "release", osaka1.id, "success")
+    await call(page, "release", tokyo2.id, "fail")
+    await expect(indicator(page)).toHaveAttribute("data-status", "connecting")
+    await expect(page.getByTestId("sys-call-start")).toBeDisabled()
+    // 確認できた後に接続先を変えたら、同じ描画から前の接続先の確認を使わない
+    await callFrame(page).getByRole("button", { name: "接続を確認" }).click()
+    await expect.poll(async () => (await heldRequests(page, "probe", "tokyo")).length).toBe(1)
+    await call(page, "releaseAll", "probe", "success")
+    await expect(indicator(page)).toContainText("東京の通話サーバーに接続しています")
+    await call_.getByLabel("大阪の通話サーバー").check()
+    await expect(indicator(page)).toHaveAttribute("data-status", "unknown")
+    await expect(indicator(page)).not.toContainText("接続しています")
+    await expect(page.getByTestId("sys-call-start")).toBeDisabled()
+  })
+
+  // 独立レビュー H1：最初の描画の関数を購読（browserOnline.subscribe）に保持したまま接続先を変えると、online の通知の後の確認が
+  // 無効な Ticket で始まり、connecting のまま止まっていた。接続先を変えた後（A → B、A → B → A）の offline → online を確かめる。
+  test("after changing the target (A → B and A → B → A), a browser offline → online is confirmed again and is not stuck in connecting", async ({ page }) => {
+    await open(page, { maintenance: [], hold: { probe: true } })
+    const call_ = page.getByTestId("sys-call")
+    const start = page.getByTestId("sys-call-start")
+    const check = callFrame(page).getByRole("button", { name: "接続を確認" })
+    /** その接続先の、保留している疎通の確認を 1 件待って解放する */
+    const answer = async (target: string, outcome: "success" | "fail") => {
+      await expect.poll(async () => (await heldRequests(page, "probe", target)).length).toBe(1)
+      const [h] = await heldRequests(page, "probe", target)
+      expect(await call(page, "release", h.id, outcome)).toBe(1)
+    }
+    const offlineOnline = async () => {
+      await call(page, "setBrowserOnline", false)
+      await expect(indicator(page)).toHaveAttribute("data-status", "offline")
+      await expect(start).toBeDisabled()
+      await call(page, "setBrowserOnline", true)
+      // online の通知だけでは接続としない
+      await expect(indicator(page)).toHaveAttribute("data-status", "connecting")
+    }
+    await answer("tokyo", "success")
+    await expect(indicator(page)).toContainText("東京の通話サーバーに接続しています")
+
+    // A → B：大阪で確認できた後に offline → online
+    await call_.getByLabel("大阪の通話サーバー").check()
+    await answer("osaka", "success")
+    await expect(indicator(page)).toContainText("大阪の通話サーバーに接続しています")
+    await offlineOnline()
+    await expect(check).toHaveAttribute("aria-disabled", "true")
+    await answer("osaka", "success")
+    await expect(indicator(page)).toHaveAttribute("data-status", "online")
+    await expect(indicator(page)).toContainText("大阪の通話サーバーに接続しています")
+    await expect(start).toBeEnabled()
+    await expect(check).not.toHaveAttribute("aria-disabled", "true")
+
+    // 失敗した確認の後の自動の確認（タイマー）も、変更の後の接続先で始まり、結果が反映される
+    await offlineOnline()
+    await answer("osaka", "fail")
+    await expect(callFrame(page)).toHaveAttribute("data-attempt", "1")
+    await answer("osaka", "success")
+    await expect(indicator(page)).toHaveAttribute("data-status", "online")
+    await expect(callFrame(page)).toHaveAttribute("data-attempt", "0")
+
+    // A → B → A：最初の A と同じ接続先に戻った後の offline → online
+    await call_.getByLabel("東京の通話サーバー").check()
+    await answer("tokyo", "success")
+    await expect(indicator(page)).toContainText("東京の通話サーバーに接続しています")
+    await offlineOnline()
+    await answer("tokyo", "success")
+    await expect(indicator(page)).toHaveAttribute("data-status", "online")
+    await expect(start).toBeEnabled()
+    await expect(check).not.toHaveAttribute("aria-disabled", "true")
+    // 前の接続先への確認を送っていない
+    expect(await heldRequests(page, "probe", "osaka")).toHaveLength(0)
+  })
+
+  test("without a probe API: only a business response confirms; a network failure returns to unconfirmed; responses for an old target are ignored", async ({ page }) => {
+    await open(page, { maintenance: [] })
+    const call_ = page.getByTestId("sys-call")
+    await call_.getByLabel("業務の要求の応答（疎通の確認の API なし）").check()
+    await expect(callFrame(page)).toHaveAttribute("data-mode", "request")
+    await expect(indicator(page)).toHaveText("接続を確認していません")
+    await expect(page.getByTestId("sys-call-start")).toBeDisabled()
+    const probes = await read<{ kind: string; detail?: string }[]>(page, "(s) => s.requests").then((r) => r.filter((x) => x.kind === "probe" && x.detail).length)
+    const fetchHistory = callFrame(page).getByRole("button", { name: "通話の履歴を取得" })
+    await fetchHistory.click()
+    await expect(indicator(page)).toHaveAttribute("data-status", "online")
+    await expect(indicator(page)).toHaveAttribute("data-confirmed-by", "request")
+    await expect(page.getByTestId("sys-call-start")).toBeEnabled()
+    await call(page, "setReachable", false)
+    await fetchHistory.click()
+    await expect(indicator(page)).toHaveAttribute("data-status", "unknown")
+    await expect(page.getByTestId("sys-call-start")).toBeDisabled()
+    await call(page, "setReachable", true)
+    // 東京で始めた要求の応答を、大阪に切り替えた後に届ける
+    await call(page, "set", { hold: { list: true } })
+    await fetchHistory.click()
+    await expect.poll(async () => (await heldRequests(page, "list")).length).toBe(1)
+    await call_.getByLabel("大阪の通話サーバー").check()
+    await expect(callFrame(page)).toHaveAttribute("data-target", "osaka")
+    await call(page, "releaseAll", "list", "success")
+    await flush(page)
+    await expect(indicator(page)).toHaveAttribute("data-status", "unknown")
+    await expect(page.getByTestId("sys-call-start")).toBeDisabled()
+    // 疎通の確認の API を呼ばない
+    expect(await read<{ kind: string; detail?: string }[]>(page, "(s) => s.requests").then((r) => r.filter((x) => x.kind === "probe" && x.detail).length)).toBe(probes)
+  })
+
+  test("after unmount, pending probes, timers and late responses do nothing", async ({ page }) => {
+    await page.clock.install()
+    await open(page, { maintenance: [] })
+    // 状態の取得の応答（reportReachable）が確認を止めても、応答を保留したままにする（ignoreAbort）
+    await call(page, "set", { hold: { probe: true }, ignoreAbort: true })
+    await page.getByTestId("sys-retry").getByRole("button", { name: "再接続を試す" }).click()
+    await expect.poll(async () => (await heldRequests(page, "probe", undefined, { includeAborted: true })).length).toBeGreaterThan(0)
+    await page.goto("/#/data-states")
+    await expect(page.getByRole("heading", { level: 1, name: "Data States" })).toBeVisible()
+    await call(page, "set", { hold: {}, reachable: false })
+    await call(page, "releaseAll", "probe", "fail")
+    const before = await requests(page, "probe")
+    // 再試行の間隔の上限（8 秒）を超えて進めても、アンマウントした画面から確認を送らない
+    await page.clock.fastForward(60_000)
+    await flush(page)
+    expect(await requests(page, "probe")).toBe(before)
+  })
+
+  test("a component outage that stops operations is shown and announced at once; a slowdown waits for the display delay", async ({ page }) => {
+    await page.clock.install()
+    await open(page, { maintenance: [] })
+    await expect(page.getByTestId("sys-retry-status")).toHaveAttribute("data-status", "online")
+    const t = await page.evaluate(() => Date.now())
+    await page.clock.pauseAt(t + 100)
+    await call(page, "setService", "customers", "outage")
+    // 状態の取得（300ms ごと、応答 80ms）が届くまで進める。表示の遅延（1 秒）は待たない
+    await page.clock.runFor(400)
+    await expect(banner(page)).toContainText("顧客の閲覧と編集を利用できません")
+    await expect(banner(page)).toContainText("保存はできません。")
+    await page.clock.runFor(1)
+    await expect(live(banner(page))).toContainText("顧客の閲覧と編集を利用できません")
+    await expect(exportButton(page)).toBeEnabled()
+
+    await call(page, "setService", "sign-in", "degraded")
+    await page.clock.runFor(400)
+    await flush(page)
+    await expect(banner(page)).not.toContainText("ログインの動作が遅くなっています")
+    await page.clock.runFor(1000)
+    await expect(banner(page)).toContainText("ほか 1 件の問題")
+  })
+
+  test("invalid job progress and counts are not shown as success", async ({ page }) => {
+    await open(page, { jobStep: 300, jobInvalidReport: "progress" })
+    const item = jobsDemo(page).locator("[data-slot=job-status-item]").first()
+    await jobsDemo(page).getByRole("button", { name: "顧客を書き出す" }).click()
+    await expect(item).toHaveAttribute("data-progress", "invalid", { timeout: 4000 })
+    await expect(item).toContainText("進み具合を確認できません")
+    await expect(item.getByRole("progressbar")).toHaveCount(0)
+    await expect(item).toHaveAttribute("data-state", "unknown", { timeout: 6000 })
+    await expect(item).toContainText("結果を確認できません")
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "完了しました" })).toHaveCount(0)
+
+    await call(page, "set", { jobInvalidReport: "counts" })
+    await jobsDemo(page).getByRole("button", { name: "顧客を書き出す" }).click()
+    await expect(item).toContainText("処理 2")
+    await expect(item).toHaveAttribute("data-state", "unknown", { timeout: 6000 })
+    await expect(jobsDemo(page).locator("[data-slot=job-status-live]")).toHaveText("顧客の書き出し（処理 2）の結果を確認できません")
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "完了しました" })).toHaveCount(0)
   })
 })

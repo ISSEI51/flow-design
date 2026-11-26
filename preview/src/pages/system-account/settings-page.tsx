@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { memberships, roles, users, workspaces, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
 import type { MockOutcome } from "../../data/system-account/mock"
-import { serverPermissions, settingsApi, settingsServer } from "../../data/system-account/settings-server"
+import { serverPermissions, settingsApi, settingsServer, type SaveContract } from "../../data/system-account/settings-server"
 import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
@@ -15,14 +15,15 @@ import { DisplaySettingsSection, ProfileSection, SettingsArea, type SettingsCate
 // Patterns / System & Account / Settings の資料のページ。
 // 例は模擬のサーバー（settings-server.ts）を使う。認証、認可、メールの送信は模擬の処理で、実際には行わない。
 
-type ServerControls = { outcome: MockOutcome; slow: boolean; ignoreAbort: boolean }
+type ServerControls = { outcome: MockOutcome; slow: boolean; ignoreAbort: boolean; contract: SaveContract }
 
 function useServerControls() {
-  const [c, setC] = useState<ServerControls>({ outcome: "success", slow: false, ignoreAbort: false })
+  const [c, setC] = useState<ServerControls>({ outcome: "success", slow: false, ignoreAbort: false, contract: "ordered" })
   useEffect(() => {
     for (const k of ["instant", "form", "action", "invite"] as const) settingsServer.outcome[k] = c.outcome
     Object.assign(settingsServer.latency, c.slow ? { instant: 3000, form: 3000, action: 3000, invite: 3000 } : { instant: 500, form: 700, action: 600, invite: 600 })
     settingsServer.ignoreAbort = c.ignoreAbort
+    settingsServer.contract = c.contract
   }, [c])
   return [c, setC] as const
 }
@@ -54,6 +55,19 @@ function ServerControlsFields({ name, c, setC }: { name: string; c: ServerContro
           <input type="checkbox" checked={c.ignoreAbort} onChange={(e) => setC({ ...c, ignoreAbort: e.target.checked })} className="size-4 accent-[var(--primary)]" />
           中止の後も応答を返す（AbortSignal を無視する）
         </label>
+      </DemoControls>
+      <DemoControls legend="サーバーでの保存の順序（製品の API の契約）">
+        {(
+          [
+            ["ordered", "受け付けた順に適用する"],
+            ["unordered", "処理した順に適用する（順序の保証なし）"],
+            ["versioned", "版の番号で競合を検出する（即時保存を項目ごとに直列にする）"],
+          ] as [SaveContract, string][]
+        ).map(([v, l]) => (
+          <Radio key={v} name={`${name}-contract`} checked={c.contract === v} onChange={() => setC({ ...c, contract: v })}>
+            {l}
+          </Radio>
+        ))}
       </DemoControls>
     </>
   )
@@ -203,6 +217,7 @@ function SettingsDemo({ c, setC }: { c: ServerControls; setC: (c: ServerControls
             hrefFor={(id) => (id ? `#/settings?category=${id}` : "#/settings")}
             // 保存が権限不足で拒否されたら、サーバーから最新の権限を取り直す（製品の責務の例）
             onPermissionDenied={() => setPermissions(permissionsOf(workspaceId, userId))}
+            saveContract={c.contract}
             headingLevel={3}
           />
         </div>
@@ -221,8 +236,8 @@ function SaveUnitsDemo({ c, setC }: { c: ServerControls; setC: (c: ServerControl
           <ServerControlsFields name="set-units" c={c} setC={setC} />
         </div>
         <div className="flex flex-col gap-12">
-          <DisplaySettingsSection scope={scope} api={settingsApi} />
-          <ProfileSection scope={scope} api={settingsApi} />
+          <DisplaySettingsSection scope={scope} api={settingsApi} saveContract={c.contract} />
+          <ProfileSection scope={scope} api={settingsApi} saveContract={c.contract} />
         </div>
       </div>
     </DemoFrame>

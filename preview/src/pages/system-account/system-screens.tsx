@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,11 +16,15 @@ import {
   displayJobState,
   getMutationAvailability,
   isJobActive,
+  isRegisteredOnServer,
   mergeJobUpdates,
   overallHealth,
   summarizeIssues,
   type ImpactScope,
   type JobState,
+  type MutationBlockReason,
+  type OfflineEntryMode,
+  type OfflineSyncState,
   type MutationStatus,
   type ServiceHealth,
   type ServiceStatusReport,
@@ -86,6 +90,16 @@ const componentImpact: Record<ServiceComponent, string> = {
   billing: "契約と請求のページを利用できません。",
 }
 
+/** 機能が停止中・メンテナンス中のときの影響（操作を止める） */
+const componentStopImpact: Record<ServiceComponent, string> = {
+  "sign-in": "ログイン中の利用は続けられます。ログインし直すことはできません。",
+  customers: "顧客の一覧と詳細の表示、保存はできません。",
+  search: "一覧の表示と編集は利用できます。",
+  export: "顧客の閲覧と編集は利用できます。",
+  notifications: "新しい通知を受け取れません。ほかの機能は利用できます。",
+  billing: "契約と請求のページを利用できません。",
+}
+
 const healthTitle = (component: ServiceComponent, health: ServiceHealth) => {
   const label = serviceComponentLabels[component]
   switch (health) {
@@ -120,35 +134,50 @@ export type SystemMonitor = ReturnType<typeof useSystemMonitor>
 /**
  * 接続の状態（useConnectivity）と、サービスの状態（模擬の状態の API の定期的な取得）をまとめて持つ。
  * 接続と稼働は別の値で持ち、1 つの error にしない。状態の取得に失敗した場合は、最後に取得した状態を時点つきで残す（正常にしない）。
+ * 接続の最初の状態は unknown（確認していない）。疎通の確認（probe）か、状態の取得の応答（reportReachable）で online にする。
+ * 状態の API に応答が届いたことは、経路に届いたことだけを意味する（サービスの稼働は応答の内容で判断する）。
  */
 export function useSystemMonitor({ api = systemServer, pollInterval = 5000 }: { api?: SystemApi; pollInterval?: number } = {}) {
   const connectivity = useConnectivity({ probe: api.probe, browserOnline: api.browser, retry: api.retry })
   const [status, setStatus] = useState<StatusState>({ report: { status: "loading" }, last: null, lastAt: null, checking: false })
   const guard = useScopeGuard("system-status")
   const reportFailure = connectivity.reportFailure
+  const reportReachable = connectivity.reportReachable
 
   const refreshStatus = useCallback(() => {
     const ticket = guard.begin("status")
     setStatus((s) => ({ ...s, checking: true }))
     api.getServiceStatus(ticket.signal).then(
       (data) => {
+        // 応答が届いた：経路に届いた（古い要求の応答でも、届いたことは確か）
+        reportReachable()
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         const t = Date.now()
         setStatus({ report: { status: "ready", components: data.components, checkedAt: t }, last: data, lastAt: t, checking: false })
       },
       (error) => {
         if (!guard.isLatest(ticket) || isAbortError(error)) return
+        guard.release(ticket)
         setStatus((s) => ({ ...s, report: { status: "failed", checkedAt: Date.now() }, checking: false }))
         if (isNetworkError(error)) reportFailure()
+        // サーバーのエラーの応答は、経路に届いた（状態の取得の失敗であり、接続の失敗ではない）
+        else reportReachable()
       }
     )
-  }, [api, guard, reportFailure])
+  }, [api, guard, reportFailure, reportReachable])
 
-  // 安全な取得のため、定期的に取得する（端末がオフラインの間は取得しない）
+  // 安全な取得のため、定期的に取得する。端末がオフラインの間、再接続の確認中（connecting）、自動の確認の上限に達した後
+  // （offline）は取得しない（疎通の確認と利用者の「再接続を試す」に任せ、自動の再試行の上限を超えて要求を送らない）
+  const connectivityStatus = useRef(connectivity.status)
+  useEffect(() => {
+    connectivityStatus.current = connectivity.status
+  })
   useEffect(() => {
     refreshStatus()
     const id = setInterval(() => {
-      if (api.browser.get()) refreshStatus()
+      const c = connectivityStatus.current
+      if (api.browser.get() && c !== "offline" && c !== "connecting") refreshStatus()
     }, pollInterval)
     return () => clearInterval(id)
   }, [api, pollInterval, refreshStatus])
@@ -190,10 +219,11 @@ export function useSystemMonitor({ api = systemServer, pollInterval = 5000 }: { 
 }
 
 /** 操作を受け付けない理由。verb は「保存」「書き出しを開始」など */
-const mutationReason = (reason: "offline" | "connecting" | "outage" | "maintenance", verb: string) =>
+const mutationReason = (reason: MutationBlockReason, verb: string) =>
   ({
     offline: `オフラインのため、${verb}できません。`,
     connecting: `接続を確認できるまで、${verb}できません。`,
+    unconfirmed: `接続を確認しています。確認できるまで、${verb}できません。`,
     outage: `障害のため、${verb}できません。`,
     maintenance: `メンテナンス中のため、${verb}できません。`,
   })[reason]
@@ -238,10 +268,21 @@ export function buildSystemIssues(
       id: "connectivity",
       condition: "connecting",
       scope: "product",
-      title: "再接続しています",
+      // 一度も接続を確認していない場合は「再接続」としない
+      title: c.confirmedAt === null ? "サービスに接続しています" : "再接続しています",
       impact: "接続を確認できるまで、保存と削除はできません。",
       // 回数は画面にだけ示す。読み上げは問題の分類が変わったときだけ（SystemBanner）
       action: c.attempt > 0 ? `自動で確認しています（${c.attempt} 回失敗しました）。` : undefined,
+    })
+  } else if (c.status === "unknown") {
+    // 最初の確認の間（確認していない）。表示は useStableIssues で遅らせ、すぐに確認できた場合は表示しない。保存の制限はすぐに行う。
+    // 切断（connectivity）とは別の ID にする（最初の確認の経過を、後の切断の表示の遅延に引き継がない。復旧の知らせを出さない）
+    issues.push({
+      id: "connectivity:unconfirmed",
+      condition: "connecting",
+      scope: "product",
+      title: c.checking || c.lostAt === null ? "サービスへの接続を確認しています" : "サービスに接続できるかを確認できません",
+      impact: "確認できるまで、保存と削除はできません。",
     })
   } else if (monitor.recoveryTasks.length > 0) {
     issues.push({ id: "connectivity", condition: "recovering", scope: "product", title: "接続が回復しました。最新の内容を確認しています", impact: "確認が終わるまで、表示中の内容への変更はできません。" })
@@ -258,6 +299,7 @@ export function buildSystemIssues(
         id: "service:product",
         condition: product,
         scope: "product",
+        immediate: true,
         title: product === "outage" ? "サービスを利用できません" : "メンテナンス中です",
         impact: "すべての機能を利用できません。" + note,
       })
@@ -265,7 +307,9 @@ export function buildSystemIssues(
       for (const k of serviceComponents) {
         const h = data.components[k]
         if (h === "operational" || h === "unknown") continue
-        issues.push({ id: `service:${k}`, condition: h, scope: componentScope[k], title: healthTitle(k, h), impact: componentImpact[k] + note })
+        // 停止とメンテナンスは操作を止めるため、表示と読み上げを遅らせない（immediate）
+        const impact = h === "outage" || h === "maintenance" ? componentStopImpact[k] : componentImpact[k]
+        issues.push({ id: `service:${k}`, condition: h, scope: componentScope[k], immediate: h === "outage" || h === "maintenance", title: healthTitle(k, h), impact: impact + note })
       }
     }
     for (const m of data.maintenance) {
@@ -302,9 +346,12 @@ export function SystemBannerArea({
   showDelay = 1000,
   hideDelay = 2000,
   include,
+  scopeKey,
   className,
 }: {
   monitor: SystemMonitor
+  /** 問題のスコープ（アカウント、ワークスペース）。変わったら、前のスコープの問題を同じ描画から示さない */
+  scopeKey?: string
   /** 示す問題を絞る（資料の例で、接続の問題だけを示す場合など） */
   include?: (issue: SystemBannerIssue) => boolean
   /** メンテナンスの詳細（Status Page など）を示す。実在する場合だけ渡す */
@@ -320,7 +367,7 @@ export function SystemBannerArea({
   const dismissed = dismissedProp ?? dismissedState
   const raw = buildSystemIssues(monitor, { onRetryConnect: monitor.connectivity.check, onShowDetails })
   const { banner } = summarizeIssues(include ? raw.filter(include) : raw, { dismissed })
-  const stable = useStableIssues(banner, { showDelay, hideDelay })
+  const stable = useStableIssues(banner, { showDelay, hideDelay, scopeKey })
   // 解消した後に表示を残している接続の問題は、最後の文（オフラインなど）ではなく、確かめていることを示す
   const shown = stable.issues.map((i) =>
     stable.settlingIds.includes(i.id) && i.id === "connectivity"
@@ -328,20 +375,22 @@ export function SystemBannerArea({
       : i
   )
 
-  // 復旧の知らせ：表示していた接続の問題が消え、ほかの問題がない場合だけ
+  // 復旧の知らせ：表示していた接続の問題が消え、その間に切断からの回復（lastOutage）があった場合だけ。
+  // 最初の確認（確認していない状態から online）は回復ではないため、知らせない
   const [notice, setNotice] = useState<SystemBannerNotice | null>(null)
-  const hadConnectivity = useRef(false)
+  const shownAtSeq = useRef<number | null>(null)
   const hasConnectivity = shown.some((i) => i.id === "connectivity")
   const outageSeq = monitor.connectivity.lastOutage?.seq ?? 0
   useEffect(() => {
     if (hasConnectivity) {
-      hadConnectivity.current = true
+      shownAtSeq.current ??= outageSeq
       setNotice(null)
       return
     }
-    if (!hadConnectivity.current) return
-    hadConnectivity.current = false
-    setNotice({ id: `recovered-${outageSeq}`, title: "接続が回復しました" })
+    if (shownAtSeq.current === null) return
+    const recovered = outageSeq > shownAtSeq.current
+    shownAtSeq.current = null
+    if (recovered) setNotice({ id: `recovered-${outageSeq}`, title: "接続が回復しました" })
   }, [hasConnectivity, outageSeq])
   // 再取得に成功した場合だけ「最新の内容を表示しています」と示す。失敗した領域がある場合は、その領域の表示に任せる
   const failedCount = monitor.recoveryFailures.length
@@ -682,15 +731,23 @@ function SearchRegion({ monitor, onSearch }: { monitor: SystemMonitor; onSearch:
 
 function CustomersRegion({ monitor, workspace, query }: { monitor: SystemMonitor; workspace: WorkspaceId; query: string }) {
   const { api, connectivity } = monitor
-  const reportFailure = connectivity.reportFailure
+  const { reportFailure, reportReachable } = connectivity
   const data = useBrowseData<{ workspace: WorkspaceId; query: string }, CustomerRow[]>({
     query: { workspace, query },
     scopeKey: workspace,
+    // 応答が届いたら経路に届いたことを伝える（データの取得の成功は useBrowseData の状態で別に扱う）
     fetcher: ({ workspace: w, query: q }, { signal }) =>
-      api.listCustomers(w, q, signal).catch((error) => {
-        if (isNetworkError(error)) reportFailure()
-        throw error
-      }),
+      api.listCustomers(w, q, signal).then(
+        (rows) => {
+          reportReachable()
+          return rows
+        },
+        (error) => {
+          if (isNetworkError(error)) reportFailure()
+          else if (!isAbortError(error)) reportReachable()
+          throw error
+        }
+      ),
   })
   // 接続が回復したら、同じ条件で再取得する。取得が終わるまで「復旧を確認中」
   const outageSeq = connectivity.lastOutage?.seq ?? 0
@@ -724,6 +781,7 @@ function CustomersRegion({ monitor, workspace, query }: { monitor: SystemMonitor
 
   const rows = data.data ?? []
   const outage = monitor.health("customers") === "outage"
+  // 接続を確認できない間（unknown を含む）は、表示中の内容に取得した時刻を示す
   const offline = connectivity.status !== "online"
   const showTime = (offline || data.refreshFailed) && data.fetchedAt !== null
   return (
@@ -868,6 +926,7 @@ export function BackgroundJobsPanel({
   notifyWith = "live-region",
   compact = false,
   unavailableReason,
+  canStart,
 }: {
   monitor: SystemMonitor
   workspace: WorkspaceId
@@ -878,6 +937,11 @@ export function BackgroundJobsPanel({
   compact?: boolean
   /** 開始できない理由（オフライン、メンテナンスなど）。渡すと開始の操作を無効にする */
   unavailableReason?: string
+  /**
+   * 開始の直前に、最新の状態（権限など）で開始してよいかを確かめる（製品の関数）。開始できない理由を返すと始めない。
+   * 描画の時点の unavailableReason だけでは、権限の変更の知らせの後、画面の更新の前に押された場合を止められないため
+   */
+  canStart?: (kind: JobKind) => string | null
 }) {
   const { api, connectivity } = monitor
   const reportFailure = connectivity.reportFailure
@@ -896,18 +960,21 @@ export function BackgroundJobsPanel({
   const startingRef = useRef(new Set<WorkspaceId>())
   const [startingList, setStartingList] = useState<WorkspaceId[]>([])
   const starting = startingList.includes(workspace)
+  // commit されたワークスペース。描画の中では書き換えない（破棄された描画のワークスペースを使わないため、layout effect で更新する）
   const workspaceRef = useRef(workspace)
-  workspaceRef.current = workspace
 
   const load = useCallback(() => {
     const ticket = guard.begin("list")
     api.listJobs(workspace, ticket.signal).then(
       (list) => {
         if (!guard.isSameScope(ticket)) return
+        // 版で古い応答を除くため、同じスコープの応答は、最新の要求でなくても反映する（mergeJobUpdates）
         setState((s) => (s.workspace !== workspace ? s : { ...s, jobs: mergeJobUpdates(s.jobs, list), error: null, fetchedAt: Date.now(), loaded: true }))
+        guard.release(ticket)
       },
       (error) => {
         if (!guard.isLatest(ticket) || isAbortError(error)) return
+        guard.release(ticket)
         if (isNetworkError(error)) reportFailure()
         setState((s) => (s.workspace !== workspace ? s : { ...s, error: "処理の状況を取得できませんでした", loaded: true }))
       }
@@ -922,14 +989,22 @@ export function BackgroundJobsPanel({
     [current.jobs, kinds]
   )
   const anyActive = jobs.some((j) => isJobActive(j.state))
+  // 示す状態。成功と部分的な失敗は、進捗と件数が正しい場合だけ（正しくなければ結果不明）。Toast と読み上げもこの値で決める
+  const views = jobs.map((j) => ({ job: j, state: displayJobState(j, current.cancel.includes(j.id)) }))
   // 最初の表示（ページに戻ったとき）に取得し、処理中のものがある間は定期的に取得する
   useEffect(() => {
     load()
   }, [load])
+  // 処理中のものがある間は定期的に取得する。再接続の確認中と、自動の確認の上限に達した後は取得しない（回復の後に取得し直す）
+  const connectivityStatus = useRef(connectivity.status)
+  useEffect(() => {
+    connectivityStatus.current = connectivity.status
+  })
   useEffect(() => {
     if (!anyActive) return
     const id = setInterval(() => {
-      if (api.browser.get()) load()
+      const c = connectivityStatus.current
+      if (api.browser.get() && c !== "offline" && c !== "connecting") load()
     }, pollInterval)
     return () => clearInterval(id)
   }, [anyActive, api, load, pollInterval])
@@ -943,23 +1018,35 @@ export function BackgroundJobsPanel({
   useEffect(() => {
     if (notifyWith !== "toast" || !current.loaded) return
     const prev = seen.current?.workspace === workspace ? seen.current.states : null
-    const next = new Map(jobs.map((j) => [j.id, j.state]))
+    const next = new Map(views.map((v) => [v.job.id, v.state]))
     seen.current = { workspace, states: next }
     if (!prev) return
-    for (const j of jobs) {
+    for (const { job: j, state } of views) {
       const before = prev.get(j.id)
-      if (!before || before === j.state || isJobActive(j.state)) continue
-      if (j.state === "succeeded") toast({ id: `job-${j.id}`, variant: "success", title: `${j.name}が完了しました`, description: `処理 ${j.number}` })
-      else if (j.state === "cancelled") toast({ id: `job-${j.id}`, variant: "neutral", title: `${j.name}をキャンセルしました`, description: `処理 ${j.number}` })
+      if (!before || before === state || isJobActive(state)) continue
+      if (state === "succeeded") toast({ id: `job-${j.id}`, variant: "success", title: `${j.name}が完了しました`, description: `処理 ${j.number}` })
+      else if (state === "cancelled") toast({ id: `job-${j.id}`, variant: "neutral", title: `${j.name}をキャンセルしました`, description: `処理 ${j.number}` })
     }
-  }, [jobs, current.loaded, notifyWith, workspace, toast])
+    // views は jobs と cancel から作る
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs, current.cancel, current.loaded, notifyWith, workspace, toast])
 
+  // 開始の応答（スコープの変更の後に届く場合がある）から、最新の load（最新の guard）を呼ぶ。
+  // 応答を待つ間に保持した closure の load は、前のスコープの guard を使うため、begin が無効な Ticket になる
   const loadRef = useRef(load)
-  loadRef.current = load
+  useLayoutEffect(() => {
+    workspaceRef.current = workspace
+    loadRef.current = load
+  })
   const start = (kind: JobKind) => {
     const w = workspace
     // 二重の開始を防ぐ（ボタンの無効化より前に、同じ描画の中の 2 回目の押下も止める）
     if (startingRef.current.has(w)) return
+    const blocked = canStart?.(kind) ?? null
+    if (blocked) {
+      patch(w, { message: blocked })
+      return
+    }
     startingRef.current.add(w)
     setStartingList([...startingRef.current])
     patch(w, { message: null })
@@ -976,15 +1063,17 @@ export function BackgroundJobsPanel({
       (job) => {
         settle()
         if (!guard.isSameScope(ticket)) return
+        guard.release(ticket)
         setState((s) => (s.workspace !== w ? s : { ...s, jobs: mergeJobUpdates(s.jobs, [job]) }))
       },
       (error) => {
         settle()
         if (!guard.isSameScope(ticket)) return
+        guard.release(ticket)
         if (isNetworkError(error)) reportFailure()
         // 開始の要求の結果が不明な場合は、もう一度押させる前に一覧で確かめる
         patch(w, { message: error instanceof MockUnknownError ? "開始できたかを確認できません。処理の一覧を確かめてください。" : "開始できませんでした。" })
-        load()
+        loadRef.current()
       }
     )
   }
@@ -994,10 +1083,14 @@ export function BackgroundJobsPanel({
     setState((s) => (s.workspace !== workspace ? s : { ...s, cancel: [...s.cancel, job.id] }))
     api.cancelJob(workspace, job.id, ticket.signal).then(
       () => {
-        if (guard.isSameScope(ticket)) load()
+        if (!guard.isSameScope(ticket)) return
+        // キーは処理ごと（cancel:<ID>）のため、終わったら記録を消す（長時間の利用で増え続けない）
+        guard.release(ticket)
+        loadRef.current()
       },
       (error) => {
         if (!guard.isSameScope(ticket)) return
+        guard.release(ticket)
         if (isNetworkError(error)) reportFailure()
         // 要求が届かなかった：キャンセルを要求していない状態に戻す
         setState((s) => (s.workspace !== workspace ? s : { ...s, cancel: s.cancel.filter((id) => id !== job.id), message: "キャンセルを要求できませんでした。" }))
@@ -1007,7 +1100,6 @@ export function BackgroundJobsPanel({
 
   const disabled = Boolean(unavailableReason) || starting
   const reasonId = `sys-jobs-reason-${workspace}-${compact ? "c" : "f"}`
-  const views = jobs.map((j) => ({ job: j, state: displayJobState(j, current.cancel.includes(j.id)) }))
   return (
     <div data-testid={compact ? "sys-export-jobs" : "sys-jobs"} data-workspace={workspace} className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -1127,10 +1219,12 @@ export function UnknownSaveExample({
     api.getMemo(workspace, customer.id, ticket.signal).then(
       (memo) => {
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         setDraft((prev) => (prev.scope !== scope || prev.saved !== null ? prev : { scope, text: memo.text, saved: memo.text, loadFailed: false }))
       },
       (error) => {
         if (!guard.isLatest(ticket) || isAbortError(error)) return
+        guard.release(ticket)
         if (isNetworkError(error)) reportFailure()
         setDraft((prev) => (prev.scope !== scope || prev.saved !== null ? prev : { ...prev, loadFailed: true }))
       }
@@ -1150,6 +1244,7 @@ export function UnknownSaveExample({
       api.getMemo(workspace, customer.id, ticket.signal).then(
         (memo) => {
           if (!guard.isLatest(ticket)) return
+          guard.release(ticket)
           if (memo.requestId === requestId) {
             setSave({ scope, state: { status: "saved" } })
             setDraft((prev) => (prev.scope === scope ? { ...prev, saved: text } : prev))
@@ -1157,6 +1252,7 @@ export function UnknownSaveExample({
         },
         (error) => {
           if (!guard.isLatest(ticket) || isAbortError(error)) return
+          guard.release(ticket)
           if (isNetworkError(error)) reportFailure()
           // 確かめられなかった：結果は不明のまま
           setSave({ scope, state: { status: "unknown", requestId, text } })
@@ -1169,10 +1265,13 @@ export function UnknownSaveExample({
   // 接続が回復したら、結果が不明な保存を自動で確かめる（安全な取得）
   const outageSeq = connectivity.lastOutage?.seq ?? 0
   const pendingCheck = s.status === "unknown" ? s : null
+  // 回復の effect から読む値。描画の中では書き換えない（commit の後に更新する。この effect より前に宣言する）
   const pendingRef = useRef(pendingCheck)
-  pendingRef.current = pendingCheck
   const loadedRef = useRef(d.saved !== null)
-  loadedRef.current = d.saved !== null
+  useLayoutEffect(() => {
+    pendingRef.current = pendingCheck
+    loadedRef.current = d.saved !== null
+  })
   useEffect(() => {
     if (outageSeq === 0) return
     // まだ取得できていない内容は、接続が回復したら取得し直す
@@ -1194,11 +1293,13 @@ export function UnknownSaveExample({
     api.saveMemo({ workspace, customerId: customer.id, text, requestId }, ticket.signal).then(
       () => {
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         setSave({ scope, state: { status: "saved" } })
         setDraft((prev) => (prev.scope === scope ? { ...prev, saved: text } : prev))
       },
       (error) => {
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         if (error instanceof MockUnknownError) {
           // 応答を受け取れなかった。サーバーでは保存されている可能性がある。
           // 1 回の応答の欠落では切断と判断しない（接続の確認は、次の失敗や定期的な取得に任せる）
@@ -1218,9 +1319,10 @@ export function UnknownSaveExample({
   const online = connectivity.status === "online"
   // 結果が不明な保存と確認中の表示は、接続の状態より優先する（結果を確かめるまで残す）。
   // 内容を取得できていない間は入力を受け付けないため、「入力した内容は残ります」と示さず、取得の状態を示す。
+  // 接続を確認していない間（unknown）は、オフラインと示さない
   const message =
     d.saved === null
-      ? !online
+      ? connectivity.status === "offline"
         ? "オフラインのため、メモを取得できません。接続が回復すると取得します。"
         : d.loadFailed
           ? "メモを取得できませんでした。"
@@ -1294,8 +1396,16 @@ export function StatusPageExample({ api = systemServer, headingLevel = 3 }: { ap
     const ticket = guard.begin("status")
     setState((s) => ({ ...s, status: s.data ? s.status : "loading" }))
     api.getServiceStatus(ticket.signal).then(
-      (data) => guard.isLatest(ticket) && setState({ data, status: "ready" }),
-      (error) => guard.isLatest(ticket) && !isAbortError(error) && setState((s) => ({ ...s, status: "failed" }))
+      (data) => {
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        setState({ data, status: "ready" })
+      },
+      (error) => {
+        if (!guard.isLatest(ticket) || isAbortError(error)) return
+        guard.release(ticket)
+        setState((s) => ({ ...s, status: "failed" }))
+      }
     )
   }, [api, guard])
   useEffect(() => {
@@ -1410,14 +1520,14 @@ function IncidentList({ api, incidents }: { api: SystemApi; incidents: Incident[
 
 // ---------------------------------------------------------------- オフラインの新規登録
 
-export type OfflineMode = "online-only" | "input-only" | "offline-queue"
+export type OfflineMode = OfflineEntryMode
 export const offlineModeLabels: Record<OfflineMode, string> = {
   "online-only": "登録不可（オンラインが必要）",
   "input-only": "入力のみ可能（回復後に利用者が登録）",
   "offline-queue": "オフライン登録（端末に保存し、後で同期）",
 }
 
-export type SyncState = "saved-locally" | "waiting" | "syncing" | "synced" | "failed" | "conflict" | "unknown"
+export type SyncState = OfflineSyncState
 export const syncStateLabels: Record<SyncState, string> = {
   "saved-locally": "端末に保存しました（まだ登録されていません）",
   waiting: "同期を待っています（まだ登録されていません）",
@@ -1458,14 +1568,19 @@ type QueueItem = { localId: string; name: string; state: SyncState; attempts: nu
 export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, onModeChange }: { monitor: SystemMonitor; workspace?: WorkspaceId; mode: OfflineMode; onModeChange: (m: OfflineMode) => void }) {
   const { api, connectivity } = monitor
   const reportFailure = connectivity.reportFailure
+  // 登録は接続を確認できた間（online）だけ。確認していない間（unknown）と再接続の確認中は送らない
   const online = connectivity.status === "online"
+  const offline = connectivity.status === "offline"
   const [name, setName] = useState("")
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [message, setMessage] = useState("")
   const guard = useScopeGuard(`${workspace}:${mode}`)
   const nextId = useRef(0)
+  // タイマーから読む最新の一覧。描画の中では書き換えない（commit の後に更新する）
   const queueRef = useRef(queue)
-  queueRef.current = queue
+  useLayoutEffect(() => {
+    queueRef.current = queue
+  })
 
   const update = (localId: string, patch: Partial<QueueItem>) => setQueue((q) => q.map((i) => (i.localId === localId ? { ...i, ...patch } : i)))
 
@@ -1474,9 +1589,15 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
       const ticket = guard.begin(item.localId)
       setQueue((q) => q.map((i) => (i.localId === item.localId ? { ...i, state: "syncing" } : i)))
       api.registerCustomer({ workspace, localId: item.localId, name: item.name }, ticket.signal).then(
-        () => guard.isLatest(ticket) && setQueue((q) => q.map((i) => (i.localId === item.localId ? { ...i, state: "synced" } : i))),
+        () => {
+          if (!guard.isLatest(ticket)) return
+          // キーは登録ごと（localId）のため、終わったら記録を消す（長時間の利用で増え続けない）
+          guard.release(ticket)
+          setQueue((q) => q.map((i) => (i.localId === item.localId ? { ...i, state: "synced" } : i)))
+        },
         (error) => {
           if (!guard.isLatest(ticket)) return
+          guard.release(ticket)
           const attempts = item.attempts + 1
           if (error instanceof MockUnknownError) {
             // 結果が不明：送り直す前に、登録されたかを確かめる（安全な取得）
@@ -1496,18 +1617,24 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
     },
     [api, guard, workspace, reportFailure]
   )
+  // タイマーから最新の send（最新の guard）を呼ぶ。描画の中では書き換えない
   const sendRef = useRef(send)
-  sendRef.current = send
+  useLayoutEffect(() => {
+    sendRef.current = send
+  })
 
   const confirm = (item: QueueItem) => {
     const ticket = guard.begin(item.localId)
     api.checkRegistration({ workspace, localId: item.localId }, ticket.signal).then(
       (r) => {
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         if (r.registered) update(item.localId, { state: "synced" })
         else update(item.localId, { state: "waiting" })
       },
-      () => undefined
+      () => {
+        if (guard.isLatest(ticket)) guard.release(ticket)
+      }
     )
   }
 
@@ -1567,6 +1694,7 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
       () => {
         if (directBusy.current === directScope) directBusy.current = null
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         nameRef.current = ""
         setName("")
         setDirect({ scope: directScope, status: "idle", localId: null, name: "" })
@@ -1575,6 +1703,7 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
       (error) => {
         if (directBusy.current === directScope) directBusy.current = null
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         if (isNetworkError(error)) reportFailure()
         if (error instanceof MockUnknownError) {
           // 登録されたかを確かめるまで、もう一度登録させない
@@ -1598,6 +1727,7 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
     api.checkRegistration({ workspace, localId }, ticket.signal).then(
       (r) => {
         if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
         if (r.registered) {
           nameRef.current = ""
           setName("")
@@ -1610,6 +1740,7 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
       },
       (error) => {
         if (!guard.isLatest(ticket) || isAbortError(error)) return
+        guard.release(ticket)
         if (isNetworkError(error)) reportFailure()
         setDirect({ scope: directScope, status: "unknown", localId, name: value })
         setMessage("登録されたかを確認できませんでした。")
@@ -1620,7 +1751,17 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
   const inputDisabled = mode === "online-only" && !online
   // 直接の登録の結果を確かめる前は、端末への保存も含めて、同じ登録を受け付けない
   const submitDisabled = (!online && mode !== "offline-queue") || direct.status !== "idle"
-  const reason = !online ? (mode === "online-only" ? "オンラインのときだけ登録できます。" : mode === "input-only" ? "接続が回復したら「登録」を押してください。入力した内容は、この画面に残ります。" : "オフラインの間は端末に保存し、接続が回復したら送ります。") : ""
+  const reason = online
+    ? ""
+    : !offline && connectivity.confirmedAt === null && connectivity.status === "unknown"
+      ? mode === "offline-queue"
+        ? "接続を確認しています。確認できるまでは端末に保存し、確認できたら送ります。"
+        : "接続を確認しています。確認できるまで登録できません。"
+      : mode === "online-only"
+        ? "オンラインのときだけ登録できます。"
+        : mode === "input-only"
+          ? "接続が回復したら「登録」を押してください。入力した内容は、この画面に残ります。"
+          : "オフラインの間は端末に保存し、接続が回復したら送ります。"
   return (
     <div data-testid="sys-offline-register" data-mode={mode} className="flex min-w-0 flex-col gap-6">
       <fieldset className="flex flex-col gap-1 text-ui">
@@ -1664,7 +1805,7 @@ export function OfflineRegistrationExample({ monitor, workspace = "hq", mode, on
       {mode === "offline-queue" && queue.length > 0 && (
         <ul aria-label="端末に保存した登録" className="flex flex-col divide-y divide-border" data-testid="sys-offline-queue">
           {queue.map((item) => (
-            <li key={item.localId} data-sync={item.state} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
+            <li key={item.localId} data-sync={item.state} data-registered={isRegisteredOnServer(item.state)} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
               <div className="flex min-w-0 flex-col gap-1">
                 <span className="text-ui font-medium">{item.name}</span>
                 <StateText condition={syncCondition[item.state]} label={syncStateLabels[item.state]} />
@@ -1710,17 +1851,122 @@ export function SyncStatesList() {
 
 // ---------------------------------------------------------------- 接続の状態の常時表示（接続が判断に必要な製品の例）
 
-/** 通話の画面の例。接続の状態が判断に必要なため、常に表示する。一度も疎通を確認していない場合は「確認していません」とし、正常と示さない */
-export function CallConnectionIndicator({ monitor }: { monitor: SystemMonitor }) {
-  const c = monitor.connectivity
-  const condition: SystemCondition = c.status === "offline" ? "offline" : c.status === "connecting" ? "connecting" : c.confirmedAt === null ? "unknown" : "operational"
-  const label = { operational: "通話のサーバーに接続しています", connecting: "再接続しています", offline: "接続していません", unknown: "接続を確認していません" }[condition as "operational" | "connecting" | "offline" | "unknown"]
+export type CallTarget = "tokyo" | "osaka"
+const callTargets: Record<CallTarget, string> = { tokyo: "東京の通話サーバー", osaka: "大阪の通話サーバー" }
+/** 接続を確認する方法。probe：疎通の確認の API。request：業務の要求の成功（疎通の確認の API がない製品） */
+export type CallConfirmMode = "probe" | "request"
+const confirmedByLabels = { probe: "疎通の確認", request: "業務の要求", initial: "確認済みの初期状態" } as const
+
+/**
+ * 通話の画面の例。接続の状態が判断に必要なため、常に表示する。接続先（通話のサーバー）ごとに確かめ直す。
+ * - 一度も確認していない間は「接続を確認していません」とし、正常と示さない。通話の開始は、接続を確認できた間だけ受け付ける
+ *   （getMutationAvailability の既定。確認していない接続で通話を始めない）。
+ * - 接続先を変えたら、前の接続先の確認の状態と応答を使わない（useConnectivity の target）。
+ * - 疎通の確認の API がない場合（request）は、業務の要求の応答が届いたときだけ確認できたとする（reportReachable）。
+ */
+export function CallConnectionIndicator({ api = systemServer }: { api?: SystemApi }) {
+  const [target, setTarget] = useState<CallTarget>("tokyo")
+  const [mode, setMode] = useState<CallConfirmMode>("probe")
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-testid="sys-indicator-frame">
-      <SystemStatusIndicator condition={condition} label={label} data-testid="sys-indicator" detail={c.confirmedAt !== null && condition === "operational" ? `${formatTime(c.confirmedAt)}に確認` : undefined} />
-      <Button variant="outline" size="sm" onClick={c.check} loading={c.checking} disabled={!monitor.api.browserOnline}>
-        接続を確認
-      </Button>
+    <div className="flex flex-col gap-6" data-testid="sys-call">
+      <div className="flex flex-col gap-4">
+        <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1 text-ui">
+          <legend className="mb-1 font-medium">接続先</legend>
+          {(Object.keys(callTargets) as CallTarget[]).map((t) => (
+            <Radio key={t} name="sys-call-target" checked={target === t} onChange={() => setTarget(t)}>
+              {callTargets[t]}
+            </Radio>
+          ))}
+        </fieldset>
+        <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1 text-ui">
+          <legend className="mb-1 font-medium">接続の確認の方法（模擬）</legend>
+          <Radio name="sys-call-mode" checked={mode === "probe"} onChange={() => setMode("probe")}>
+            疎通の確認の API
+          </Radio>
+          <Radio name="sys-call-mode" checked={mode === "request"} onChange={() => setMode("request")}>
+            業務の要求の応答（疎通の確認の API なし）
+          </Radio>
+        </fieldset>
+      </div>
+      {/* 確認の方法を変えたら、接続の状態を最初から確かめる（別の hook のインスタンスにする） */}
+      <CallConnectionPanel key={mode} api={api} target={target} mode={mode} />
+    </div>
+  )
+}
+
+function CallConnectionPanel({ api, target, mode }: { api: SystemApi; target: CallTarget; mode: CallConfirmMode }) {
+  const c = useConnectivity({
+    probe: mode === "probe" ? ({ signal, target: t }) => api.probe({ signal, target: t }) : undefined,
+    browserOnline: api.browser,
+    retry: api.retry,
+    timeout: 3000,
+    target,
+  })
+  useServerVersion(api)
+  const [message, setMessage] = useState("")
+  const condition: SystemCondition =
+    c.status === "offline" ? "offline" : c.status === "connecting" ? "connecting" : c.status === "unknown" ? "unknown" : "operational"
+  const label =
+    condition === "operational"
+      ? `${callTargets[target]}に接続しています`
+      : condition === "connecting"
+        ? c.confirmedAt === null
+          ? "接続しています"
+          : "再接続しています"
+        : condition === "offline"
+          ? "接続していません"
+          : c.checking
+            ? "接続を確認しています"
+            : "接続を確認していません"
+  // 通話の開始は、接続を確認できた間だけ（確認していない接続を確認済みとして扱わない）
+  const call = getMutationAvailability({ connectivity: c.status })
+  // 業務の要求（疎通の確認の API がない製品）。始めたときの接続先を渡し、変わった後の応答を反映しない
+  const fetchHistory = () => {
+    const t = target
+    api.listCustomers("hq", "").then(
+      () => c.reportReachable({ target: t }),
+      (error) => {
+        if (isNetworkError(error)) c.reportFailure({ target: t })
+        else if (!isAbortError(error)) c.reportReachable({ target: t })
+      }
+    )
+  }
+  return (
+    <div className="flex flex-col gap-4" data-testid="sys-indicator-frame" data-target={target} data-mode={mode} data-attempt={c.attempt}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <SystemStatusIndicator
+          condition={condition}
+          label={label}
+          data-testid="sys-indicator"
+          data-status={c.status}
+          data-confirmed-by={c.confirmedBy ?? undefined}
+          detail={c.confirmedAt !== null && condition === "operational" && c.confirmedBy ? `${formatTime(c.confirmedAt)}に確認（${confirmedByLabels[c.confirmedBy]}）` : undefined}
+        />
+        {mode === "probe" ? (
+          <Button variant="outline" size="sm" onClick={c.check} loading={c.checking} disabled={!api.browserOnline}>
+            接続を確認
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" onClick={fetchHistory} disabled={!api.browserOnline}>
+            通話の履歴を取得
+          </Button>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          size="sm"
+          data-testid="sys-call-start"
+          disabled={!call.allowed}
+          aria-describedby={!call.allowed ? "sys-call-reason" : undefined}
+          onClick={() => setMessage(`（模擬）${callTargets[target]}で通話を開始しました。`)}
+        >
+          通話を開始
+        </Button>
+        <p id="sys-call-reason" className="min-h-6 text-ui text-muted-foreground" data-testid="sys-call-reason">
+          {call.allowed ? message : call.reason === "unconfirmed" ? "接続を確認できるまで、通話を開始できません。" : mutationReason(call.reason, "通話を開始")}
+        </p>
+      </div>
     </div>
   )
 }

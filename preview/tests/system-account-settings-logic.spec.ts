@@ -1,6 +1,16 @@
 import { expect, test } from "@playwright/test"
 
-import { applyReset, planReset, resolveDependent, resolveSetting, settingAccess, toSettingSearchGroups, type SettingSearchEntry } from "../../registry/patterns/setting-resolve"
+import {
+  applyReset,
+  planReset,
+  resolveDeliveryChannel,
+  resolveDependent,
+  resolveSetting,
+  settingAccess,
+  toSettingSearchGroups,
+  type SettingSearchEntry,
+} from "../../registry/patterns/setting-resolve"
+import { classifySaveError } from "../../registry/patterns/setting-save"
 import { collectPageErrors } from "./page-errors"
 
 // Settings の値の継承、親と子の設定、閲覧と変更の可否、検索の候補、標準の設定へ戻す範囲の検品。ブラウザを使わない。
@@ -124,5 +134,89 @@ test.describe("Settings logic: reset to defaults", () => {
   })
   test("already default: no changes", () => {
     expect(planReset(defaults, defaults, ["theme", "language"]).changes).toEqual([])
+  })
+})
+
+test.describe("Settings logic: classifying save errors", () => {
+  // 指示書 6 章：保存成功、確定した失敗、バリデーションによる拒否、権限不足、結果不明、クライアント側の待機中断を区別する。
+  // 分類できない例外を確定した失敗にしない。AbortError だけで保存されなかったと判断しない。
+  test("definite failures need an explicit server answer", () => {
+    expect(classifySaveError({ outcome: "failed" })).toBe("failed")
+    expect(classifySaveError({ status: 404 })).toBe("failed")
+    expect(classifySaveError({ status: 429 })).toBe("failed")
+    expect(classifySaveError({ outcome: "failed", code: "plan" })).toBe("failed")
+  })
+  test("validation, permission and version conflicts are separate kinds", () => {
+    expect(classifySaveError({ status: 422 })).toBe("invalid")
+    expect(classifySaveError({ status: 400 })).toBe("invalid")
+    expect(classifySaveError({ code: "validation" })).toBe("invalid")
+    expect(classifySaveError({ fieldErrors: { name: "必須です" } })).toBe("invalid")
+    expect(classifySaveError({ status: 403 })).toBe("forbidden")
+    expect(classifySaveError({ outcome: "failed", code: "forbidden" })).toBe("forbidden")
+    expect(classifySaveError({ status: 409 })).toBe("conflict")
+    expect(classifySaveError({ status: 412 })).toBe("conflict")
+    expect(classifySaveError({ outcome: "failed", code: "conflict" })).toBe("conflict")
+  })
+  test("unclassified exceptions, timeouts and 5xx are unknown, not failed", () => {
+    expect(classifySaveError(new TypeError("Failed to fetch"))).toBe("unknown")
+    expect(classifySaveError(new Error("something"))).toBe("unknown")
+    expect(classifySaveError("network down")).toBe("unknown")
+    expect(classifySaveError(null)).toBe("unknown")
+    expect(classifySaveError(undefined)).toBe("unknown")
+    expect(classifySaveError({ name: "TimeoutError" })).toBe("unknown")
+    expect(classifySaveError({ outcome: "unknown" })).toBe("unknown")
+    expect(classifySaveError({ status: 500 })).toBe("unknown")
+    expect(classifySaveError({ status: 503 })).toBe("unknown")
+    expect(classifySaveError({ status: 504, code: "forbidden" })).toBe("unknown")
+  })
+  test("AbortError is the client's wait being stopped (aborted), never a definite failure", () => {
+    expect(classifySaveError(new DOMException("aborted", "AbortError"))).toBe("aborted")
+    expect(classifySaveError({ name: "AbortError", outcome: "failed" })).toBe("aborted")
+  })
+})
+
+test.describe("Settings logic: policy and personal value conflicts", () => {
+  test("a personal save that lands while a policy is introduced keeps the personal value; the policy decides the effective value", () => {
+    // 個人の値（オフ）を保存した後に、組織のポリシー（必須）が届いた
+    const before = resolveSetting({ productDefault: false, userValue: false })
+    expect(before).toMatchObject({ value: false, source: "user", locked: false })
+    const after = resolveSetting({ productDefault: false, userValue: false, orgPolicy: { value: true, reason: "必須" } })
+    expect(after).toMatchObject({ value: true, source: "org-policy", userValue: false, userValueIgnored: true, locked: true })
+    // ポリシーが外れると、保持していた個人の値が使われる
+    expect(resolveSetting({ productDefault: false, userValue: false })).toMatchObject({ value: false, source: "user" })
+  })
+  test("a locked setting is not editable even with edit permission", () => {
+    const r = resolveSetting({ productDefault: false, userValue: false, orgPolicy: { value: true, reason: "必須" } })
+    expect(settingAccess({ canView: true, canEdit: true, lockReason: r.lockReason })).toMatchObject({ editable: false, restriction: "policy" })
+  })
+})
+
+test.describe("Settings logic: notification delivery channels", () => {
+  test("mandatory, org policy, personal value and device permission are distinguished", () => {
+    // 個人の設定でオン、許可あり：届く
+    expect(resolveDeliveryChannel({ userEnabled: true, permission: "granted" })).toMatchObject({ delivers: true, blockedBy: null })
+    // 個人の設定でオフ
+    expect(resolveDeliveryChannel({ userEnabled: false })).toMatchObject({ delivers: false, blockedBy: "user" })
+    // 必須の通知：個人の値がオフでもオン。個人の値は残す
+    const required = resolveDeliveryChannel({ userEnabled: false, required: { reason: "必須" } })
+    expect(required.setting).toMatchObject({ value: true, locked: true, userValue: false, userValueIgnored: true, lockReason: "必須" })
+    expect(required).toMatchObject({ delivers: true, blockedBy: null })
+    // 組織のポリシーで使えない：オフに固定し、個人の値（オン）は残す
+    const disabled = resolveDeliveryChannel({ userEnabled: true, disabledByPolicy: { reason: "使えません" } })
+    expect(disabled.setting).toMatchObject({ value: false, locked: true, userValue: true, userValueIgnored: true })
+    expect(disabled).toMatchObject({ delivers: false, blockedBy: "policy" })
+    // 必須はポリシーより優先する
+    expect(resolveDeliveryChannel({ userEnabled: false, required: { reason: "必須" }, disabledByPolicy: { reason: "x" } }).setting.value).toBe(true)
+  })
+  test("without device permission the personal setting stays on, but nothing is delivered to this device", () => {
+    for (const permission of ["denied", "default", "unsupported"] as const) {
+      const r = resolveDeliveryChannel({ userEnabled: true, permission })
+      expect(r.setting.value).toBe(true)
+      expect(r).toMatchObject({ delivers: false, blockedBy: "permission" })
+    }
+    // 必須の通知でも、端末の許可がなければ、この端末には届かない（届けたことにしない）
+    expect(resolveDeliveryChannel({ userEnabled: true, required: { reason: "必須" }, permission: "denied" })).toMatchObject({ delivers: false, blockedBy: "permission" })
+    // 個人の設定がオフなら、原因は個人の設定（許可の有無に関係しない）
+    expect(resolveDeliveryChannel({ userEnabled: false, permission: "denied" }).blockedBy).toBe("user")
   })
 })

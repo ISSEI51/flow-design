@@ -49,7 +49,7 @@ import { accountHref, pagePermission, type AccountPage, type AccountRoute } from
 import { AccountVerifyPanel } from "./account-verify"
 import { NotificationHeaderCenter, NotificationInbox, NotificationSettingsMatrix, useMockNotificationFeed, type BrowserPermission, type OnNavigate } from "./notification-screens"
 import { GettingStartedConnected, useGettingStarted } from "./onboarding-screens"
-import { contactText, CustomerEditor, RestrictedOperations, RoleManagement, usePermissionAccess, type PermissionAccess } from "./permission-screens"
+import { contactText, CustomerEditor, RestrictedOperations, RoleManagement, usePermissionAccess, type OperationConditions, type PermissionAccess } from "./permission-screens"
 import { SettingsArea, type SettingsCategoryId } from "./settings-screens"
 import { BackgroundJobsPanel, StatusPageExample, SystemBannerArea, type SystemMonitor } from "./system-screens"
 
@@ -137,24 +137,31 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
   // お知らせ（Header の通知センターと専用のページで 1 つの状態を共有する）。専用のページの表示中は、新着を保留する。
   // 通知センターを開いている間と専用のページの表示中は、新着を保留する（閲覧の位置とフォーカスを動かさない）
   const [centerOpen, setCenterOpen] = useState(false)
-  const feed = useMockNotificationFeed({ userId, workspaceId: ws, scopeVersion: permissionKey, holdIncoming: centerOpen || route.page === "notifications" })
+  const feed = useMockNotificationFeed({
+    userId,
+    workspaceId: ws,
+    scopeVersion: permissionKey,
+    holdIncoming: centerOpen || route.page === "notifications",
+    subscriberLabel: "account-app",
+  })
   useEffect(() => setCenterOpen(false), [ws])
   // 通知から移動する処理は、開始したワークスペースと権限のスコープでだけ続ける。確認の応答を待つ間に切り替えたら、移動しない
   const navigationGuard = useScopeGuard(`${userId}:${ws}:${permissionKey}`)
-  const accessRef = useRef(access)
-  accessRef.current = access
   const onNotificationNavigate: OnNavigate = async (target, { workspaceId }) => {
     const ticket = navigationGuard.begin("navigate")
     // 通知のリンクを認可済みとして信頼しない。対象の存在と閲覧の権限を、移動の前に確かめる。
     const check = await notificationsApi.resolveTarget({ userId, workspaceId }, target, { signal: ticket.signal })
-    if (!navigationGuard.isLatest(ticket)) return { status: "cancelled" }
+    const current = navigationGuard.isLatest(ticket)
+    navigationGuard.release(ticket)
+    if (!current) return { status: "cancelled" }
     if (check.status === "deleted") return { status: "unavailable", reason: "deleted", message: `${target.label}は削除されています。お知らせは残しています。` }
     if (check.status === "forbidden") return { status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" }
     const next: Partial<AccountRoute> =
       target.kind === "customer" ? { page: "customer", id: target.id } : target.kind === "job" ? { page: "jobs" } : { page: "settings", cat: "security" }
     const needed = pagePermission[next.page as AccountPage]
-    // クリックした時点ではなく、確認の応答の後の最新の権限で判断する（再確認中は許可しない）
-    if (needed && !decideAccess(accessRef.current, { permissions: [needed] }).allowed) {
+    // クリックした時点ではなく、確認の応答の後の最新の権限で判断する（再確認中は許可しない）。
+    // access.latest() は commit した時点の値で照合する。変更の知らせを受けた処理の中で reload() を呼んだ後は、確認済みの権限を返さない
+    if (needed && !decideAccess(access.latest(), { permissions: [needed] }).allowed) {
       return { status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" }
     }
     const ok = await requestNavigate(
@@ -383,7 +390,8 @@ function PageBody(props: PageBodyProps) {
                 revision={revision}
                 recordId={route.id}
                 headingAs="h2"
-                offline={!monitor.mutation("customers").allowed}
+                connectivity={connectivityOf(monitor)}
+                serviceUnavailable={serviceBlocked(monitor, "customers")}
               />
             ) : (
               <AccessState kind="not-found" headingLevel={2} />
@@ -409,12 +417,15 @@ function PageBody(props: PageBodyProps) {
       // 権限の再確認中（refreshing）と再確認の失敗（stale）では、前の権限で開始させない
       const canExport = decideAccess(access, { permissions: ["customers.export"] }).allowed
       const mutation = monitor.mutation("export")
+      // 開始の直前に、最新の権限（access.latest()）で判断し直す。描画の時点の canExport だけに頼らない
+      const canStart = () => (decideAccess(access.latest(), { permissions: ["customers.export"] }).allowed ? null : "最新の権限を確認できるまで、開始できません。")
       return (
         <PageFrame title="処理の状況" description="書き出しと取り込みは、このページを離れても続きます。戻ったときに、結果を確かめられます。">
           <BackgroundJobsPanel
             monitor={monitor}
             workspace={ws}
-            unavailableReason={!canExport ? "顧客を書き出す権限がありません。" : !mutation.allowed ? "接続とサービスの状態を確かめるまで、開始できません。" : undefined}
+            unavailableReason={!canExport ? exportBlockedText(access) : !mutation.allowed ? "接続とサービスの状態を確かめるまで、開始できません。" : undefined}
+            canStart={canStart}
           />
         </PageFrame>
       )
@@ -426,6 +437,41 @@ function PageBody(props: PageBodyProps) {
         </PageFrame>
       )
   }
+}
+
+// ---------------------------------------------------------------- 監視の状態を、操作の条件に分ける
+// 接続（オフライン、未確認）と、サービスの状態（障害、メンテナンス）を区別する。障害を「オフライン」と示さない。
+
+/** 接続の状態。unknown（確認していない）は unconfirmed として渡し、確認済みの online と区別する（操作は許可しない） */
+function connectivityOf(monitor: SystemMonitor): "online" | "offline" | "unconfirmed" {
+  const status = monitor.connectivity.status
+  if (status === "online") return "online"
+  if (status === "unknown") return "unconfirmed"
+  return "offline"
+}
+
+/** サービスが障害かメンテナンスで、登録・更新・削除を受け付けない */
+function serviceBlocked(monitor: SystemMonitor, component: "customers" | "export") {
+  const m = monitor.mutation(component)
+  return !m.allowed && (m.reason === "outage" || m.reason === "maintenance")
+}
+
+function operationConditionsOf(monitor: SystemMonitor): OperationConditions {
+  const connectivity = connectivityOf(monitor)
+  return {
+    offline: connectivity === "offline",
+    connectivity,
+    unavailable: (["customers", "export"] as const).filter((c) => serviceBlocked(monitor, c)),
+    pending: false,
+    unmetPrerequisites: [],
+  }
+}
+
+/** 書き出しを開始できない理由（権限）。最新の権限を確認している間は、権限がないとは示さない */
+function exportBlockedText(access: PermissionAccess) {
+  const decision = decideAccess(access, { permissions: ["customers.export"] })
+  if (!decision.allowed && decision.reason.kind === "unresolved") return "最新の権限を確認できるまで、開始できません。"
+  return "顧客を書き出す権限がありません。"
 }
 
 function HomePage(props: PageBodyProps) {
@@ -460,7 +506,6 @@ function HomePage(props: PageBodyProps) {
 
 function CustomersPage(props: PageBodyProps) {
   const { scope, access, revision, monitor } = props
-  const offline = !monitor.mutation("customers").allowed
   return (
     <PageFrame title="顧客">
       <div className="flex flex-col gap-10">
@@ -469,7 +514,7 @@ function CustomersPage(props: PageBodyProps) {
           api={permissionServer.api}
           access={access}
           revision={revision}
-          conditions={{ offline, unavailable: [], pending: false, unmetPrerequisites: [] }}
+          conditions={operationConditionsOf(monitor)}
         />
         <CustomerLinks {...props} title="顧客の一覧" />
       </div>

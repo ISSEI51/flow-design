@@ -52,6 +52,10 @@ export const workspaces: Workspace[] = [
 
 type LatencyKind = "list" | "detail" | "activity" | "update" | "bulk"
 
+/** 保留した応答（検品用）。release() を呼ぶまで応答しない */
+export type HeldResponse = { kind: LatencyKind; workspace: string; key: string; release: () => void }
+export type HeldFilter = Partial<Pick<HeldResponse, "kind" | "workspace" | "key">>
+
 export type BulkMode = "success" | "partial" | "fail" | "unknown" | "request-unknown" | "request-fail" | "incomplete"
 
 type ServerConfig = {
@@ -75,6 +79,14 @@ type ServerConfig = {
   processed: string[]
   /** 一度失敗した ID。再試行では成功させる（権限がない行を除く） */
   failedBefore: Set<string>
+  /**
+   * 応答を保留する種類（検品用）。true の種類の要求は、応答の時間（latency）を使わず、release() を呼ぶまで応答しない。
+   * 保留した要求は AbortSignal を無視する（中止を無視して処理を続け、後から応答を返すサーバーを再現する）。
+   * 一括操作では、進捗の報告は続け、最後の応答（結果）だけを保留する。
+   */
+  hold: Partial<Record<LatencyKind, boolean>>
+  /** 保留中の応答（受け付けた順） */
+  held: HeldResponse[]
 }
 
 const initialConfig = (): ServerConfig => ({
@@ -88,15 +100,40 @@ const initialConfig = (): ServerConfig => ({
   requests: [],
   processed: [],
   failedBefore: new Set(),
+  hold: {},
+  held: [],
 })
 
-export const companyServer: ServerConfig & { reset: () => void; remove: (workspace: string, id: string) => void } = Object.assign(initialConfig(), {
+export const companyServer: ServerConfig & {
+  reset: () => void
+  remove: (workspace: string, id: string) => void
+  release: (filter?: HeldFilter) => Promise<number>
+} = Object.assign(initialConfig(), {
   reset() {
     Object.assign(companyServer, initialConfig())
     resetStore()
   },
   remove: (workspace: string, id: string) => removeCompany(workspace, id),
+  release: (filter?: HeldFilter) => releaseHeld(filter),
 })
+
+/**
+ * 保留中の応答のうち、条件に一致するもの（指定がなければすべて）を受け付けた順に返す（検品用）。返した件数を返す。
+ * 応答を受け取った処理（Promise の後続）と、その結果の描画が終わってから解決する（固定の待機時間を使わない）：
+ * タスクを 1 つ待って Promise の後続を終わらせ、描画のフレームを 2 つ待って React の反映を終わらせる。
+ */
+async function releaseHeld(filter: HeldFilter = {}) {
+  const match = (h: HeldResponse) =>
+    (filter.kind === undefined || h.kind === filter.kind) &&
+    (filter.workspace === undefined || h.workspace === filter.workspace) &&
+    (filter.key === undefined || h.key === filter.key)
+  const released = companyServer.held.filter(match)
+  companyServer.held = companyServer.held.filter((h) => !match(h))
+  for (const h of released) h.release()
+  await new Promise((r) => setTimeout(r, 0))
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+  return released.length
+}
 
 declare global {
   interface Window {
@@ -123,11 +160,17 @@ export function removeCompany(workspace: string, id: string) {
   store[workspace] = companiesOf(workspace).filter((c) => c.id !== id)
 }
 
-function wait<T>(kind: LatencyKind, signal: AbortSignal | undefined, produce: () => T, latency?: number): Promise<T> {
+function wait<T>(
+  kind: LatencyKind,
+  signal: AbortSignal | undefined,
+  produce: () => T,
+  latency?: number,
+  meta: { workspace: string; key: string } = { workspace: "", key: "" }
+): Promise<T> {
   const fail = companyServer.failNext[kind]
   companyServer.failNext[kind] = false
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const respond = () => {
       if (fail) reject(new Error("サーバーに接続できませんでした（模擬）"))
       else {
         try {
@@ -136,7 +179,13 @@ function wait<T>(kind: LatencyKind, signal: AbortSignal | undefined, produce: ()
           reject(e)
         }
       }
-    }, latency ?? companyServer.latency[kind])
+    }
+    // 保留：release() まで応答しない。AbortSignal も無視する。
+    if (companyServer.hold[kind]) {
+      companyServer.held.push({ kind, ...meta, release: respond })
+      return
+    }
+    const timer = setTimeout(respond, latency ?? companyServer.latency[kind])
     signal?.addEventListener("abort", () => {
       clearTimeout(timer)
       reject(new DOMException("aborted", "AbortError"))
@@ -184,18 +233,25 @@ export function matchCompanies(workspace: string, q: Pick<CompanyQuery, "search"
 }
 
 export function listCompanies(workspace: string, q: CompanyQuery, signal?: AbortSignal): Promise<CompanyPage> {
-  companyServer.requests.push({ kind: "list", workspace, key: JSON.stringify(q) })
-  return wait("list", signal, () => {
-    const rows = matchCompanies(workspace, q)
-    const { pageIndex, pageSize } = q.pagination
-    const offset = pageIndex * pageSize
-    return {
-      rows: rows.slice(offset, offset + pageSize),
-      total: companyServer.countMode === "exact" ? rows.length : null,
-      hasNextPage: offset + pageSize < rows.length,
-      offset,
-    }
-  })
+  const key = JSON.stringify(q)
+  companyServer.requests.push({ kind: "list", workspace, key })
+  return wait(
+    "list",
+    signal,
+    () => {
+      const rows = matchCompanies(workspace, q)
+      const { pageIndex, pageSize } = q.pagination
+      const offset = pageIndex * pageSize
+      return {
+        rows: rows.slice(offset, offset + pageSize),
+        total: companyServer.countMode === "exact" ? rows.length : null,
+        hasNextPage: offset + pageSize < rows.length,
+        offset,
+      }
+    },
+    undefined,
+    { workspace, key }
+  )
 }
 
 export function getCompany(workspace: string, id: string, signal?: AbortSignal): Promise<Customer> {
@@ -208,7 +264,8 @@ export function getCompany(workspace: string, id: string, signal?: AbortSignal):
       if (!c) throw new Error("この顧客は見つかりませんでした。削除された可能性があります。")
       return { ...c }
     },
-    companyServer.detailLatency[id]
+    companyServer.detailLatency[id],
+    { workspace, key: id }
   )
 }
 
@@ -288,11 +345,13 @@ export function runCompanyBulk(
       setTimeout(() => reject(new BulkRequestError("サーバーが要求を受け付けませんでした（模擬）", "failed")), step)
     )
   }
+  // 保留（検品用）：進捗の報告は続け、最後の応答だけを release() まで保留する。AbortSignal は無視する。
+  const held = companyServer.hold.bulk === true
   return new Promise((resolve, reject) => {
     let done = 0
     const tick = () => {
       // 待機を中止した場合：処理済みの行があるかもしれないため、結果が不明として返す。
-      if (context.signal.aborted) {
+      if (context.signal.aborted && !held) {
         reject(new BulkRequestError("処理の待機を中止しました（模擬）", "unknown"))
         return
       }
@@ -302,6 +361,10 @@ export function runCompanyBulk(
         setTimeout(tick, step)
         return
       }
+      if (held) companyServer.held.push({ kind: "bulk", workspace, key: JSON.stringify(target), release: finish })
+      else finish()
+    }
+    const finish = () => {
       if (mode === "request-unknown") {
         reject(new BulkRequestError("通信が途中で切れました（模擬）", "unknown"))
         return
@@ -355,15 +418,22 @@ export function listBoard(
   perColumn: number,
   signal?: AbortSignal
 ): Promise<BoardColumn[]> {
-  companyServer.requests.push({ kind: "list", workspace, key: `board:${JSON.stringify(q)}` })
-  return wait("list", signal, () => {
-    const rows = matchCompanies(workspace, q)
-    const order: ContractStatus[] = ["trial", "active", "paused", "cancelled"]
-    return order.map((status) => {
-      const all = rows.filter((c) => c.status === status)
-      return { status, total: all.length, rows: all.slice(0, perColumn) }
-    })
-  })
+  const key = `board:${JSON.stringify(q)}`
+  companyServer.requests.push({ kind: "list", workspace, key })
+  return wait(
+    "list",
+    signal,
+    () => {
+      const rows = matchCompanies(workspace, q)
+      const order: ContractStatus[] = ["trial", "active", "paused", "cancelled"]
+      return order.map((status) => {
+        const all = rows.filter((c) => c.status === status)
+        return { status, total: all.length, rows: all.slice(0, perColumn) }
+      })
+    },
+    undefined,
+    { workspace, key }
+  )
 }
 
 export function listRenewals(
@@ -372,8 +442,13 @@ export function listRenewals(
   month: string,
   signal?: AbortSignal
 ): Promise<Customer[]> {
-  companyServer.requests.push({ kind: "list", workspace, key: `calendar:${month}:${JSON.stringify(q)}` })
-  return wait("list", signal, () =>
-    matchCompanies(workspace, { ...q, sorting: [{ id: "renewalDate", desc: false }] }).filter((c) => c.renewalDate?.startsWith(month))
+  const key = `calendar:${month}:${JSON.stringify(q)}`
+  companyServer.requests.push({ kind: "list", workspace, key })
+  return wait(
+    "list",
+    signal,
+    () => matchCompanies(workspace, { ...q, sorting: [{ id: "renewalDate", desc: false }] }).filter((c) => c.renewalDate?.startsWith(month)),
+    undefined,
+    { workspace, key }
   )
 }

@@ -140,6 +140,7 @@ function OrgInfoForm({
         return r.info
       }),
     verify: ({ signal }) => api.getOrg(scope.workspaceId, { signal }).then((o) => o.info),
+    requireChanges: true,
     messages: { forbidden: "変更する権限がないため、保存できませんでした。最新の権限を確認しています。" },
     onSettled: (s) => s.state === "forbidden" && onPermissionDenied?.(),
   })
@@ -150,7 +151,7 @@ function OrgInfoForm({
     e.preventDefault()
     if (!access.editable) return
     setShowErrors(true)
-    if (!nameError) form.submit()
+    if (!nameError) void form.submit()
   }
   return (
     <form onSubmit={submit} noValidate data-testid="set-org-info">
@@ -229,6 +230,7 @@ function SecurityPolicyForm({
         return r.security
       }),
     verify: ({ signal }) => api.getOrg(scope.workspaceId, { signal }).then((o) => o.security),
+    requireChanges: true,
     messages: { forbidden: "変更する権限がないため、保存できませんでした。最新の権限を確認しています。" },
     onSettled: (s) => s.state === "forbidden" && onPermissionDenied?.(),
   })

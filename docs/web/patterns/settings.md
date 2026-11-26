@@ -2,7 +2,7 @@
 
 利用者が、設定が適用される範囲（自分か、組織か、この端末か）と保存された結果を確かめながら、設定を変えられるようにする。
 
-状態：初期実装（レビュー前。v0.1 確定ではない） ・ 実装：[`registry/patterns/settings-layout.tsx`](../../../registry/patterns/settings-layout.tsx)、[`registry/patterns/setting-save.ts`](../../../registry/patterns/setting-save.ts)、[`registry/patterns/setting-status.tsx`](../../../registry/patterns/setting-status.tsx)、[`registry/patterns/setting-resolve.ts`](../../../registry/patterns/setting-resolve.ts) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`registry/patterns/settings-layout.tsx`](../../../registry/patterns/settings-layout.tsx)、[`registry/patterns/setting-save.ts`](../../../registry/patterns/setting-save.ts)、[`registry/patterns/setting-status.tsx`](../../../registry/patterns/setting-status.tsx)、[`registry/patterns/setting-resolve.ts`](../../../registry/patterns/setting-resolve.ts) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 
@@ -40,8 +40,8 @@
 
 | 区分 | 内容 | 理由 |
 | --- | --- | --- |
-| Registry のコード | `settings-layout.tsx`：`SettingsLayout`、`SettingsNav`、`SettingsBackLink`<br>`setting-save.ts`：`useInstantSettings`、`useSettingsForm`、`classifySaveError`<br>`setting-status.tsx`：`SettingRow`、`SettingSaveStatus`<br>`setting-resolve.ts`：`resolveSetting`、`resolveDependent`、`settingAccess`、`toSettingSearchGroups`、`planReset`、`applyReset` | 保存の結果の区別、古い応答の破棄、スコープの境界、ポリシーと継承の優先順位、狭い領域の一覧と個別のページの切り替えは、製品ごとに書き直すと誤りやすい |
-| 組み合わせの例（プレビュー） | `preview/src/pages/system-account/settings-screens.tsx`（`SettingsArea`、`SettingsPageScreen`、`SettingsSearchDialog`、`settingsCategories`、`settingsSearchEntries`）、`settings-personal.tsx`、`settings-org.tsx` | カテゴリの構成、設定の項目、文言は製品で変わる。1 つの巨大な Settings の部品にしない |
+| Registry のコード | `settings-layout.tsx`：`SettingsLayout`、`SettingsNav`、`SettingsBackLink`<br>`setting-save.ts`：`useInstantSettings`、`useSettingsForm`、`classifySaveError`、`partialSaveResult`、`withVersion`<br>`setting-status.tsx`：`SettingRow`、`SettingSaveStatus`<br>`setting-resolve.ts`：`resolveSetting`、`resolveDependent`、`resolveDeliveryChannel`、`settingAccess`、`toSettingSearchGroups`、`planReset`、`applyReset` | 保存の結果の区別、古い応答の破棄、スコープの境界、ポリシーと継承の優先順位、狭い領域の一覧と個別のページの切り替えは、製品ごとに書き直すと誤りやすい |
+| 組み合わせの例（プレビュー） | `preview/src/pages/system-account/settings-screens.tsx`（`SettingsArea`、`SettingsPageScreen`、`SettingsSearchDialog`、`settingsCategories`、`settingsSearchEntries`）、`settings-personal.tsx`、`settings-org.tsx`、`settings-notifications.tsx`（`NotificationSettingsMatrix`） | カテゴリの構成、設定の項目、文言は製品で変わる。1 つの巨大な Settings の部品にしない |
 | 設計の資料だけ | レイアウトの選び方（単一のページ、Sidebar 型、Tabs、別のページ）、入口の置き方、表示形式の選び方、即時保存と明示的な保存の判断、取り消せない操作の分離 | 画面と設定の内容ごとの判断であり、コードでは決められない |
 | 製品の責務 | 設定の取得と保存の API、サーバーでの要求の順序の保証、実際の認可、権限の取り直し、ルーティング、端末の設定の保存先、変更の履歴の記録 | 製品の基盤に依存する |
 
@@ -117,23 +117,77 @@
 
 ### 保存の結果
 
-| 結果 | 即時保存 | 明示的な保存 |
-| --- | --- | --- |
-| 保存中 | 「保存中…」。操作は受け付ける（連続した変更） | 「保存中…」。保存のボタンは処理中（二重の保存を防ぐ）。入力は受け付け、保存の後に変えた項目は残す |
-| 保存しました | 「保存しました」。サーバーが返した値を表示する | 「保存しました」 |
-| 確定した失敗 | 最後に確認できたサーバーの値へ戻し、「保存できなかったため、元の設定に戻しました。」 | 入力を残し、「保存できませんでした。入力した内容は残っています。もう一度保存してください。」 |
-| 結果が不明 | 表示を戻さず、「保存できたかを確認できませんでした。」と「確認する」 | 入力を残し、同じ文と「確認する」 |
-| 確認の結果 | サーバーの値を表示する。保存されていなかった場合は「保存されていませんでした。現在保存されている設定を表示しています。」 | 保存されていなかった場合は「保存されていませんでした。入力した内容は残っています。」 |
-| 権限不足 | 戻し、「変更する権限がないため、保存できませんでした。」。製品が権限を取り直す | 入力を残し、同じ文。製品が権限を取り直し、閲覧だけの表示に変わった後も、保存されていないことを示す |
+保存の結果は、次の 8 つの状態と、反映しない古い処理結果に分ける。1 つの boolean や error にまとめない。
+
+| 結果（`SettingSaveState`） | 判断の根拠（`classifySaveError` の既定） | 即時保存 | 明示的な保存 |
+| --- | --- | --- | --- |
+| 保存中（`saving`） | 要求を送った | 「保存中…」。操作は受け付ける（連続した変更） | 「保存中…」。保存のボタンは処理中（二重の保存を防ぐ）。入力は受け付け、保存の後に変えた項目は残す |
+| 保存しました（`saved`） | 応答に、保存した項目の値が含まれる | 「保存しました」。サーバーが返した値（正規化した値）を表示する | 「保存しました」。サーバーが返した値を表示する（保存の後に変えた項目を除く） |
+| 確定した失敗（`failed`） | `outcome: "failed"`、HTTP 400〜499（下の 3 つを除く） | 最後に確認できたサーバーの値へ戻し、「保存できなかったため、元の設定に戻しました。」 | 入力を残し、「保存できませんでした。入力した内容は残っています。もう一度保存してください。」 |
+| バリデーションによる拒否（`invalid`） | `code: "invalid"` / `"validation"`、`fieldErrors`、HTTP 400、422 | 戻し、「この値は保存できなかったため、元の設定に戻しました。」 | 入力を残し、「入力した内容を保存できませんでした。…内容を確かめてください。」 |
+| 権限不足（`forbidden`） | `code: "forbidden"`、HTTP 403 | 戻し、「変更する権限がないため、保存できませんでした。」。製品が権限を取り直す | 入力を残し、同じ文。製品が権限を取り直し、閲覧だけの表示に変わった後も、保存されていないことを示す |
+| 競合（`conflict`） | `code: "conflict"`、HTTP 409、412（版の不一致） | 戻さず、「ほかの場所で変更されていたため、保存しませんでした。…」と「確認する」 | 入力を残し、同じ趣旨の文と「確認する」 |
+| 結果が不明（`unknown`、`reason: "no-response"`） | `outcome: "unknown"`、`TimeoutError`、HTTP 500 以上、分類できない例外（通信の例外を含む） | 戻さず、「保存できたかを確認できませんでした。確認するまで、この設定は変更できません。」と「確認する」 | 入力を残し、「保存できたかを確認できませんでした。確認するまで、もう一度保存できません。」と「確認する」 |
+| 待機の中止（`unknown`、`reason: "aborted"`） | `AbortError`（スコープが同じ間に、クライアントが応答を待つのを中止した） | 戻さず、「応答を待つのを中止しました。保存されたかは確認が必要です。…」と「確認する」 | 同じ |
+| 応答に値がない（`unknown`、`reason: "missing"`） | 応答に保存した項目の値が含まれない（`undefined` を含む） | 戻さず、「保存の応答にこの設定の値が含まれていなかったため、…」と「確認する」 | 同じ |
+| 戻す先が未確認の失敗（`unknown`、`reason: "unconfirmed"`、`cause`） | 即時保存の確定した失敗、バリデーションによる拒否、権限不足のうち、同じ項目の前の要求の結果が不明か競合で、最後に確認できた値が未確認のもの | 戻さず、「保存できませんでした。前の保存の結果を確認できていないため、現在保存されている設定を確認してください。」と「確認する」。`cause` に失敗の分類（`failed`、`invalid`、`forbidden`）を入れる（権限不足なら製品が権限を取り直す） | なし（フォームの保存は 1 つずつ送る） |
+| 確認の結果 | `verify` で取得したサーバーの値と、利用者が選んだ値を比べる | 一致すれば「保存しました」。異なれば「保存されていませんでした。現在保存されている設定を表示しています。」 | 一致すれば「保存しました」。異なれば「保存されていませんでした。入力した内容は残っています。」 |
+| 古い処理結果 | スコープ（アカウント、ワークスペース、権限）の変更、アンマウントの後に届いた結果 | 反映しない（`changeMany` は `aborted` を返す） | 反映しない（`submit` は `aborted` を返す） |
+
+- 分類できない例外の既定は、結果の不明とする。確定した失敗は、サーバーが処理せずに応答したことが確かな場合（`outcome: "failed"`、HTTP 4xx）だけにする。通信のライブラリに合わせて、製品が `classify` を渡す。文は `messages` か `describe`（サーバーの検証の文など）で製品が決める。
+- `AbortError` が起きたことだけで、サーバーで保存されなかったと判断しない。要求がサーバーに届いた後に待機を中止した場合、サーバーでは処理されている場合がある。スコープが同じ間の中止は「待機の中止」（結果の不明）として示し、「確認する」で確かめる。スコープの変更とアンマウントによる中止は古い処理結果であり、表示しない。
+- 状態は文字とアイコンで示す。Destructive の色は、処理されなかったことが確かな失敗（`failed`、`invalid`）だけに使う。権限不足、競合、結果の不明は warning にする。`SettingSaveStatus` は結果が不明な場合の理由を `data-reason` に示す。
 
 - 連続した設定の変更では、同じ項目の最後の要求の応答だけを表示に反映する。古い要求の応答で新しい値を上書きしない（`useScopeGuard` のキーごとの番号）。古い要求の成功は、戻す先（最後に確認できたサーバーの値）にだけ反映する。
 - アカウント、ワークスペース、権限（`scopeKey`）の変更と、アンマウントの後に届いた応答は反映しない。A → B → A と切り替えても、最初の A で始めた保存の結果（「保存しました」など）を、戻った A の画面に示さない。戻った A は、戻った時点でサーバーの値を取得して表示する（保存が先に終わっていれば保存された値、まだ終わっていなければ保存の前の値。後者は、取得し直すと最新の値になる）。
 - 変更（保存、削除の予約、接続）の要求には、画面の移動やアンマウントで中止される `AbortSignal` を渡さない。中止しても実際のサーバーでは処理される場合があり、渡すと、画面を移っただけで変更が失われる場合と失われない場合が生じる。`signal` は取得（確認）にだけ渡す。
 - 標準の設定へ戻している間に利用者が変えた項目は、戻す要求の応答で上書きしない（`changeMany`）。利用者が最後に選んだ値を保存し、「戻している間に変えた項目は、変えた値を保存しています。」と示す。
 - 結果が不明な明示的な保存は、確認するまで「変更を取り消す」を受け付けない。サーバーに保存された可能性がある値を、戻ったものとして扱わない。
+- 明示的な保存は、変更がない場合は送らない（`requireChanges`）。保存のボタンは無効にせず（フォーカスを失わせない）、押したときに「変更がないため、保存していません。」を示す。
 - 1 回だけの操作（外部アカウントの接続と解除、パスワードの変更、削除の予約と取り消し、招待）でも、確定した失敗（「…できませんでした」）と結果の不明（「…できたかを確認できませんでした。」と「確認する」）を区別する。結果が不明な間は、同じ操作のボタンを置かない（重ねて実行させない）。「確認する」はサーバーの状態を取得し直して示す。
 - 閲覧の権限と変更の権限を区別する。閲覧だけの利用者には、値と理由（「組織の設定を変更する権限がありません。変更が必要な場合は、管理者に依頼してください。」）を示し、保存のボタンを置かない。
 - 重要な設定（組織の情報、セキュリティのポリシー）には、変更者、変更日時、変更の履歴を示してよい（例：「最終変更：佐藤 花子・2026-11-20 14:05」、ポリシーの「変更の履歴」）。
+
+### 結果が不明な保存の確認
+
+- 結果が不明な項目（即時保存）とフォーム（明示的な保存）は、確認するまで同じ保存を送らない。即時保存では、その項目の操作を `readOnly` にし（`canChange(key)` が false）、`change` は送らずに false を返す。明示的な保存では、`submit` が `blocked` を返し、保存のボタンを押すと「前の保存の結果を確認するまで、もう一度保存できません。「確認する」で確かめてください。」を示す。
+- 確認中（`verifying`）の変更も送らない。確認の結果が届く前に新しい要求を送ると、確認の結果と新しい要求のどちらがサーバーの状態かを判断できない。
+- ほかの項目と、ほかの保存の単位は変更できる（結果が不明な項目だけを止める）。標準の設定へ戻す操作（`changeMany`）は、範囲に結果が不明な項目を含む場合は送らずに `blocked` を返す。
+- 「確認する」は取得（副作用のない要求）であり、保存を送り直さない。取得に失敗した場合は、結果が不明のままにする。
+- 版の照合（下記）を使う場合は、`whileUnknown` の既定を `"allow"` にする。サーバーが版の不一致を拒否するため、結果が不明な要求がサーバーで処理されていても、新しい要求が古い版で上書きすることはない（競合として示す）。版の照合を使わない製品は、`"block"`（既定）を変えない。
+- 競合の項目は、版の照合の有無にかかわらず、確認するまで送らない（古い版で送り直しても、また競合になるため）。
+- 結果が不明か競合になった項目は、最後に確認できたサーバーの値（`saved` と、版の照合の確認できた値と版）を「未確認」として扱う。最新の要求ではない要求（連続した変更の前の要求）の結果が不明な場合も同じ。未確認は、その項目の保存の成功、`verify`、`replace` で解除する（版の照合を使わない場合、最新の要求ではない要求の成功では解除しない。サーバーでの適用の順序がわからないため）。未確認の間は次のようにする。
+  - 版の照合：待っていた変更と、結果が不明な間の変更（`whileUnknown: "allow"`）を、確認できた値と等しくても送る（「確認できた値と同じなので送らない」とはしない）。サーバーでは結果が不明な要求の値が保存されている場合がある。最後に確認できた版を `ifMatch` に渡すため、結果が不明な要求がサーバーで処理されていれば、サーバーが競合として拒否する。
+  - 確定した失敗、バリデーションによる拒否、権限不足：未確認の値へ戻して「元の設定に戻しました」と示さない。表示を戻さず、`reason: "unconfirmed"` の結果の不明として示し、「確認する」で確かめる。
+
+### サーバーでの保存の順序（製品の API の契約）
+
+`useInstantSettings` は、同じ項目の最後の要求の応答だけを表示に反映する。これは表示の規則であり、サーバーで最後の要求の値が保存されていることを保証しない。最新の応答だけを表示しても、サーバーで古い要求が後から処理されれば、サーバーには古い値が残る。プレビューの模擬のサーバーの「処理した順に適用する（順序の保証なし）」で、ON → OFF → ON の 2 回目（OFF）が最後に処理されると、画面は ON と「保存しました」を示し、サーバーには OFF が残ることを検品で確かめている（取得し直すと OFF を示す）。
+
+製品の API は、次のどれかを保証する（製品の責務）。
+
+| 方式 | 内容 | この部品との接続 |
+| --- | --- | --- |
+| 受け付けた順の適用 | サーバーが同じ項目の要求に番号を付け、後から処理した古い要求を適用しない（応答には現在の値を返す） | 追加の設定はいらない。模擬のサーバーの既定（`ordered`） |
+| 直列化 | クライアントが同じ項目の要求を 1 つずつ送る | 版の照合（`versions`）を渡すと、この部品が項目ごとに直列にする |
+| 版の番号と競合の検出 | 応答に版を返し、要求に `If-Match`（最後に確認した版）を付け、一致しなければ拒否する（409、412） | `versions` に取得した版を渡し、`save` で `context.ifMatch` を送り、`withVersion(値, 版)` を返す。拒否は `conflict` |
+| 再取得 | 保存の後、またはスコープの変更の後に、サーバーの値を取得し直す | `replace(values, versions)`、または画面を作り直す |
+
+版の照合（`versions` を渡した場合）の動作：
+
+- 同じ項目の要求は 1 つずつ送る。前の要求の結果を待つ間の変更は、最後のものだけを残し、前の要求の結果の後に、新しい版で送る。待っていた値が、サーバーで確認できた値と同じなら送らない（ON → OFF → ON で、最初の ON が保存された場合は、要求は 1 回）。ただし、前の要求の結果が不明か競合の場合は、確認できた値が未確認のため、等しくても送る（OFF（確認済み）→ ON（結果の不明。サーバーでは ON が保存されている）→ OFF では、OFF を版 0 で送り、サーバーの版 1 と一致しないため競合として示す。送らずに「保存しました」と示さない）。
+- `replace` に渡す値は、製品が「取得を始めた後に送った保存の結果より新しい値」であることを保証する（版の照合を使う、または保存の後に取得し直す）。取得を続けて行う場合は、最後に始めた取得の応答だけを渡す（プレビューの「サーバーの設定を取得し直す」は `useScopeGuard` で照合する）。hook は、渡された値が古いかを判断しない。
+- `replace(values, versions)` の後に届いた、`replace` の前に送った要求の応答は、表示と、確認できた値と版を変えない（項目ごとの `replace` の回数を、要求を送った時点の回数と比べる）。古い成功（値 Y、版 3）が `replace`（値 X、版 5）を上書きすると、次の変更が版 3 で送られて不要な競合になるか、利用者が Y を選んだときに送らずに「保存しました」と示すため。
+- `changeMany` は、範囲の項目の前の要求の結果を待ってから送る。待つ間に利用者が変えた項目は、送る値から除く。
+- `useSettingsForm` は `version` を渡すと、`context.ifMatch` に最後に確認した版を渡し、応答と確認の結果の版で更新する（フォームの保存は、もともと 1 つずつ送る）。
+
+### 複数の項目の保存（`changeMany`）
+
+- 1 つの要求で複数の項目を保存する（標準の設定へ戻す）。項目ごとに要求の番号を進め、`change` と同じ規則で項目ごとに反映する。保存中に利用者が同じ項目を変えた場合（`change` との重なり）は、その項目にこの要求の結果を反映しない。
+- 一括の保存（すべて成功か、すべて失敗）：`request` は保存した項目の値を返すか、例外を投げる。例外は、すべての項目の同じ結果として扱う。
+- 部分的な成功：`request` は `partialSaveResult(saved, errors)` を返す。`saved` の項目は保存された、`errors` の項目は失敗した（`classify` で項目ごとに分類する）。どちらにもない項目は、結果が不明（`reason: "missing"`）にする。
+- 結果（`SettleOutcome`）：`saved`、`superseded`（保存中に変えた項目があり、その項目には反映しない）、`partial`（項目によって結果が異なる。`statusOf(key)` で項目ごとに示す）、`failed`、`invalid`、`forbidden`、`conflict`、`unknown`（すべての項目が同じ結果）、`blocked`（結果が不明か競合の項目を含むため送らない）、`aborted`（古い処理結果）。
+- 製品の API が一括の保存（トランザクション）か部分的な成功かは、製品が決めて資料に書く。部分的な成功の API で、項目ごとの結果を返さない場合は、応答に含まれない項目を成功と判断しない。
 
 ### 依存関係と継承
 
@@ -141,6 +195,25 @@
 - 組織のポリシー、組織の標準、製品の標準、個人の上書きの関係を示す（`resolveSetting`）。上書きしていない場合は「組織（本社営業部）の標準の言語を使っています。」、上書きした場合は「あなたが選んだ言語を使っています。組織の標準は日本語です。」。上書きを外す選択肢（「組織の標準（日本語）」）を置く。
 - 組織の必須のポリシーを、個人の設定で無効にできるようにしない。操作を無効にし、理由と、保持している個人の値（「あなたの設定（オフ）は保持しており、ポリシーが変わると使われます。」）を示す。
 - 変更できない理由は、ポリシー、契約プラン、権限の順に判断する（`settingAccess`）。契約プランで使えない設定は、権限とは別の理由として示す（「スタンダードプランでは使えません。ビジネスプランで使えます。」）。
+- 個人の設定の保存値（`userValue`）、組織のポリシー（`orgPolicy`）、実際に適用される値（`value`）を区別する。ポリシーの変更の間に個人の設定の保存の結果が届いた場合、保存したのは個人の値であり、「保存しました」は実際に適用される値が変わったことを意味しない。実際に適用される値は、ポリシーを取得し直して `resolveSetting` で決める（プレビューでは、カテゴリを開き直すと、必須のポリシーで固定し、保持している個人の値を示す）。保存の応答に実際に適用される値を含めるかは、製品の API が決める。
+- 権限を失った設定は変更できない。組織の設定のフォームは、権限を含む `scopeKey` で作り直し、保存のボタンを置かない。サーバーは処理の時点のロールで判断する。
+- 標準の設定へ戻す操作は、範囲の外の項目を送らない（`planReset` の変わる項目だけを `changeMany` に渡す）。部分的な失敗の場合も、範囲の外の項目と、成功した項目以外の値を変えない。
+
+### 通知の設定
+
+通知の種類 × 受け取り方（`NotificationSettingsMatrix`、プレビューの `settings-notifications.tsx`）は、保存に `useInstantSettings` を使う（項目ごとの最新の要求だけの反映、スコープの境界、確定した失敗の戻し、結果が不明な項目の確認と、確認するまで送らない規則を、Settings と共通にする）。
+
+| 区別するもの | 持つ場所 | 示し方 |
+| --- | --- | --- |
+| 必須の通知 | 組織のポリシー（`mandatoryNotifications`） | オンで固定し、無効にできない理由を操作の説明にする |
+| 組織のポリシーで使えないチャネル | 組織のポリシー（`notificationPolicies`） | オフで固定し、理由を示す。個人の設定（オン）は保存されたまま残す |
+| 個人の設定 | アカウント（サーバー） | Switch の値。即時保存 |
+| 端末（OS、ブラウザ）の許可 | 端末 | 製品の設定とは別に示す。許可がなくても個人の設定は変えない。「プッシュ通知をオンにしている 1 種類の通知は、許可されるまでこのブラウザには届きません（設定はオンのまま保存されています）。」 |
+
+- 4 つの層は `resolveDeliveryChannel`（`setting-resolve.ts`）で求める。必須の通知は組織のポリシーより優先する。`delivers` は、製品が配信を試み、かつ端末の許可があること（配信の可否）である。
+- 配信されたことと、既読になったことを混同しない。メールやプッシュ通知で届いても、通知は既読にならない（既読は Notifications の通知の状態が持つ）。設定の画面に「メールやプッシュ通知で届いても、通知は既読になりません。既読になるのは、アプリ内で通知を開いたときです。」を示す。
+- 結果が不明な項目は、自動で取得し直して表示する（取得は副作用のない要求。保存は送り直さない）。結果が不明だったことの文は、次の変更まで残す。
+- 統合の検証画面では、Settings の「通知を止める時間帯」（`settings-server.ts` の表示の設定）と、通知の設定の「通知を控える時間」（`notifications-server.ts`）が、同じ意味の設定を別の保存先に持っていた。`SettingsArea` に `notifications` を渡した場合は、Settings の「通知を止める時間帯」を置かず、通知の設定の方だけを示す（「統合時に確認する事項」）。
 
 ### 設定の検索
 
@@ -202,18 +275,24 @@
 | --- | --- | --- |
 | `values` | `useInstantSettings`、`useSettingsForm` | 表示する値。即時保存の保存中は利用者が選んだ値、明示的な保存は入力中の値 |
 | `saved` | 同上 | 最後に確認できたサーバーの値。即時保存の確定した失敗で戻す先、明示的な保存の未保存の判定 |
-| `status` / `statusOf(key)` | 同上 | `idle`、`saving`、`verifying`、`saved`、`failed`、`unknown`、`forbidden`（1 つの boolean や error にまとめない） |
+| `status` / `statusOf(key)` | 同上 | `idle`、`saving`、`verifying`、`saved`、`failed`、`invalid`、`forbidden`、`conflict`、`unknown`（`reason`：`no-response`、`aborted`、`missing`、`unconfirmed`。`unconfirmed` の場合は `cause` に失敗の分類） |
+| `canChange(key)` | `useInstantSettings` | 項目を変更できるか。結果が不明（`whileUnknown: "block"` の場合）、確認中、競合の間は false。操作の `readOnly` に使う |
+| `canSubmit`、`submitBlockedReason` | `useSettingsForm` | 保存を送れるか。`saving`、`unresolved`（結果が不明か競合）、`unchanged`（`requireChanges` で変更がない） |
+| `versions` / `version` | 両方（省略可能） | 取得した時点の版。渡すと版の照合を使う（`context.ifMatch`、`withVersion`） |
 | `dirty`、`dirtyKeys` | `useSettingsForm` | 未保存の変更の有無と項目。画面の移動の前の確認に使う |
 | `scopeKey` | 両方 | アカウント、ワークスペース、権限。変わったら、保存中の応答を反映せず、`values` から始め直す（同じ描画から前のスコープの値を返さない） |
-| `change(key, value)` | `useInstantSettings` | 項目を保存する。同じ項目の前の要求は最新ではなくなる |
+| `change(key, value)` | `useInstantSettings` | 項目を保存する。同じ項目の前の要求は最新ではなくなる。送らなかった場合（結果が不明、競合、前のスコープの描画の関数からの呼び出し）は false を返す |
 | `verify(key)` / `verify()` | 両方 | 結果が不明な保存のあとに、サーバーの値を取得して確かめる |
-| `changeMany(values, request)` | `useInstantSettings` | 複数の項目を 1 つの要求で保存する（標準の設定へ戻す）。項目ごとに `change` と同じ規則で反映し、保存中に利用者が変えた項目には応答を反映しない。結果は `saved`、`superseded`、`failed`、`unknown`、`forbidden`、`aborted` |
-| `replace(values)` | `useInstantSettings` | 別の経路（再取得など）で確定したサーバーの値を反映する。その項目の保存中の応答は古くなる |
-| `submit(values?)`、`discard()`、`canDiscard` | `useSettingsForm` | 保存（値を渡すと、その値を保存する）、入力の破棄。保存中、確認中、結果が不明な間は破棄しない（`canDiscard` が false） |
+| `changeMany(values, request)` | `useInstantSettings` | 複数の項目を 1 つの要求で保存する（標準の設定へ戻す）。「複数の項目の保存」を参照 |
+| `replace(values, versions?)` | `useInstantSettings` | 別の経路（再取得など）で確定したサーバーの値を反映し、true を返す。その項目の保存中の要求の応答は、後から届いても、表示と確認できた値と版を変えない。待っている変更も送らない。前のスコープの描画の関数から呼んだ場合は何もせずに false を返す |
+| `submit(values?)` | `useSettingsForm` | 保存する（値を渡すと、その値を保存する）。結果（`SubmitOutcome`）の Promise を返す：`saved`、`failed`、`invalid`、`forbidden`、`conflict`、`unknown`、`superseded`、`aborted`、`busy`、`blocked`、`unchanged` |
+| `discard()`、`canDiscard` | `useSettingsForm` | 入力の破棄。保存中、確認中、結果が不明か競合の間は破棄しない（`canDiscard` が false） |
 
 競合と境界（[System & Account](system-and-account.md) の共通の規則と、`useScopeGuard`）：
 
-- 古い要求の応答は表示に反映しない（項目のキーごとの番号）。結果の反映の前に `isLatest` で確かめる。
+- 古い要求の応答は表示に反映しない（項目のキーごとの番号）。結果の反映の前に `isLatest` で確かめ、最後の照合の後に `release` でキーの記録を消す（長時間の利用で記録が増え続けない。`replace` は番号を進めた直後に消す）。
+- 古い操作の開始（古い closure）と古い応答を区別する。`useScopeGuard` が返す値はスコープの commit に結び付き、前のスコープの描画で返した関数（取得の後に呼ぶ closure、購読や ref に保持した関数、A → B → A の最初の A の関数）から `begin` すると無効な Ticket になる。この hook は、`change`、`changeMany`、`verify`、`replace`、`submit`、`verify()`（フォーム）で、開始した Ticket（`replace` は `capture`）が現在のスコープのものかを `isCurrent` で確かめ、無効なら状態を変えずに戻る（`false`、`"aborted"`）。フォームの `setValue` と `discard` も、前のスコープの描画の関数からは状態を変えない。現在のスコープの状態を「保存中」「確認中」のまま残さない。
+- 描画の中で ref と状態を書き換えない。最新の関数と設定（`save`、`onSettled` など）、commit された状態、待っていた変更を送る関数の ref は、commit（layout effect）で更新する。保存中の要求（フォームの二重の保存の防止）は、描画の中で消さず、Ticket のスコープ（`isSameScope`）で照合する。状態はスコープ（`useScopeGuard` の値）と組にして持ち、スコープが異なる状態は使わない（描画の中で `setState` して初期化しない）。新しいスコープの描画が commit されない場合（suspend した transition など）に、表示中の前のスコープの、二重の保存の防止、`onSettled`、待っていた変更の送信、保存の状態が、破棄された描画の値に置き換わらないため。
 - スコープの変更とアンマウントで世代を進め、前の世代の応答を反映しない。`AbortSignal` はクライアントの待機の中止であり、サーバーでの処理の取り消しを保証しない（プレビューの検品では、中止に従わない模擬の保存がサーバーで処理されることを確かめている）。
 - 組織の設定の画面は、権限を含むキーで取得し直し、古い権限で取得した内容と操作を表示しない。権限が変わった時点で保存のボタンを消す。サーバーは処理の時点のロールで判断する（製品の責務）。
 - Data Browsing の `useBrowseData`（取得）と競合させない。設定の取得は `useBrowseData`（`keepPreviousData: false`、`scopeKey`）、保存はこの hook が担う。
@@ -244,8 +323,11 @@
 
 ## 製品側の責務
 
-- 設定の取得と保存の API、エラーの分類（`classify`。既定は `outcome: "unknown"`、`code: "forbidden"` / `status: 403`、`AbortError` で判断する）。
-- サーバーでの同じ項目の要求の順序の保証（版の番号、`If-Match` など）。プレビューの模擬のサーバーは、受け付けた順に適用し、後から届いた古い要求を適用しない。
+- 設定の取得と保存の API、エラーの分類（`classify`。既定の規則は「保存の結果」の表）。分類できない例外の既定（結果の不明）を、確定した失敗に変えない。
+- サーバーでの同じ項目の要求の順序の保証（受け付けた順の適用、直列化、版の番号と `If-Match`、競合の検出、再取得のどれか）。「サーバーでの保存の順序」を参照。プレビューの模擬のサーバーの既定は、受け付けた順に適用し、後から処理した古い要求を適用しない。
+- 一括の保存（`changeMany`）が、すべて成功かすべて失敗か、部分的な成功か。部分的な成功の場合は、項目ごとの結果を返す。
+- 保存の応答に、保存した項目の値（正規化した値）を含める。含めない場合、この部品は成功と判断しない。
+- 結果が不明な保存の照会（`verify`）。照会にも現在の認可が必要である（認可を失った後に照会しない）。
 - 権限の取り直し（`onSettled` で権限不足を受け取る）、ロールとポリシーの実際の判断、変更の履歴（監査ログ）の記録。
 - ルーティング（カテゴリの URL、戻る操作）、移動の前の未保存の変更の確認の接続。
 - この端末だけの設定の保存先（LocalStorage など。Registry は依存しない）。
@@ -258,9 +340,12 @@
 const s = useInstantSettings({
   values: personal.display, // 取得した値
   scopeKey: userId,
-  save: (key, value, { signal }) => api.saveDisplay(userId, key, value, { signal }),
+  // 変更の要求には、画面の移動やアンマウントで中止される signal を渡さない（signal は取得にだけ渡す）
+  save: (key, value) => api.saveDisplay(userId, key, value),
   verify: (key, { signal }) => api.getPersonal(userId, { signal }).then((p) => p.display[key]),
-  onSettled: (_key, status) => status.state === "forbidden" && refreshPermissions(),
+  // 権限不足は、戻す先が未確認のため結果の不明として示す場合（cause）も受け取る
+  onSettled: (_key, status) =>
+    (status.state === "forbidden" || (status.state === "unknown" && status.cause === "forbidden")) && refreshPermissions(),
 })
 const language = resolveSetting({ productDefault: "ja", orgDefault: org.defaultLanguage, userValue: s.values.language ?? undefined })
 
@@ -274,14 +359,35 @@ const language = resolveSetting({ productDefault: "ja", orgDefault: org.defaultL
 ```
 
 ```tsx
+// 即時保存と版の照合（製品の API が版と If-Match を持つ場合）：項目ごとに直列にし、版の不一致は conflict になる
+const s = useInstantSettings({
+  values: personal.display,
+  versions: personal.displayVersions, // 取得した時点の版
+  scopeKey: userId,
+  save: (key, value, { ifMatch }) => api.saveDisplay(userId, key, value, { ifMatch }).then((r) => withVersion(r.value, r.version)),
+  verify: (key, { signal }) => api.getPersonal(userId, { signal }).then((p) => withVersion(p.display[key], p.displayVersions[key])),
+})
+
+// 部分的な成功を返す一括の保存
+s.changeMany(changed, (values, { ifMatch }) =>
+  api.saveDisplayBatch(userId, values, { ifMatch }).then((r) => partialSaveResult(r.saved, r.errors))
+)
+
+// 取得し直した値と版を反映する。保存中の要求の応答が後から届いても、この値と版を上書きしない。
+// 取得の後に呼ぶ replace は取得を始めた描画の関数であり、スコープが変わっていれば何もせずに false を返す
+api.getPersonal(userId).then((p) => s.replace(pick(p.display, keys), pick(p.displayVersions, keys)))
+```
+
+```tsx
 // 明示的な保存：フォームごとに状態を持つ。失敗しても入力を残す
 const form = useSettingsForm({
   values: org.info,
   scopeKey: `${workspaceId}:${userId}:${permissions.join(",")}`,
   save: (values, { signal }) => api.saveOrgInfo(workspaceId, values, { signal }),
   verify: ({ signal }) => api.getOrg(workspaceId, { signal }).then((o) => o.info),
+  requireChanges: true, // 変更がない場合は送らない
 })
-<form onSubmit={(e) => { e.preventDefault(); form.submit() }}>
+<form onSubmit={(e) => { e.preventDefault(); void form.submit() }}>
   …
   <Button type="submit" loading={form.saving}>組織の情報を保存</Button>
   <SettingSaveStatus status={form.status} dirty={form.dirty} onVerify={form.verify} />
@@ -322,19 +428,34 @@ const form = useSettingsForm({
 | 検索の Dialog | `CommandDialog` ではなく、`Dialog` と `Command` で組み立てた（見た目は同じ） | `CommandDialog` は `finalFocus` を受け取らず、候補を選んだ後に検索のボタンへフォーカスを戻す。移動先の項目にフォーカスを移せない |
 | テーマの選択肢 | Radio Group と見本（視覚的な選択肢） | 指示書 4.4「見た目の選択：必要に応じて視覚的な選択肢」。[forms.md](../components/forms.md) は単一選択に Select を優先するが、見本で比べる方が早い |
 | テーマの反映 | 保存だけを行い、表示は変えない | Design Tokens v0.1 にダークモードの値がない |
-| 通知を止める時間帯 | 個人の設定の「通知」のカテゴリに、親と子の設定の例として置いた | model.ts の `quietHours` を使う。通知の種類ごとの受け取り方（Matrix）は Notifications が担う |
+| 通知を止める時間帯 | 個人の設定の「通知」のカテゴリに、親と子の設定の例として置いた。`notifications` を渡す場合は置かない | 通知の設定の「通知を控える時間」と同じ意味の設定で、保存先が別だった |
+| 分類できない例外の既定 | 結果の不明（以前は確定した失敗） | 指示書 6 章「通信例外を無条件に確定した失敗へ分類しない」。確定した失敗と示すと、保存された値を利用者が入力し直す、または戻ったと誤解する |
+| AbortError | スコープが同じ間は「待機の中止」（結果の不明）。スコープの変更の後は表示しない | 指示書 6 章。中止は、サーバーでの処理の取り消しを保証しない |
+| 結果が不明な項目の変更 | 確認するまで送らない（既定）。版の照合を使う場合は送る | 結果が不明な要求がサーバーで後から処理されると、新しい要求の値を古い値で上書きする場合がある。版の照合があれば、サーバーが拒否する |
+| 結果の不明と競合の操作 | 操作を `readOnly` にする（`disabled` にしない） | フォーカスを失わせない。理由は保存の状態の文で示す |
+| 変更なしの保存 | 明示的な保存のフォームで送らない（`requireChanges`） | Forms & Workflows の `requireChanges` と同じ規則 |
+| 戻す先が未確認の失敗 | 前の要求の結果が不明か競合の項目の確定した失敗は、戻さずに結果の不明（`reason: "unconfirmed"`）として示す。分類は `cause` に残す | 戻す先（最後に確認できた値）が、サーバーの現在の値と一致するとは限らない。「元の設定に戻しました」と示すと、サーバーの値と異なる値を確定したものとして示す。別の状態を増やさず、確認の操作（「確認する」）が既にある結果の不明にした |
+| 版の照合の直列化 | `versions` を渡した場合だけ、項目ごとに直列にする | 版の照合で並行に送ると、利用者自身の連続した変更が競合になる。版の照合を使わない場合は、従来どおり並行に送り、最新の応答だけを反映する（互換） |
+| 通知の設定の結果が不明 | 自動で取得し直し、結果が不明だった文を次の変更まで残す | Notifications の初期実装の挙動（取得し直す）を保った。保存は送り直さない |
 
 ## 統合時に確認する事項
 
 | 事項 | 内容 |
 | --- | --- |
 | Form Layout（Forms & Workflows） | 未統合のため、明示的な保存のフォームは既存の `Field`、`FieldGroup` で組んだ。統合の後に Form Layout へ置き換える |
-| Unsaved Changes（Forms & Workflows） | カテゴリの移動の前の確認と、招待の Dialog の破棄の確認は、プレビューの `DiscardAlert` で代替した。統合の後に Unsaved Changes へ置き換える。ページの移動（ルーター）との接続も確かめる |
+| Unsaved Changes（Forms & Workflows） | カテゴリの移動の前の確認と、招待の Dialog の破棄の確認は、プレビューの `DiscardAlert` で代替した。統合の後に `UnsavedChangesProvider`、`useUnsavedChanges`、`useNavigationGuard().confirmNavigation` へ置き換える。`SettingsArea` の `dirty`（保存の単位ごとの記録）と `go`／`commit` を、`useUnsavedChanges({ dirty, saving, label, canSave, revision, onSave, onDiscard })` の登録に変える。結果が不明なフォームも未保存として登録する（F&W の例：`form.isDirty \|\| form.status === "unknown"`）。即時保存の項目は登録しない |
+| 保存して移動（Forms & Workflows） | Settings にはない。F&W の `saveAndLeave` は各単位の `onSave(): Promise<boolean>` を順に呼び、false か例外で止める。`useSettingsForm.submit()` が返す `SubmitOutcome` を `onSave: () => form.submit().then((r) => r === "saved")` で接続する。`blocked`（結果が不明）と `unchanged` は false にする（移動しない）。F&W は保存の間に `revision` が変わったら確認に戻るため、`useSettingsForm` に入力の版（`revision`）を追加する必要がある（未実装） |
 | Confirmation（Forms & Workflows） | 2 段階認証の無効化、ポリシーの保存とリセット、アカウントとワークスペースの削除は `AlertDialog` で組んだ。統合の後に Confirmation へ置き換える |
 | Create & Edit（Forms & Workflows） | 入力の検証（表示名、組織名、メールアドレス）は最小限。検証のタイミングと概要の表示を合わせる |
+| 明示的な保存の重複（Forms & Workflows） | `useSettingsForm` と F&W の `useFormState`（`form-state.ts`）は、同じ処理を別の名前で持つ。保存の状態（`SettingSaveState` ↔ `FormStatus`：`saving` ↔ `submitting`、`saved` ↔ `succeeded`）、保存中の変更の反映（`settle` ↔ `handleSubmit` の成功の分岐）、結果が不明の解除（`verify()` ↔ `resolveUnknown`）、破棄（`discard` ↔ `discard`）、別の経路の値（`replace` ↔ `markSaved`）、二重の保存の防止（`busy` ↔ `submittingRef`）、世代（`useScopeGuard` ↔ 各 hook の `generation`）。統合の後は、フォームの入力の状態（dirty の比較、同期と非同期のバリデーション、`requireChanges`）を `useFormState` に任せ、`useSettingsForm` は設定に固有の部分（`forbidden`、`conflict`、版の照合、権限を含む `scopeKey`）だけを持つ形にするかを判断する |
+| 即時保存の重複（Forms & Workflows） | F&W の `useInstantSave`（`save-modes.ts`）は 1 つの値の即時保存で、保存中の変更を受け付けない（直列）。`useInstantSettings` は複数の項目をキーごとに持ち、保存中も変更を受け付け、最新の要求だけを反映する（版の照合では項目ごとに直列）。結果の不明の解除は `check()` ↔ `verify(key)`、状態は `checking` ↔ `verifying`。F&W には `forbidden`、`superseded`、`partial`、`conflict` がない。どちらを残すかを統合の後に決める（Switch の資料の「保存中は disabled」との整合を含む） |
+| エラーの分類の重複（Forms & Workflows） | F&W は `FormSaveError.outcome` が `"failed"` のものだけを確定した失敗とし、それ以外（AbortError を含む）を結果の不明とする（`save-modes.ts` の `outcomeOf`。`form-state.ts`、`confirm-action.tsx` にも同じ判定がある）。Settings の `classifySaveError` は、分類できない例外を結果の不明にする点で一致した。差：Settings は AbortError を `aborted`（スコープが同じ間は結果の不明として示し、スコープの変更の後は表示しない）、403 を `forbidden`、409 / 412 を `conflict`、422 を `invalid` に分ける。F&W の `FormSaveError` はそのまま `classifySaveError` で分類できる（`outcome` を見る）。1 つの分類の関数に統合するかを判断する |
+| 変更なしの保存とバリデーション（Forms & Workflows） | `requireChanges` は名前と規則を F&W に合わせた。dirty の比較は、Settings が `equals`（既定 `Object.is`）、F&W が `normalize` と `stableKey`。同期と非同期のバリデーション（`validateAsync`、`asyncDeps`、`asyncFailure`）は Settings にない（入力の検証は製品の責務としていた）。統合の後、プロフィールと組織の情報のフォームの検証を F&W に置き換える |
+| サーバーのバリデーションによる拒否（Forms & Workflows） | F&W は保存の結果 `{ status: "invalid", fieldErrors, formError }` で返し、項目を変えるまで保存を止める。Settings は例外を `invalid` に分類し、入力を残すだけで止めない。項目ごとの誤りの表示を F&W に合わせる |
+| 版と競合（Forms & Workflows） | F&W には版の番号、`If-Match`、409 の扱いがない（同時の編集は `invalid` の一部）。Settings の `conflict` と版の照合を、F&W の明示的な保存にも使うかを判断する |
 | Authentication | パスワードの変更の Dialog とアカウントの削除の再認証は、`Input type="password"` の最小限の例。Password Input と再認証の手順に置き換える |
 | Permission States | メンバーのロールの変更は扱っていない（一覧と招待だけ）。変更できない理由の表示（`settingAccess`）と、Restricted Action の表示を合わせる |
-| Notifications | 「通知」のカテゴリの `notifications` に、通知の種類 × 受け取り方の部品を差し込む。必須の通知（`mandatoryNotifications`）の表示と、通知を止める時間帯の重複を確かめる |
+| Notifications | 「通知」のカテゴリの `notifications` に、通知の種類 × 受け取り方の部品（`NotificationSettingsMatrix`）を差し込む。部品は `settings-notifications.tsx` に移し、`notification-screens.tsx` から再び export している。通知を止める時間帯は、Settings（`settings-server.ts`）と Notifications（`notifications-server.ts`）の 2 つの保存先があるため、製品では 1 つの保存先にする |
 | System States | 保存の結果が不明な場合の表示（「確認する」）と、オフラインからの復帰の確認の表示を合わせる |
 | Switch（Components） | [switch.md](../components/switch.md) の「保存中は disabled」の記述と、この資料の判断（連続した変更を受け付ける）を合わせる |
 | Command（Components） | `CommandDialog` に `finalFocus` を渡せるようにするか（互換を保った追加）を判断する |
@@ -366,6 +487,25 @@ const form = useSettingsForm({
 | 権限変更中の設定操作 | 古い権限の画面からの保存をサーバーが拒否し、権限を取り直して閲覧だけにする。保存中に権限が変わると、すぐに操作を止め、結果を示さない |
 | モバイルのカテゴリ移動 | 一覧（48px の行）から個別のページへ、見出しへのフォーカス、戻るリンク、一覧へ戻ったときのフォーカス、理由と保存の状態の表示、名前と操作の縦の配置 |
 | 横断的な検品 | ワークスペースの A → B → A（保存が B の間に終わる場合と、戻った後に終わる場合）と `AbortSignal` を無視する模擬 API、カテゴリを移った後の即時保存（変更を失わない、古い状態を引き継がない）、未保存の変更の確認、権限の変更の直後の描画、動きを減らす設定 |
+| 保存の結果の分類（v0.1 の最終調整） | `system-account-settings-logic.spec.ts`：確定した失敗、バリデーション、権限不足、競合、結果の不明（分類できない例外、TimeoutError、5xx）、AbortError。`system-account-settings.spec.ts`：待機の中止（サーバーは処理し、クライアントは AbortError）を結果の不明として示し確認する、応答に項目の値がない場合を成功としない、サーバーでの正規化（前後の空白）の値を表示する |
+| 結果が不明な保存の確認 | 確認するまで同じ項目を送らない（操作は readOnly）、ほかの項目は変更できる、確認中の変更も送らない、標準に戻す操作も送らない。明示的な保存は、変更がない場合と結果が不明な間に送らない |
+| サーバーでの保存の順序 | 応答の保留と解放で順序を決める（応答の時間に依存しない）：ON → OFF → ON を逆の順に処理（受け付けた順の適用）、順序を保証しないサーバーで最新の応答の表示がサーバーの値と一致しないこと、版の照合での直列化（要求は 1 回、続く変更は新しい版で送る）、ほかの場所の変更による競合と確認 |
+| 結果が不明な項目の確認済みの値（H2） | `system-account-settings.spec.ts`（保留と解放で順序を決める）：版の照合で、結果が不明な要求の後に待っていた変更（確認済みの値と等しい）を送り、競合として示す。`whileUnknown: "allow"` で確認済みの値に戻す変更を送る。版の照合を使わない場合、前の要求の結果が不明な項目の確定した失敗を「元の設定に戻しました」と示さず、`reason: "unconfirmed"` の結果の不明として示す |
+| `replace` の後の古い応答（M2） | `system-account-settings.spec.ts`：サーバーで処理した後、応答だけを保留する（`release(kind, { respond: false })`）。ほかの場所の変更の後に「サーバーの設定を取得し直す」（`replace`）を行い、保留していた成功を返す。表示を変えず、次の変更を `replace` の版で送り、受け付けられる |
+| 古い closure と描画の中の ref の書き換え | `system-account-settings-harness.spec.ts`（`preview/src/ssr/setting-save-harness.tsx` を StrictMode で描画）：前のスコープの描画の関数と、A → B → A の最初の A の関数からの `change`、`verify`、`replace`、`changeMany`、`submit`、フォームの `verify`、`setValue`、`discard` が、送らず、状態を変えない。新しいスコープの描画が commit されない間（suspend した transition）に、表示中の A で、二重の保存を送らない、保存の結果を A の状態に反映する（初期化しない）、`onSettled` から A の `verify` を呼ぶ、待っていた変更を A が送る。B を commit した後は、A の保存中の要求が B の保存を止めない。修正の前の実装の写しで、この時点の 7 件のうち 6 件が失敗することを確かめた（残りの 1 件は、修正で動作が変わらないことを確かめる検品。`setValue` と `discard` の検品は、その後に追加した） |
+| 一括の保存と部分的な成功 | 標準に戻す操作で 1 項目だけをサーバーが拒否：成功した項目はサーバーの値、拒否された項目は保存されていた値に戻す。`changeMany` と `change` の重なり（戻している間の変更を上書きしない） |
+| 設定の継承（追加） | ポリシーの変更の間に届いた個人の設定の保存の結果：個人の値を保存し、取得し直すとポリシーで固定して保持している個人の値を示す。純粋な関数でも同じ規則を確かめる |
+| 通知の設定 | `system-account-settings-logic.spec.ts`：必須の通知、組織のポリシー、個人の設定、端末の許可（`resolveDeliveryChannel`）。`system-account-settings.spec.ts`：端末の許可がない場合も個人の設定はオンのまま、届かないことを示す、配信と既読を区別する文。既存の検品（`system-account-notifications.spec.ts` の Notification settings）は Notifications の担当のファイル |
 | 純粋な関数 | `system-account-settings-logic.spec.ts`（ブラウザを使わない）：継承の優先順位、ポリシーと保持した個人の値、偽の値、親と子の設定、閲覧と変更の可否と理由の順、検索の候補の除外、リセットの範囲とロック |
 
 `system-account-settings*.spec.ts` は `npm run test:patterns`（`system-account`）と `npm run test:components` に含まれる。SSR と Hydration の検品は、指揮役が作る System & Account の SSR の検品で行う。
+
+時間に依存しない検品：保存の順序、A → B → A、画面を移った後の応答、権限の変更の間の保存、標準に戻す間の変更、結果が不明な項目の確認済みの値、`replace` の後の古い応答は、模擬のサーバーの `hold`（要求をサーバーで処理せずに保留する）と `release`（処理して応答する。`which` で順序、`outcome` で結果を選ぶ。`respond: false` で、処理だけを行い応答を次の `release` まで保留する）で順序を決める。hook の検品（`system-account-settings-harness.spec.ts`）は、要求を検品が解放するまで保留する。応答の時間（`latencyQueue`）と `waitForTimeout` で順序を作る検品は残していない。解放した応答の反映は、次のタスクまで進めてから確かめる（`flush`。時間の長さに依存しない）。
+
+未実施の検品と既知の制約：
+
+- `replace` は、表示の設定の「サーバーの設定を取得し直す」（テーマ、表示言語、タイムゾーン）でだけ使い、版の照合の場合を検品している。版の照合を使わない場合の `replace` の後の古い応答は、画面の検品をしていない（同じ規則で、`replace` の回数を比べて除く）。
+- 新しいスコープの描画が commit されない場合の検品は、検品用の画面（suspend した transition）で行い、設定の画面では行っていない。Concurrent Rendering で描画が中断される条件を、設定の画面で再現する方法がないため。
+- 版の照合での `changeMany` と `change` の重なり（前の要求を待つ間の変更を送る値から除く）は、画面の検品をしていない。
+- `useSettingsForm` の版の照合（`version`）は、プレビューのフォームで使っていない。
+- 通知の設定の結果が不明な場合の自動の取得し直しと、確認するまで送らない規則は、Notifications の担当の検品（`system-account-notifications.spec.ts`）の範囲で、文と表示を確かめている。このファイルは変更していない。

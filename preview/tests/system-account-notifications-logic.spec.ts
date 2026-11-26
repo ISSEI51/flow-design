@@ -12,12 +12,18 @@ import {
   getUnreadIndicator,
   groupNotifications,
   isInReadAllRange,
+  isUnreadCountInconsistent,
   isWithinQuietHours,
   mergeNotifications,
   notificationTriggerLabel,
   planDelivery,
+  reconcilePending,
   sortNotifications,
+  summarizeReadUpdate,
   type NotificationLike,
+  type ReadAllRange,
+  type ReadUpdateReport,
+  type ReadUpdateSummary,
 } from "../../registry/patterns/notification-state"
 import { collectPageErrors } from "./page-errors"
 
@@ -165,6 +171,96 @@ test.describe("Notification state: read-all range", () => {
     expect(createReadAllRange([n("a", 5, { sequence: 1 }), n("b", 6)], { scope: "s", by: "cursor" })).toMatchObject({ field: "createdAt" })
     expect(createReadAllRange([], { scope: "s", by: "cursor" })).toMatchObject({ until: null, ids: [] })
     expect(isInReadAllRange(n("x", 1), createReadAllRange([], { scope: "s", by: "cursor" }))).toBe(false)
+  })
+})
+
+test.describe("Notification state: unread counts and pending arrivals", () => {
+  test("count mismatch: a complete list wins; a server count below the loaded unread is raised to the loaded unread", () => {
+    const base = [n("a", 1), n("b", 2), n("c", 3)]
+    // 一覧をすべて読み込んでいる：サーバーの件数（1）ではなく、一覧の件数（3）
+    expect(computeUnreadCount({ reported: 1, base, shown: base, complete: true })).toBe(3)
+    expect(isUnreadCountInconsistent({ reported: 1, base, complete: true })).toBe(true)
+    expect(isUnreadCountInconsistent({ reported: 3, base, complete: true })).toBe(false)
+    // 読み込んでいない通知がある：サーバーの件数が読み込み済みの未読より少ない場合は、読み込み済みの未読を下限にする
+    expect(computeUnreadCount({ reported: 1, base, shown: base })).toBe(3)
+    expect(isUnreadCountInconsistent({ reported: 1, base })).toBe(true)
+    expect(isUnreadCountInconsistent({ reported: 10, base })).toBe(false)
+    // 不明は null（数えない）
+    expect(computeUnreadCount({ reported: null, base, shown: base })).toBeNull()
+    expect(isUnreadCountInconsistent({ reported: null, base })).toBe(false)
+  })
+
+  test("pending arrivals: matched by scope and ID / event ID; counted only when not yet in the server count", () => {
+    const base = [n("a", 5, { sequence: 10 })]
+    const pending = [
+      { scope: "u:hq", item: n("a", 5, { sequence: 10 }), order: 1 }, // 一覧にもある（重複）
+      { scope: "u:hq", item: n("x", 0, { eventId: "e-a", sequence: 11 }), order: 2 }, // 一覧と同じイベント（重複）
+      { scope: "u:hq", item: n("b", 0, { sequence: 12 }), order: 3 }, // 取得を始める前に届いた
+      { scope: "u:hq", item: n("c", 0, { sequence: 14 }), order: 6 }, // 取得を始めた後に届いた
+      { scope: "u:west", item: n("d", 0, { sequence: 15 }), order: 7 }, // 別のスコープ
+    ]
+    // asOf がない：受け取った順の番号と、取得を始めた時点（5）で判定する
+    const byOrder = reconcilePending({ base, pending, scope: "u:hq", startedAt: 5 })
+    expect(byOrder.shown.map((x) => x.id)).toEqual(["b", "c"])
+    expect(byOrder.counted.map((x) => x.id)).toEqual(["c"])
+    // asOf がある：sequence で判定する（asOf 13 までは件数に含まれている）
+    const byAsOf = reconcilePending({ base, pending, scope: "u:hq", asOf: 13, startedAt: 5 })
+    expect(byAsOf.counted.map((x) => x.id)).toEqual(["c"])
+    const byAsOfLater = reconcilePending({ base, pending, scope: "u:hq", asOf: 11, startedAt: 5 })
+    expect(byAsOfLater.counted.map((x) => x.id)).toEqual(["b", "c"])
+    // まだ取得していない：すべてを数える
+    expect(reconcilePending({ base: [], pending, scope: "u:west", startedAt: null }).counted.map((x) => x.id)).toEqual(["d"])
+    // 表示する件数：一覧（a、未読）＋ 件数に含まれていない新着（c）。サーバーの件数 2（a と b）に c を加え、b を二重に数えない
+    expect(computeUnreadCount({ reported: 2, base, shown: base, pending: byOrder.counted })).toBe(3)
+  })
+})
+
+test.describe("Notification state: read update results (table)", () => {
+  const ids: ReadAllRange = { kind: "ids", scope: "u:hq", ids: ["a", "b", "c"] }
+  const cursor: ReadAllRange = { kind: "cursor", scope: "u:hq", field: "sequence", until: 20, ids: ["a", "b"] }
+  const known = [n("a", 3, { sequence: 18 }), n("b", 4, { sequence: 17 }), n("late", 0, { sequence: 21 })]
+  type Row = {
+    name: string
+    range: ReadAllRange
+    report: ReadUpdateReport
+    options?: Parameters<typeof summarizeReadUpdate>[2]
+    expected: Partial<ReadUpdateSummary>
+  }
+  const rows: Row[] = [
+    { name: "all updated (ids)", range: ids, report: { updated: ["a", "b", "c"] }, expected: { status: "confirmed", count: 3, missingIds: [], identified: true } },
+    { name: "partial success", range: ids, report: { updated: ["a", "c"] }, expected: { status: "partial", count: 2, updatedIds: ["a", "c"], missingIds: ["b"] } },
+    { name: "nothing updated", range: ids, report: { updated: [] }, expected: { status: "partial", count: 0, missingIds: ["a", "b", "c"] } },
+    { name: "duplicate IDs are counted once", range: ids, report: { updated: ["a", "a", "b", "c"] }, expected: { status: "confirmed", count: 3, duplicateIds: ["a"] } },
+    { name: "out-of-range ID (arrived during the run) is not counted", range: ids, report: { updated: ["a", "b", "c", "late"] }, expected: { status: "confirmed", count: 3, unexpectedIds: ["late"] } },
+    { name: "count agrees with the IDs", range: ids, report: { updated: ["a", "b"], count: 2 }, expected: { status: "partial", count: 2 } },
+    { name: "count disagrees with the IDs", range: ids, report: { updated: ["a", "b"], count: 3 }, expected: { status: "unknown", count: null, issues: ["count-mismatch"] } },
+    { name: "count only, all", range: ids, report: { count: 3 }, expected: { status: "confirmed", count: 3, updatedIds: ["a", "b", "c"] } },
+    { name: "count only, fewer: which ones is unknown", range: ids, report: { count: 2 }, expected: { status: "partial", count: 2, identified: false, updatedIds: [] } },
+    { name: "negative count", range: ids, report: { count: -1 }, expected: { status: "unknown", count: null, issues: ["invalid-count"] } },
+    { name: "non-integer count", range: ids, report: { count: 1.5 }, expected: { status: "unknown", count: null, issues: ["invalid-count"] } },
+    { name: "count above the request", range: ids, report: { count: 4 }, expected: { status: "unknown", count: null, issues: ["invalid-count"] } },
+    { name: "NaN count", range: ids, report: { count: Number.NaN }, expected: { status: "unknown", count: null, issues: ["invalid-count"] } },
+    { name: "no report (default contract)", range: ids, report: undefined, expected: { status: "unknown", count: null, issues: ["no-report"], updatedIds: [] } },
+    { name: "no report (all-or-nothing contract)", range: ids, report: undefined, options: { contract: "all-or-nothing" }, expected: { status: "confirmed", count: 3, updatedIds: ["a", "b", "c"] } },
+    { name: "scope mismatch: nothing is applied", range: ids, report: { updated: ["a", "b", "c"], scope: "u:west" }, expected: { status: "unknown", updatedIds: [], issues: ["scope-mismatch"] } },
+    { name: "cursor: unloaded IDs are accepted; a known later arrival is not", range: cursor, report: { updated: ["a", "b", "old-1", "late"] }, options: { known }, expected: { status: "confirmed", count: 3, unexpectedIds: ["late"], updatedIds: ["a", "b", "old-1"] } },
+    { name: "cursor mismatch", range: cursor, report: { updated: ["a", "b"], until: 25 }, options: { known }, expected: { status: "unknown", count: null, issues: ["cursor-mismatch"] } },
+    { name: "cursor: count equal to the expected unread", range: cursor, report: { count: 12 }, options: { expected: 12 }, expected: { status: "confirmed", count: 12 } },
+    { name: "cursor: count below the expected unread", range: cursor, report: { count: 10 }, options: { expected: 12 }, expected: { status: "partial", count: 10 } },
+    { name: "cursor: count above the expected unread", range: cursor, report: { count: 13 }, options: { expected: 12 }, expected: { status: "unknown", count: null, issues: ["invalid-count"] } },
+    { name: "cursor: count without a known expected", range: cursor, report: { count: 7 }, expected: { status: "unknown", count: 7 } },
+    { name: "cursor: no report, all-or-nothing, expected unknown", range: cursor, report: undefined, options: { contract: "all-or-nothing" }, expected: { status: "confirmed", count: null } },
+  ]
+  for (const row of rows) {
+    test(row.name, () => {
+      expect(summarizeReadUpdate(row.range, row.report, row.options)).toMatchObject(row.expected)
+    })
+  }
+
+  test("the requested count is never used as the success count when the response does not report it", () => {
+    const summary = summarizeReadUpdate(ids, {})
+    expect(summary.count).toBeNull()
+    expect(summary.status).toBe("unknown")
   })
 })
 

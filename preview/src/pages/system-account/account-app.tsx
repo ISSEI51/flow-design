@@ -172,9 +172,18 @@ export function AccountApp() {
           keepsWork={false}
           testId="acct-reauth"
           onAuthenticated={(nextUser) => {
-            const plan = planReauthentication({ previousUserId: phase.userId, userId: nextUser, permissionsStillAllow: true, hasUnconfirmedMutation: false })
+            // 作業（未保存の入力）は復元しない（この画面は SignedInApp を作り直す）。開いていた位置に戻すかだけを決める。
+            // 再認証の後のワークスペースは、開いていたワークスペース（ログインの画面では選び直さない）
+            const plan = planReauthentication({
+              previousUserId: phase.userId,
+              userId: nextUser,
+              previousWorkspaceId: phase.route.ws,
+              workspaceId: phase.route.ws,
+              hasUnconfirmedMutation: false,
+            })
             if (plan.kind === "same-user") {
-              // 同じ利用者：開いていた画面に戻る。権限は、画面を作り直すときに取得し直す（古い権限を引き継がない）
+              // 同じ利用者：開いていた画面に戻る。戻る位置は、現在の所属と権限で確かめる（destinationFor の isAllowed）。
+              // 権限は、画面を作り直すときに取得し直す（古い権限を引き継がない）
               enterApp(nextUser as UserId, routeFromPath(destinationFor(nextUser, pathFromRoute(phase.route)).path))
             } else {
               // 別の利用者：前の利用者の画面の位置、データ、Toast を引き継がない

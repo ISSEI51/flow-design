@@ -18,6 +18,7 @@ import { compareIssues, type SystemIssue } from "@/patterns/system-status"
 // - 複数の問題は、最も重大な 1 つを示し、ほかは「ほか N 件」にまとめる（開いて確かめられる）。
 // - 読み上げは、常に置いた領域（role="status"）の中身を変えて伝える。問題の集合と分類が announceDelay の間変わらなかったときだけ
 //   更新し、接続と切断を短時間に繰り返す場合や、自動の再試行のたびに読み上げを繰り返さない。フォーカスを動かさない。
+//   immediate の問題（即時の認識が必要な重大な障害、操作を止める必要がある問題）が新たに加わった場合は、遅らせずに更新する。
 // - 閉じられるのは dismissible の問題と知らせだけ。閉じた後は、フォーカスを Banner の領域に移す（<body> に落とさない）。
 //
 // この部品が持たないもの（製品の責務）
@@ -81,12 +82,26 @@ function SystemBanner({
   // 読み上げ：問題の集合と分類（と知らせ）が announceDelay の間変わらなかったときだけ更新する。
   // 文の細部（再試行の回数など）の変化と、解消した後に表示を残している問題では更新しない。
   const announced = issues.filter((i) => !settlingIds.includes(i.id))
-  const announceKey = announced.map((i) => `${i.id}:${i.condition}`).join("|") + (shownNotice ? `#${shownNotice.id}` : "")
+  const announceKey =
+    announced.map((i) => `${i.immediate ? "!" : ""}${i.id}:${i.condition}`).join("|") + (shownNotice ? `#${shownNotice.id}` : "")
   const latest = React.useRef({ issues: announced, notice: shownNotice })
-  latest.current = { issues: announced, notice: shownNotice }
-  const [announcement, setAnnouncement] = React.useState("")
   React.useEffect(() => {
-    const timer = setTimeout(() => setAnnouncement(announcementOf(latest.current.issues, latest.current.notice)), announceDelay)
+    latest.current = { issues: announced, notice: shownNotice }
+  })
+  const [announcement, setAnnouncement] = React.useState("")
+  // 読み上げた immediate の問題（同じ問題を、遅らせずに繰り返し読み上げない）
+  const announcedImmediate = React.useRef<string[]>([])
+  React.useEffect(() => {
+    const { issues: list } = latest.current
+    const fresh = list.some((i) => i.immediate && !announcedImmediate.current.includes(`${i.id}:${i.condition}`))
+    const timer = setTimeout(
+      () => {
+        const { issues: now, notice: n } = latest.current
+        announcedImmediate.current = now.filter((i) => i.immediate).map((i) => `${i.id}:${i.condition}`)
+        setAnnouncement(announcementOf(now, n))
+      },
+      fresh ? 0 : announceDelay
+    )
     return () => clearTimeout(timer)
   }, [announceKey, announceDelay])
 

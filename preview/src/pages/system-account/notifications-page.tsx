@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useBrowseData } from "@/patterns/browse-data"
 import { NotificationIndicator } from "@/patterns/notification-indicator"
 import { describeDelivery, formatAbsoluteTime, getUnreadIndicator, notificationTriggerLabel } from "@/patterns/notification-state"
+import { useScopeGuard } from "@/patterns/scope-guard"
 
 import { channelLabels, referenceNow, seedNotifications, users, workspaces, type Channel, type UserId, type WorkspaceId } from "../../data/system-account/model"
 import { notificationsApi, notificationsServer, type AppNotification } from "../../data/system-account/notifications-server"
@@ -35,9 +36,9 @@ const workspaceOptions: [WorkspaceId, string][] = [
   ["west", workspaces.west.name],
 ]
 
-/** 対象を確かめてから移動する（通知のリンクを認可済みとして信頼しない） */
-async function checkTarget(workspaceId: WorkspaceId, target: NotificationTarget): Promise<NavigateOutcome | null> {
-  const check = await notificationsApi.resolveTarget({ userId: USER, workspaceId }, target)
+/** 対象を確かめてから移動する（通知のリンクを認可済みとして信頼しない）。確認に失敗した場合は例外を投げる（移動先の検証の失敗） */
+async function checkTarget(workspaceId: WorkspaceId, target: NotificationTarget, signal?: AbortSignal): Promise<NavigateOutcome | null> {
+  const check = await notificationsApi.resolveTarget({ userId: USER, workspaceId }, target, { signal })
   if (check.status === "deleted") return { status: "unavailable", reason: "deleted", message: `${target.label}は削除されています。お知らせは残しています。` }
   if (check.status === "forbidden") return { status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" }
   return null
@@ -79,6 +80,9 @@ function CenterDemo() {
   const [reloadKey, setReloadKey] = useState(0)
   const [open, setOpen] = useState(false)
   const [screen, setScreen] = useState<string | null>(null)
+  const [paused, setPaused] = useState(false)
+  // 製品の移動の処理：確認の応答を待つ間にアカウントやワークスペースが変わったら、移動しない（製品の責務の例）
+  const navGuard = useScopeGuard(`${user}:${workspace}`)
 
   const applyList = (v: typeof listResult) => {
     setListResult(v)
@@ -136,6 +140,16 @@ function CenterDemo() {
             <Button variant="ghost" size="sm" data-testid="ntf-center-mount" onClick={() => setMounted((m) => !m)}>
               {mounted ? "通知センターを取り除く" : "通知センターを戻す"}
             </Button>
+            <label className="flex min-h-10 cursor-pointer items-center gap-2 text-ui">
+              <input
+                type="checkbox"
+                checked={paused}
+                data-testid="ntf-center-pause"
+                onChange={(e) => setPaused(e.target.checked)}
+                className="size-4 accent-[var(--primary)]"
+              />
+              取得と購読を止める
+            </label>
           </div>
         </div>
         <AppFrame
@@ -147,13 +161,21 @@ function CenterDemo() {
                 userId={user}
                 workspaceId={workspace}
                 display={display}
+                paused={paused}
+                subscriberLabel="center"
                 open={open}
                 onOpenChange={setOpen}
                 onNavigate={async (target, { workspaceId }) => {
-                  const blocked = await checkTarget(workspaceId, target)
-                  if (blocked) return blocked
-                  setScreen(target.label)
-                  return { status: "navigated" }
+                  const ticket = navGuard.begin("navigate")
+                  try {
+                    const blocked = await checkTarget(workspaceId, target, ticket.signal)
+                    if (!navGuard.isLatest(ticket)) return { status: "cancelled" }
+                    if (blocked) return blocked
+                    setScreen(target.label)
+                    return { status: "navigated" }
+                  } finally {
+                    navGuard.release(ticket)
+                  }
                 }}
               />
             )
@@ -316,6 +338,7 @@ function InboxDemo() {
             <NotificationInbox
               key={inboxKey}
               readAllBy={readAllBy}
+              subscriberLabel="inbox"
               userId={USER}
               workspaceId={workspace}
               scrollClassName="max-h-[30rem] overflow-y-auto"
@@ -347,7 +370,11 @@ function NavigationDemo() {
   const [scopeVersion, setScopeVersion] = useState(0)
   const [revoked, setRevoked] = useState(false)
   const [deleted, setDeleted] = useState(false)
+  // 画面の閲覧の権限（模擬）。顧客の内容を閲覧できない間は、取得し直す前でも、顧客に関する通知の本文を表示しない
+  const [canViewCustomers, setCanViewCustomers] = useState(true)
   const decide = useRef<((discard: boolean) => void) | null>(null)
+  // 製品の移動の処理：確認の応答を待つ間に権限が変わったら、移動しない（製品の責務の例）
+  const navGuard = useScopeGuard(`${USER}:hq:${scopeVersion}`)
   const dirty = screen.editable && memo.length > 0
   const workspace: WorkspaceId = "hq"
   const deleteTargetOf = "n-101"
@@ -392,6 +419,16 @@ function NavigationDemo() {
           <Button variant="ghost" size="sm" data-testid="ntf-nav-scope" onClick={() => setScopeVersion((v) => v + 1)}>
             権限の変更を画面に反映する
           </Button>
+          <label className="flex min-h-10 cursor-pointer items-center gap-2 text-ui">
+            <input
+              type="checkbox"
+              checked={canViewCustomers}
+              data-testid="ntf-nav-can-view"
+              onChange={(e) => setCanViewCustomers(e.target.checked)}
+              className="size-4 accent-[var(--primary)]"
+            />
+            顧客の内容を閲覧できる（画面の権限）
+          </label>
         </DemoControls>
         <AppFrame
           testId="ntf-nav-app"
@@ -400,17 +437,26 @@ function NavigationDemo() {
               userId={USER}
               workspaceId={workspace}
               scopeVersion={scopeVersion}
+              subscriberLabel="nav"
               open={open}
               onOpenChange={setOpen}
+              canViewContent={(n) => canViewCustomers || n.target?.kind !== "customer"}
               onNavigate={async (target, { workspaceId }) => {
-                // 1. 未保存の変更があれば、破棄するかを確かめる（Unsaved Changes は Forms & Workflows で扱う。ここでは DiscardAlert）
-                if (dirty && !(await confirmDiscard())) return { status: "cancelled" }
-                // 2. 移動先で、対象の存在と閲覧の権限を確かめる（通知のリンクを認可済みとして信頼しない）
-                const blocked = await checkTarget(workspaceId, target)
-                if (blocked) return blocked
-                setMemo("")
-                setScreen({ title: target.label, editable: false })
-                return { status: "navigated" }
+                const ticket = navGuard.begin("navigate")
+                try {
+                  // 1. 未保存の変更があれば、破棄するかを確かめる（Unsaved Changes は Forms & Workflows で扱う。ここでは DiscardAlert）
+                  if (dirty && !(await confirmDiscard())) return { status: "cancelled" }
+                  // 2. 移動先で、対象の存在と閲覧の権限を確かめる（通知のリンクを認可済みとして信頼しない）
+                  const blocked = await checkTarget(workspaceId, target, ticket.signal)
+                  // 3. 確認の応答を待つ間に権限が変わった場合は、移動しない
+                  if (!navGuard.isLatest(ticket)) return { status: "cancelled" }
+                  if (blocked) return blocked
+                  setMemo("")
+                  setScreen({ title: target.label, editable: false })
+                  return { status: "navigated" }
+                } finally {
+                  navGuard.release(ticket)
+                }
               }}
             />
           }
@@ -775,10 +821,11 @@ export function NotificationsPage() {
         <Rules
           rows={[
             ["取得", "Data States を適用する。初回の取得、通知なし、未読なし、再取得中、取得失敗、再取得の失敗を区別する（useNotificationFeed は useBrowseData を使う）"],
-            ["新着", "保留して「新着 N 件を表示」。未読の件数には含める。読み上げは件数だけにする"],
-            ["既読の更新", "すぐに画面に反映し、応答で確定する。失敗は元に戻し、結果が不明なら取得し直す。通知の ID ごとに最後の操作だけを反映する"],
-            ["一括既読", "開始した時点の未読の通知の ID に範囲を固定する。処理中に届いた新着を既読にしない"],
-            ["スコープ", "ワークスペース、アカウント、権限が変わったら、前の通知、未読の件数、保留中の新着、非同期の応答を破棄する（A → B → A でも反映しない）"],
+            ["新着", "保留して「新着 N 件を表示」。未読の件数には、サーバーの件数にまだ含まれていない新着だけを加える（一覧と保留の両方にある通知を二重に数えない）。読み上げは件数だけにする"],
+            ["購読", "購読ごとの記録（世代）で照合する。解除した購読、前の世代の購読（A → B → A の最初の A、権限の変更の前）、アンマウントの後、取得を止めている間に届いた通知を受け付けない"],
+            ["既読の更新", "すぐに画面に反映し、応答で確定する。失敗は元に戻す。結果が不明なら「状態を確認中」とし、取得し直した結果で確定する。通知の ID ごとに最後の操作だけを反映する（サーバーでの処理の順序は製品が保証する）"],
+            ["一括既読", "開始した時点の範囲に固定する。処理中に届いた新着を既読にしない。結果の件数は、応答で確認できた結果（更新した ID）から求め、要求した件数を使わない"],
+            ["スコープ", "ワークスペース、アカウント、認可の範囲が変わったら、前の通知、未読の件数、保留中の新着、非同期の応答を破棄する（A → B → A でも反映しない）"],
             ["権限", "閲覧の権限を失った対象の内容を、通知の本文に残さない（サーバーが伏せて返し、画面は取得し直す）"],
           ]}
         />

@@ -21,6 +21,9 @@ import { groupNotifications, type NotificationLike } from "@/patterns/notificati
 // - 初回の読み込み、通知なし、未読なし、再取得中、取得失敗、再取得の失敗、既読の更新の失敗を区別して示す。
 // - 新着は「新着 N 件を表示」で加える（一覧の位置とフォーカスを動かさない）。読み上げは件数だけにし、内容を強制的に読み上げない。
 // - 既読の更新の失敗は Alert で画面に残す（Toast だけにしない）。結果が不明な場合は取得し直していることを示す。
+//   一部の通知が更新されなかった場合（削除された、権限を失った）は、その件数と、取得し直していることを示す。
+// - 一括既読で読み込んでいない通知も対象になる場合（cursor）は、そのことを範囲の文に示す。
+// - 本文の表示の可否（canViewContent）が false の通知は、本文を表示せず、集約もしない。
 // - 押したボタン（一括既読、新着の表示）が消えた場合は、見出し（または最初の新着）へフォーカスを移す。
 //
 // この部品が持たないもの（製品の責務）
@@ -31,7 +34,18 @@ type NotificationFilter = "all" | "unread"
 
 type NotificationCenterProps<T extends NotificationLike> = Pick<
   NotificationListProps<T>,
-  "now" | "timeZone" | "onOpen" | "hasTarget" | "getTargetLabel" | "renderMeta" | "renderActions" | "groupTitle" | "showAbsoluteTime" | "initialExpandedFor"
+  | "now"
+  | "timeZone"
+  | "onOpen"
+  | "hasTarget"
+  | "getTargetLabel"
+  | "renderMeta"
+  | "renderActions"
+  | "groupTitle"
+  | "showAbsoluteTime"
+  | "initialExpandedFor"
+  | "canViewContent"
+  | "hiddenTitle"
 > & {
   feed: NotificationFeed<T>
   title?: string
@@ -76,6 +90,7 @@ function NotificationCenter<T extends NotificationLike>({
   className,
   now,
   timeZone,
+  canViewContent,
   ...listProps
 }: NotificationCenterProps<T>) {
   const [ownFilter, setOwnFilter] = React.useState<NotificationFilter>(defaultFilter)
@@ -93,8 +108,13 @@ function NotificationCenter<T extends NotificationLike>({
 
   const showList = feed.status === "ready" || feed.status === "refreshing"
   const visible = React.useMemo(() => (filter === "unread" ? feed.items.filter((n) => !n.read) : feed.items), [feed.items, filter])
-  const entries = React.useMemo(() => groupNotifications(visible, { canGroup }), [visible, canGroup])
-  const unreadLoaded = feed.items.filter((n) => !n.read).length
+  // 本文を表示しない通知は集約しない（集約のタイトルに本文が含まれるため）
+  const groupable = React.useCallback(
+    (n: T) => (canViewContent ? canViewContent(n) : true) && (canGroup ? canGroup(n) : true),
+    [canGroup, canViewContent]
+  )
+  const entries = React.useMemo(() => groupNotifications(visible, { canGroup: groupable }), [visible, groupable])
+  const unreadLoaded = feed.items.filter((n) => !n.read && !feed.verifyingIds.has(n.id)).length
   const running = feed.readAllRange !== null
   // 一括既読の範囲の名前と文を、実際の範囲に合わせる。
   // cursor：開始した時点までのすべて（読み込んでいない通知を含む）。ids：読み込み済みの未読だけ。
@@ -110,7 +130,7 @@ function NotificationCenter<T extends NotificationLike>({
       ? "既読にしています"
       : `${feed.readAllRange!.ids.length} 件を既読にしています`
     : cursor
-      ? `対象：${where}未読${total !== null ? ` ${total} 件` : "すべて"}（いま表示している最新のお知らせまで。この後に届くものは含めない）`
+      ? `対象：${where}未読${total !== null ? ` ${total} 件` : "すべて"}（読み込んでいない古いお知らせを含む。いま表示している最新のお知らせまでで、この後に届くものは含めない）`
       : coversAll
         ? `対象：${where}未読 ${unreadLoaded} 件`
         : `対象：読み込んだ未読 ${unreadLoaded} 件${total !== null && total > unreadLoaded ? `（ほかの未読 ${total - unreadLoaded} 件は対象外）` : "（読み込んでいないお知らせは対象外）"}`
@@ -151,7 +171,9 @@ function NotificationCenter<T extends NotificationLike>({
   const errorText = error
     ? error.outcome === "unknown"
       ? "更新できたかを確認できませんでした。最新の状態を取得し直しています。"
-      : error.kind === "read-all"
+      : error.outcome === "not-applied"
+        ? `${error.ids.length} 件は${error.read ? "既読" : "未読"}にできませんでした（削除されたか、閲覧できなくなったお知らせです）。最新の状態を取得し直しています。`
+        : error.kind === "read-all"
         ? "すべて既読にできませんでした。もう一度お試しください。"
         : `${error.ids.length} 件を${error.read ? "既読" : "未読"}にできませんでした。もう一度お試しください。`
     : null
@@ -241,7 +263,7 @@ function NotificationCenter<T extends NotificationLike>({
         {notice}
         {errorText && (
           <Alert variant="warning" data-slot="notification-update-error">
-            <AlertTitle>{error!.outcome === "unknown" ? "既読の状態を確認しています" : "更新できませんでした"}</AlertTitle>
+            <AlertTitle>{error!.outcome === "unknown" ? "既読の状態を確認しています" : error!.outcome === "not-applied" ? "一部を更新できませんでした" : "更新できませんでした"}</AlertTitle>
             <AlertDescription>{errorText}</AlertDescription>
             <AlertAction>
               <Button variant="outline" size="sm" onClick={feed.dismissError}>
@@ -310,6 +332,8 @@ function NotificationCenter<T extends NotificationLike>({
             timeZone={timeZone}
             label={filter === "unread" ? `未読の${title}` : title}
             disabled={!feed.canOperate}
+            verifyingIds={feed.verifyingIds}
+            canViewContent={canViewContent}
             onReadChange={(ids, read) => feed.setRead(ids, read)}
             fallbackFocus={() => headingRef.current}
           />

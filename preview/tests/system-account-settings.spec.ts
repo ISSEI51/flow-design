@@ -38,6 +38,20 @@ async function choose(page: Page, trigger: Locator, option: string) {
   await page.getByRole("option", { name: option, exact: true }).click()
 }
 
+// 結果が不明な保存の文（確認するまで同じ保存を送らないことを含む）
+const UNKNOWN_INSTANT = "保存できたかを確認できませんでした。確認するまで、この設定は変更できません。"
+const UNKNOWN_FORM = "保存できたかを確認できませんでした。確認するまで、もう一度保存できません。"
+
+const heldCount = (page: Page, kind: string) => page.evaluate((k) => window.__fdSaSettingsServer!.heldRequests().filter((h) => h.kind === k).length, kind)
+const release = (page: Page, kind: string, options: { which?: "first" | "last" | "all" | number; outcome?: string; respond?: boolean } = {}) =>
+  page.evaluate(([k, o]) => window.__fdSaSettingsServer!.release(k as never, o as never), [kind, options] as const)
+/**
+ * 解放した応答の処理（Promise の継続と React の描画）を、次のタスクまで進める。時間の長さには依存しない
+ * （応答の時間で順序を作らず、保留と解放で順序を決めた後に、結果が反映されたことを確かめるために使う）
+ */
+const flush = (page: Page) => page.evaluate(() => new Promise<void>((r) => setTimeout(() => setTimeout(r, 0), 0)))
+const requestsOf = (page: Page, kind: string) => page.evaluate((k) => window.__fdSaSettingsServer!.requests.filter((r) => r.kind === k), kind)
+
 async function chooseScope(page: Page, user: string, workspace?: string) {
   await choose(page, page.getByTestId("set-demo-user"), user)
   if (workspace) await choose(page, page.getByTestId("set-demo-workspace"), workspace)
@@ -251,7 +265,7 @@ test.describe("Settings: saving", () => {
     await openCategory(page, "display", "表示と言語")
     await server(page, (s) => (s.outcomeQueue.instant = ["unknown"]))
     await area(page).getByRole("radio", { name: "ダーク" }).click()
-    await expect(statusText(page, "set-theme-status")).toHaveText("保存できたかを確認できませんでした。")
+    await expect(statusText(page, "set-theme-status")).toHaveText(UNKNOWN_INSTANT)
     await expect(area(page).getByTestId("set-theme-status").getByRole("status")).toHaveClass(/text-warning/)
     // 戻さない
     await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
@@ -268,7 +282,7 @@ test.describe("Settings: saving", () => {
     await server(page, (s) => (s.outcomeQueue.form = ["unknown"]))
     await area(page).getByTestId("set-profile-bio").fill("法人営業を担当しています。")
     await area(page).getByTestId("set-profile-save").click()
-    await expect(statusText(page, "set-profile-status")).toHaveText("保存できたかを確認できませんでした。")
+    await expect(statusText(page, "set-profile-status")).toHaveText(UNKNOWN_FORM)
     // この模擬のサーバーでは unknown でも処理される。確認の前に、ほかの端末で元の内容に戻された状態を作る
     await server(page, (s) => s.setProfileElsewhere("u-sato", { name: "佐藤 花子", title: "営業部 マネージャー", bio: "" }))
     await area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" }).click()
@@ -280,15 +294,20 @@ test.describe("Settings: saving", () => {
     expect(await server(page, (s) => s.personalOf("u-sato").profile.bio)).toBe("法人営業を担当しています。")
   })
 
-  test("consecutive changes: the older, slower response does not overwrite the latest value", async ({ page }) => {
+  test("consecutive changes: the older response, answered last, does not overwrite the latest value", async ({ page }) => {
     await openPage(page)
     await openCategory(page, "display", "表示と言語")
-    await server(page, (s) => (s.latencyQueue.instant = [900, 60]))
+    // 応答の順序は、応答の時間ではなく、保留と解放で決める
+    await server(page, (s) => (s.hold.instant = true))
     await choose(page, area(page).getByTestId("set-timezone"), "イギリス（ロンドン）")
     await choose(page, area(page).getByTestId("set-timezone"), "シンガポール")
+    await expect.poll(() => heldCount(page, "instant")).toBe(2)
+    // 新しい要求を先に処理する
+    await release(page, "instant", { which: "last" })
     await expect(statusText(page, "set-timezone-status")).toHaveText("保存しました")
-    // 古い要求の応答が届くまで待つ
-    await page.waitForTimeout(1100)
+    // 古い要求を後から処理する（サーバーは受け付けた順の番号で比べ、適用しない）
+    await release(page, "instant")
+    await flush(page)
     await expect(area(page).getByTestId("set-timezone")).toHaveText("シンガポール")
     await expect(statusText(page, "set-timezone-status")).toHaveText("保存しました")
     expect(await server(page, (s) => s.personalOf("u-sato").display.timezone)).toBe("Asia/Singapore")
@@ -302,18 +321,22 @@ test.describe("Settings: saving", () => {
     await openCategory(page, "organization", "組織")
     await server(page, (s) => {
       s.ignoreAbort = true // 取得の要求も中止に従わない（B の取得の応答が遅れて届いても、A に表示しない）
-      s.latencyQueue.form = [600]
+      s.hold.form = true
     })
     await area(page).getByTestId("set-org-name").fill("本社営業部（旧）")
     await area(page).getByTestId("set-org-info-save").click()
     await expect(statusText(page, "set-org-info-status")).toHaveText("保存中…")
+    await expect.poll(() => heldCount(page, "form")).toBe(1)
     await choose(page, page.getByTestId("set-demo-workspace"), "西日本営業部")
     await expect(area(page).getByTestId("set-category-scope")).toContainText("西日本営業部")
-    await expect.poll(() => server(page, (s) => s.orgOf("hq").info.name)).toBe("本社営業部（旧）")
+    // B の間に、A の保存をサーバーで処理して応答する
+    await release(page, "form")
+    expect(await server(page, (s) => s.orgOf("hq").info.name)).toBe("本社営業部（旧）")
+    await flush(page)
     await choose(page, page.getByTestId("set-demo-workspace"), "本社営業部")
     await expect(area(page).getByTestId("set-org-name")).toHaveValue("本社営業部（旧）")
     await expect(statusText(page, "set-org-info-status")).toHaveText("")
-    await page.waitForTimeout(400)
+    await flush(page)
     await expect(area(page).getByText("保存しました")).toHaveCount(0)
   })
 
@@ -322,21 +345,24 @@ test.describe("Settings: saving", () => {
     await openCategory(page, "organization", "組織")
     await server(page, (s) => {
       s.ignoreAbort = true
-      s.latencyQueue.form = [1500]
+      s.hold.form = true
     })
     await area(page).getByTestId("set-org-name").fill("本社営業部（旧）")
     await area(page).getByTestId("set-org-info-save").click()
+    await expect.poll(() => heldCount(page, "form")).toBe(1)
     await choose(page, page.getByTestId("set-demo-workspace"), "西日本営業部")
     await expect(area(page).getByTestId("set-category-scope")).toContainText("西日本営業部")
     await choose(page, page.getByTestId("set-demo-workspace"), "本社営業部")
-    await expect(area(page).getByTestId("set-org-name")).toBeVisible()
     // 戻った時点のサーバーの値（保存はまだ処理されていない）
-    expect(await server(page, (s) => s.orgOf("hq").info.name)).toBe("本社営業部")
     await expect(area(page).getByTestId("set-org-name")).toHaveValue("本社営業部")
-    await expect.poll(() => server(page, (s) => s.orgOf("hq").info.name), { timeout: 4000 }).toBe("本社営業部（旧）")
-    await page.waitForTimeout(300)
+    expect(await server(page, (s) => s.orgOf("hq").info.name)).toBe("本社営業部")
+    // 最初の A の保存を、戻った後に処理して応答する
+    await release(page, "form")
+    expect(await server(page, (s) => s.orgOf("hq").info.name)).toBe("本社営業部（旧）")
+    await flush(page)
     // 前の A の保存の応答は、戻った A の状態の表示に反映しない
     await expect(statusText(page, "set-org-info-status")).toHaveText("")
+    await expect(area(page).getByTestId("set-org-name")).toHaveValue("本社営業部")
     // 取得し直すと、最新のサーバーの値を表示する
     await openCategory(page, "members", "メンバー")
     await openCategory(page, "organization", "組織")
@@ -348,11 +374,14 @@ test.describe("Settings: saving", () => {
   test("leaving the category during an instant save: the change is not lost and the late response throws nothing", async ({ page }) => {
     await openPage(page)
     await openCategory(page, "display", "表示と言語")
-    await server(page, (s) => (s.latencyQueue.instant = [700]))
+    await server(page, (s) => (s.hold.instant = true))
     await area(page).getByRole("radio", { name: "ダーク" }).click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
     await openCategory(page, "profile", "プロフィール")
-    await expect.poll(() => server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("dark")
-    await page.waitForTimeout(200)
+    // 画面を移った後に、サーバーで処理して応答する（変更の要求には中止の signal を渡していない）
+    await release(page, "instant")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("dark")
+    await flush(page)
     await openCategory(page, "display", "表示と言語")
     await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
     // 別の画面のインスタンスの「保存しました」を引き継がない
@@ -380,6 +409,358 @@ test.describe("Settings: saving", () => {
     expect(await server(page, (s) => s.personalOf("u-sato").profile.name)).toBe("佐藤 花子")
     await openCategory(page, "profile", "プロフィール")
     await expect(area(page).getByTestId("set-profile-name")).toHaveValue("佐藤 花子")
+  })
+})
+
+// ------------------------------------------------------------------ 保存の結果の分類とサーバーでの順序（v0.1 の最終調整）
+// 応答の順序は、応答の時間ではなく、模擬のサーバーの保留（hold）と解放（release）で決める。
+const contractRadio = (page: Page, label: string) => page.getByTestId("set-demo").getByText(label, { exact: true })
+
+test.describe("Settings: save results and server ordering", () => {
+  test("ON → OFF → ON answered in reverse order (server applies in received order): display and server end with ON", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "notifications", "通知")
+    await server(page, (s) => (s.hold.instant = true))
+    const sw = area(page).getByTestId("set-quiet-switch")
+    await sw.click()
+    await sw.click()
+    await sw.click()
+    await expect(sw).toBeChecked()
+    await expect.poll(() => heldCount(page, "instant")).toBe(3)
+    await release(page, "instant", { which: "last" }) // 3 回目（ON）
+    await release(page, "instant", { which: "last" }) // 2 回目（OFF）
+    await release(page, "instant") // 1 回目（ON）
+    await flush(page)
+    await expect(sw).toBeChecked()
+    await expect(statusText(page, "set-quiet-status")).toHaveText("保存しました")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.quietEnabled)).toBe(true)
+    // 受け付けた順の番号で比べ、後から処理した古い要求は適用していない
+    expect(await server(page, (s) => s.applied.filter((a) => a.key === "quietEnabled").map((a) => a.value))).toEqual([true])
+  })
+
+  test("without a server ordering guarantee, showing only the latest response does not prove the server value", async ({ page }) => {
+    await openPage(page)
+    await contractRadio(page, "処理した順に適用する（順序の保証なし）").click()
+    await openCategory(page, "notifications", "通知")
+    await server(page, (s) => (s.hold.instant = true))
+    const sw = area(page).getByTestId("set-quiet-switch")
+    await sw.click()
+    await sw.click()
+    await sw.click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(3)
+    await release(page, "instant") // 1 回目（ON）
+    await release(page, "instant", { which: "last" }) // 3 回目（ON）：最新の要求の応答
+    await release(page, "instant") // 2 回目（OFF）：古い要求が最後に処理される
+    await flush(page)
+    // 画面は最新の要求の応答（ON）を示すが、サーバーには古い要求の値（OFF）が残る。
+    // これは Registry では防げない（製品の API が直列化か版の照合を保証する。docs の「サーバーでの保存の順序」）
+    await expect(sw).toBeChecked()
+    await expect(statusText(page, "set-quiet-status")).toHaveText("保存しました")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.quietEnabled)).toBe(false)
+    // 取得し直すと、サーバーの値を示す
+    await openCategory(page, "display", "表示と言語")
+    await openCategory(page, "notifications", "通知")
+    await expect(area(page).getByTestId("set-quiet-switch")).not.toBeChecked()
+  })
+
+  test("versioned saves are serialized per item: ON → OFF → ON sends one request; later changes wait and carry the new version", async ({ page }) => {
+    await openPage(page)
+    await contractRadio(page, "版の番号で競合を検出する（即時保存を項目ごとに直列にする）").click()
+    await openCategory(page, "notifications", "通知")
+    await server(page, (s) => (s.hold.instant = true))
+    const sw = area(page).getByTestId("set-quiet-switch")
+    await sw.click()
+    await sw.click()
+    await sw.click()
+    await expect(sw).toBeChecked()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    await release(page, "instant")
+    await flush(page)
+    await expect(statusText(page, "set-quiet-status")).toHaveText("保存しました")
+    // 待っていた最後の変更（ON）はサーバーで確認できた値と同じため、送らない
+    expect((await requestsOf(page, "instant")).length).toBe(1)
+    // OFF → ON：OFF の応答を待ってから、ON を新しい版で送る（競合にならない）
+    await sw.click()
+    await sw.click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    await release(page, "instant")
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    await release(page, "instant")
+    await expect(statusText(page, "set-quiet-status")).toHaveText("保存しました")
+    expect((await requestsOf(page, "instant")).map((r) => r.value)).toEqual([true, false, true])
+    expect(await server(page, (s) => s.personalOf("u-sato").display.quietEnabled)).toBe(true)
+    expect(await server(page, (s) => s.versionOf("u-sato:quietEnabled"))).toBe(3)
+  })
+
+  test("versioned conflict: a change made elsewhere is detected; the display is kept until confirmed, then shows the server value", async ({ page }) => {
+    await openPage(page)
+    await contractRadio(page, "版の番号で競合を検出する（即時保存を項目ごとに直列にする）").click()
+    await openCategory(page, "display", "表示と言語")
+    // 画面が設定と版を取得し終えてから、ほかの場所で変更する（取得の応答に、ほかの場所の変更を含めない）
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeVisible()
+    await expect(area(page).getByTestId("set-display-loading")).toHaveCount(0)
+    await server(page, (s) => s.setDisplayElsewhere("u-sato", "theme", "light"))
+    await area(page).getByRole("radio", { name: "ダーク" }).click()
+    const status = area(page).getByTestId("set-theme-status")
+    await expect(status.getByRole("status")).toHaveText("ほかの場所で変更されていたため、保存しませんでした。確認すると、現在保存されている設定を表示します。")
+    await expect(status).toHaveAttribute("data-state", "conflict")
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
+    // 確認するまで、同じ項目を送らない（古い版で送っても、また競合になる）
+    await area(page).getByRole("radio", { name: "端末に合わせる" }).click({ force: true })
+    expect((await requestsOf(page, "instant")).length).toBe(1)
+    await status.getByRole("button", { name: "確認する" }).click()
+    await expect(status.getByRole("status")).toHaveText("保存されていませんでした。現在保存されている設定を表示しています。")
+    await expect(area(page).getByRole("radio", { name: "ライト" })).toBeChecked()
+    // 確認した版で、もう一度変更できる
+    await area(page).getByRole("radio", { name: "ダーク" }).click()
+    await expect(status.getByRole("status")).toHaveText("保存しました")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("dark")
+  })
+
+  // H2：結果が不明な項目の、最後に確認できた値は「未確認」。等しいことを理由に送らないことと、確定した失敗で「元に戻した」と示すことをしない
+  test("versioned: a change waiting behind an unknown result is sent even if it equals the last confirmed value", async ({ page }) => {
+    await openPage(page)
+    await contractRadio(page, "版の番号で競合を検出する（即時保存を項目ごとに直列にする）").click()
+    await openCategory(page, "notifications", "通知")
+    await server(page, (s) => (s.hold.instant = true))
+    const sw = area(page).getByTestId("set-quiet-switch")
+    const status = area(page).getByTestId("set-quiet-status")
+    await sw.click() // OFF（確認済み）→ ON：送る
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    await sw.click() // ON → OFF：前の要求の結果を待つ
+    await expect(sw).not.toBeChecked()
+    // サーバーは ON を保存し、クライアントには結果の不明を返す
+    await release(page, "instant", { outcome: "unknown" })
+    // 待っていた OFF は確認済みの OFF と等しいが、確認済みの値は未確認になったため、送る（最後に確認できた版 0 で）
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    expect((await requestsOf(page, "instant")).map((r) => r.value)).toEqual([true, false])
+    await expect(status).toHaveAttribute("data-state", "saving")
+    await release(page, "instant")
+    // サーバーの版は 1（ON）。版 0 の要求は拒否され、「保存しました」とは示さない
+    await expect(status).toHaveAttribute("data-state", "conflict")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.quietEnabled)).toBe(true)
+    await status.getByRole("button", { name: "確認する" }).click()
+    await expect(status.getByRole("status")).toHaveText("保存されていませんでした。現在保存されている設定を表示しています。")
+    await expect(sw).toBeChecked()
+  })
+
+  test("versioned (whileUnknown: allow): changing back to the confirmed value after an unknown result is sent, not reported as saved", async ({ page }) => {
+    await openPage(page)
+    await contractRadio(page, "版の番号で競合を検出する（即時保存を項目ごとに直列にする）").click()
+    await openCategory(page, "notifications", "通知")
+    await server(page, (s) => (s.hold.instant = true))
+    const sw = area(page).getByTestId("set-quiet-switch")
+    const status = area(page).getByTestId("set-quiet-status")
+    await sw.click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    await release(page, "instant", { outcome: "unknown" })
+    await expect(status).toHaveAttribute("data-state", "unknown")
+    await expect(sw).toBeChecked()
+    // 版の照合では、結果が不明な間も変更できる。確認済みの値（OFF）に戻す変更を送る
+    await sw.click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    expect((await requestsOf(page, "instant")).map((r) => r.value)).toEqual([true, false])
+    await release(page, "instant")
+    await expect(status).toHaveAttribute("data-state", "conflict")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.quietEnabled)).toBe(true)
+  })
+
+  test("a definite failure after an older unknown result is not shown as 'returned to the original setting'", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "notifications", "通知")
+    await server(page, (s) => (s.hold.instant = true))
+    const sw = area(page).getByTestId("set-quiet-switch")
+    const status = area(page).getByTestId("set-quiet-status")
+    await sw.click() // ON（1 回目）
+    await sw.click() // OFF（2 回目）
+    await expect.poll(() => heldCount(page, "instant")).toBe(2)
+    // 1 回目：サーバーは ON を保存し、結果の不明を返す（最新の要求ではないため、表示は保存中のまま）
+    await release(page, "instant", { outcome: "unknown" })
+    await flush(page)
+    await expect(status).toHaveAttribute("data-state", "saving")
+    // 2 回目：処理されなかった（確定した失敗）。サーバーは ON。確認済みの OFF へ戻したとは示さない
+    await release(page, "instant", { outcome: "fail" })
+    await expect(status).toHaveAttribute("data-state", "unknown")
+    await expect(status).toHaveAttribute("data-reason", "unconfirmed")
+    await expect(status.getByRole("status")).toHaveText(
+      "保存できませんでした。前の保存の結果を確認できていないため、現在保存されている設定を確認してください。確認するまで、この設定は変更できません。"
+    )
+    expect(await server(page, (s) => s.personalOf("u-sato").display.quietEnabled)).toBe(true)
+    // 確認するまで送らない
+    await sw.click({ force: true })
+    expect((await requestsOf(page, "instant")).length).toBe(2)
+    await status.getByRole("button", { name: "確認する" }).click()
+    await expect(status.getByRole("status")).toHaveText("保存されていませんでした。現在保存されている設定を表示しています。")
+    await expect(sw).toBeChecked()
+  })
+
+  // M2：replace の後に届いた、replace の前に送った要求の成功は、最後に確認できた値と版を変えない
+  test("versioned: a success that arrives after replace (re-fetch) does not restore the older value and version", async ({ page }) => {
+    await openPage(page)
+    await contractRadio(page, "版の番号で競合を検出する（即時保存を項目ごとに直列にする）").click()
+    await openCategory(page, "display", "表示と言語")
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeVisible()
+    await expect(area(page).getByTestId("set-display-loading")).toHaveCount(0)
+    await server(page, (s) => (s.hold.instant = true))
+    await area(page).getByRole("radio", { name: "ダーク" }).click() // 版 0 で送る
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    // サーバーで処理し（ダーク、版 1）、応答だけを保留する
+    await release(page, "instant", { respond: false })
+    expect(await server(page, (s) => s.versionOf("u-sato:theme"))).toBe(1)
+    // 応答が届く前に、ほかの場所でライトに変え（版 2）、画面が取得し直す（replace）
+    await server(page, (s) => s.setDisplayElsewhere("u-sato", "theme", "light"))
+    await area(page).getByTestId("set-display-reload-button").click()
+    await expect(area(page).getByTestId("set-display-reload-status")).toHaveText("サーバーに保存されている設定を表示しています。")
+    await expect(area(page).getByRole("radio", { name: "ライト" })).toBeChecked()
+    // replace の前に送った要求の成功（ダーク、版 1）が届く。表示と、確認できた値と版を変えない
+    await release(page, "instant")
+    await flush(page)
+    await expect(area(page).getByRole("radio", { name: "ライト" })).toBeChecked()
+    // ダークを選ぶ：確認できた値（ライト）と異なるため送り、版 2 で受け付けられる
+    await area(page).getByRole("radio", { name: "ダーク" }).click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    expect((await requestsOf(page, "instant")).map((r) => r.value)).toEqual(["dark", "dark"])
+    await release(page, "instant")
+    await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("dark")
+    expect(await server(page, (s) => s.versionOf("u-sato:theme"))).toBe(3)
+  })
+
+  // 修正の確認の指摘：取得し直しを続けて押し、応答の順が入れ替わった場合、古い取得の値で上書きしない
+  test("re-fetch pressed twice: only the last re-fetch is applied even if the first one answers later", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "display", "表示と言語")
+    await expect(area(page).getByTestId("set-display-loading")).toHaveCount(0)
+    await server(page, (s) => (s.hold.get = true))
+    // 1 回目の取得：サーバーで読み（ライト）、応答だけを保留する
+    await server(page, (s) => s.setDisplayElsewhere("u-sato", "theme", "light"))
+    await area(page).getByTestId("set-display-reload-button").click()
+    await expect.poll(() => heldCount(page, "get")).toBe(1)
+    await release(page, "get", { respond: false })
+    // ほかの場所でダークに変え、2 回目の取得（ダーク）を先に届ける
+    await server(page, (s) => s.setDisplayElsewhere("u-sato", "theme", "dark"))
+    await area(page).getByTestId("set-display-reload-button").click()
+    await expect.poll(() => heldCount(page, "get")).toBe(2)
+    await release(page, "get", { which: "last" })
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
+    await expect(area(page).getByTestId("set-display-reload-status")).toHaveText("サーバーに保存されている設定を表示しています。")
+    // 古い 1 回目の応答（ライト）が後から届いても、表示を変えない
+    await server(page, (s) => (s.hold.get = false))
+    await release(page, "get", { which: "all" })
+    await flush(page)
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
+  })
+
+  test("unknown result: the same item is not sent again until confirmed; other items stay independent; a change during confirmation is not sent", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "display", "表示と言語")
+    await server(page, (s) => (s.outcomeQueue.instant = ["unknown"]))
+    await area(page).getByRole("radio", { name: "ダーク" }).click()
+    await expect(statusText(page, "set-theme-status")).toHaveText(UNKNOWN_INSTANT)
+    await area(page).getByRole("radio", { name: "ライト" }).click({ force: true })
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
+    expect((await requestsOf(page, "instant")).length).toBe(1)
+    // 標準に戻す操作も、確認するまで送らない
+    await expect(area(page).getByTestId("set-display-reset-button")).toBeDisabled()
+    await expect(area(page).getByTestId("set-display-reset")).toContainText("テーマの保存の結果を確認するまで、標準に戻せません。")
+    // ほかの項目は変更できる
+    await choose(page, area(page).getByTestId("set-timezone"), "イギリス（ロンドン）")
+    await expect(statusText(page, "set-timezone-status")).toHaveText("保存しました")
+    // 確認の取得を保留する。確認中の変更も送らない
+    await server(page, (s) => (s.hold.get = true))
+    await area(page).getByTestId("set-theme-status").getByRole("button", { name: "確認する" }).click()
+    await expect(statusText(page, "set-theme-status")).toHaveText("保存されたかを確認しています…")
+    await area(page).getByRole("radio", { name: "ライト" }).click({ force: true })
+    expect((await requestsOf(page, "instant")).length).toBe(2)
+    await expect.poll(() => heldCount(page, "get")).toBe(1)
+    await release(page, "get")
+    // 模擬のサーバーは unknown でも処理している
+    await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
+    await area(page).getByRole("radio", { name: "ライト" }).click()
+    await expect(area(page).getByRole("radio", { name: "ライト" })).toBeChecked()
+    await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
+  })
+
+  test("the client stopping its wait (AbortError) is not treated as 'not saved': the save is shown as unknown and confirmed", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "display", "表示と言語")
+    await server(page, (s) => (s.hold.instant = true))
+    await area(page).getByRole("radio", { name: "ダーク" }).click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    // サーバーは処理し、クライアントには AbortError を返す（製品の待機の打ち切りなど）
+    await release(page, "instant", { outcome: "client-abort" })
+    const status = area(page).getByTestId("set-theme-status")
+    await expect(status.getByRole("status")).toHaveText("応答を待つのを中止しました。保存されたかは確認が必要です。確認するまで、この設定は変更できません。")
+    await expect(status).toHaveAttribute("data-state", "unknown")
+    await expect(status).toHaveAttribute("data-reason", "aborted")
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
+    expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("dark")
+    await status.getByRole("button", { name: "確認する" }).click()
+    await expect(status.getByRole("status")).toHaveText("保存しました")
+  })
+
+  test("a response without the saved item is not treated as success", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "display", "表示と言語")
+    await server(page, (s) => (s.omitResponseKeys = ["theme"]))
+    await area(page).getByRole("radio", { name: "ダーク" }).click()
+    const status = area(page).getByTestId("set-theme-status")
+    await expect(status.getByRole("status")).toHaveText(
+      "保存の応答にこの設定の値が含まれていなかったため、保存できたかを確認できませんでした。確認するまで、この設定は変更できません。"
+    )
+    await expect(status).toHaveAttribute("data-reason", "missing")
+    await status.getByRole("button", { name: "確認する" }).click()
+    await expect(status.getByRole("status")).toHaveText("保存しました")
+    await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
+  })
+
+  test("server-side normalization: the saved (trimmed) value is shown and the form is not dirty", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "profile", "プロフィール")
+    await area(page).getByTestId("set-profile-name").fill("  佐藤 花子（営業）  ")
+    await area(page).getByTestId("set-profile-save").click()
+    await expect(statusText(page, "set-profile-status")).toHaveText("保存しました")
+    await expect(area(page).getByTestId("set-profile-name")).toHaveValue("佐藤 花子（営業）")
+    await expect(area(page).getByTestId("set-profile-discard")).toBeDisabled()
+    expect(await server(page, (s) => s.personalOf("u-sato").profile.name)).toBe("佐藤 花子（営業）")
+  })
+
+  test("reset with a partial result: saved items show the server value, the rejected item returns to its saved value", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "display", "表示と言語")
+    await area(page).getByRole("radio", { name: "ダーク" }).click()
+    await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
+    await choose(page, area(page).getByTestId("set-timezone"), "イギリス（ロンドン）")
+    await expect(statusText(page, "set-timezone-status")).toHaveText("保存しました")
+    await server(page, (s) => (s.batchReject = ["timezone"]))
+    await area(page).getByTestId("set-display-reset-button").click()
+    await expect(area(page).getByTestId("set-display-reset-status")).toHaveText("一部の項目だけを標準に戻しました。項目ごとの状態を確かめてください。")
+    await expect(area(page).getByRole("radio", { name: "端末に合わせる" })).toBeChecked()
+    await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
+    await expect(statusText(page, "set-timezone-status")).toHaveText("この値は保存できなかったため、元の設定に戻しました。")
+    await expect(area(page).getByTestId("set-timezone")).toHaveText("イギリス（ロンドン）")
+    const d = await server(page, (s) => s.personalOf("u-sato").display)
+    expect([d.theme, d.timezone]).toEqual(["system", "Europe/London"])
+  })
+
+  test("explicit save: no request without changes; no second save while the result is unknown", async ({ page }) => {
+    await openPage(page)
+    await openCategory(page, "profile", "プロフィール")
+    await area(page).getByTestId("set-profile-save").click()
+    await expect(area(page).getByTestId("set-profile-blocked")).toHaveText("変更がないため、保存していません。")
+    expect(await requestsOf(page, "form")).toEqual([])
+    await server(page, (s) => (s.outcomeQueue.form = ["unknown"]))
+    await area(page).getByTestId("set-profile-bio").fill("確認の前の文")
+    await expect(area(page).getByTestId("set-profile-blocked")).toHaveText("")
+    await area(page).getByTestId("set-profile-save").click()
+    await expect(statusText(page, "set-profile-status")).toHaveText(UNKNOWN_FORM)
+    await area(page).getByTestId("set-profile-save").click()
+    await expect(area(page).getByTestId("set-profile-blocked")).toHaveText("前の保存の結果を確認するまで、もう一度保存できません。「確認する」で確かめてください。")
+    expect((await requestsOf(page, "form")).length).toBe(1)
+    await area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" }).click()
+    await expect(statusText(page, "set-profile-status")).toHaveText("保存しました")
+    await expect(area(page).getByTestId("set-profile-blocked")).toHaveText("")
   })
 })
 
@@ -452,6 +833,30 @@ test.describe("Settings: inheritance and restrictions", () => {
     expect(await server(page, (s) => s.personalOf("u-sato").display.mfa)).toBe(false)
   })
 
+  test("a personal save that arrives while the org policy changes: the personal value is saved; the policy decides the effective value", async ({ page }) => {
+    await openPage(page)
+    await chooseScope(page, "佐藤 花子", "西日本営業部")
+    await openCategory(page, "security", "ログインとセキュリティ")
+    await server(page, (s) => (s.hold.instant = true))
+    await area(page).getByTestId("set-mfa").click()
+    await page.getByTestId("set-mfa-confirm").getByRole("button", { name: "無効にする" }).click()
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    // 保存の応答が届く前に、ほかの管理者が多要素認証を必須にした
+    await server(page, (s) => s.setSecurityElsewhere("west", { requireMfa: true }))
+    await release(page, "instant")
+    // 保存したのは個人の値（オフ）。保存の結果だけで、実際に適用される値が変わったと示さない
+    await expect(statusText(page, "set-mfa-status")).toHaveText("保存しました")
+    expect(await server(page, (s) => s.personalOf("u-sato").display.mfa)).toBe(false)
+    // ポリシーを取得し直すと、必須のため有効に固定し、保持している個人の値を示す
+    await openCategory(page, "profile", "プロフィール")
+    await openCategory(page, "security", "ログインとセキュリティ")
+    await expect(area(page).getByTestId("set-mfa")).toBeDisabled()
+    await expect(area(page).getByTestId("set-mfa")).toBeChecked()
+    await expect(area(page).getByTestId("set-mfa")).toHaveAccessibleDescription(
+      "組織（西日本営業部）のポリシーで必須のため、無効にできません。あなたの設定（オフ）は保持しており、ポリシーが変わると使われます。"
+    )
+  })
+
   test("plan and dependency in the org policy: SSO needs the business plan; SSO required makes social login unused", async ({ page }) => {
     await openPage(page)
     await openCategory(page, "organization", "組織")
@@ -480,16 +885,18 @@ test.describe("Settings: inheritance and restrictions", () => {
   test("permission change during a save: the operation is locked at once and its result is not shown", async ({ page }) => {
     await openPage(page)
     await openCategory(page, "organization", "組織")
-    await server(page, (s) => (s.latencyQueue.form = [1200]))
+    await server(page, (s) => (s.hold.form = true))
     await area(page).getByTestId("set-org-name").fill("本社営業部（変更）")
     await area(page).getByTestId("set-org-info-save").click()
     await expect(statusText(page, "set-org-info-status")).toHaveText("保存中…")
+    await expect.poll(() => heldCount(page, "form")).toBe(1)
     await page.getByTestId("set-demo-demote-both").click()
     await expect(area(page).getByTestId("set-org-info-save")).toHaveCount(0)
     await expect(area(page).getByTestId("set-org-name")).toHaveAttribute("readonly", "")
-    await page.waitForTimeout(1500)
+    // 権限が変わった後に、サーバーが処理する（処理の時点のロールで判断し、拒否する）
+    await release(page, "form")
+    await flush(page)
     await expect(area(page).getByText("保存しました")).toHaveCount(0)
-    // サーバーは処理の時点のロールで判断し、拒否した
     expect(await server(page, (s) => s.orgOf("hq").info.name)).toBe("本社営業部")
   })
 })
@@ -570,13 +977,21 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await openCategory(page, "display", "表示と言語")
     await area(page).getByRole("radio", { name: "ダーク" }).click()
     await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
-    await server(page, (s) => Object.assign(s.latency, { form: 600, instant: 900 }))
+    await server(page, (s) => {
+      s.hold.form = true
+      s.hold.instant = true
+    })
     await area(page).getByTestId("set-display-reset-button").click()
-    await page.waitForTimeout(100)
+    await expect.poll(() => heldCount(page, "form")).toBe(1)
+    // 戻している間に、同じ項目を変える（changeMany と change の重なり）
     await area(page).getByRole("radio", { name: "ライト" }).click()
-    // 戻す要求（600ms）の応答の後も、利用者が最後に選んだ「ライト」を表示し、その保存の結果を示す
+    await expect.poll(() => heldCount(page, "instant")).toBe(1)
+    // 戻す要求の応答の後も、利用者が最後に選んだ「ライト」を表示する
+    await release(page, "form")
     await expect(area(page).getByTestId("set-display-reset-status")).toHaveText("テーマを標準に戻しました。戻している間に変えた項目は、変えた値を保存しています。")
     await expect(area(page).getByRole("radio", { name: "ライト" })).toBeChecked()
+    await expect(statusText(page, "set-theme-status")).toHaveText("保存中…")
+    await release(page, "instant")
     await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
     await expect(area(page).getByRole("radio", { name: "ライト" })).toBeChecked()
     expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("light")
@@ -591,7 +1006,7 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await area(page).getByTestId("set-display-reset-button").click()
     await expect(area(page).getByTestId("set-display-reset-status")).toHaveText("標準の設定に戻せたかを確認できませんでした。各項目の「確認する」で確かめてください。")
     await expect(area(page).getByTestId("set-display-reset-status")).not.toContainText("変わっていません")
-    await expect(statusText(page, "set-theme-status")).toHaveText("保存できたかを確認できませんでした。")
+    await expect(statusText(page, "set-theme-status")).toHaveText(UNKNOWN_INSTANT)
     // 模擬のサーバーは unknown でも処理する
     expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("system")
     await area(page).getByTestId("set-theme-status").getByRole("button", { name: "確認する" }).click()
@@ -617,10 +1032,10 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await server(page, (s) => (s.outcomeQueue.form = ["unknown"]))
     await area(page).getByTestId("set-profile-bio").fill("確認前の文")
     await area(page).getByTestId("set-profile-save").click()
-    await expect(statusText(page, "set-profile-status")).toHaveText("保存できたかを確認できませんでした。")
+    await expect(statusText(page, "set-profile-status")).toHaveText(UNKNOWN_FORM)
     await expect(area(page).getByTestId("set-profile-discard")).toBeDisabled()
     await area(page).getByTestId("set-profile-discard").click({ force: true })
-    await expect(statusText(page, "set-profile-status")).toHaveText("保存できたかを確認できませんでした。")
+    await expect(statusText(page, "set-profile-status")).toHaveText(UNKNOWN_FORM)
     await expect(area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" })).toBeVisible()
     await expect(area(page).getByTestId("set-profile-bio")).toHaveValue("確認前の文")
     await area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" }).click()
@@ -803,6 +1218,23 @@ test.describe("Settings: mobile category navigation", () => {
 })
 
 // ------------------------------------------------------------------ スクリーンショット（目視の自己レビュー用。preview/screenshots は Git の管理外）
+// ------------------------------------------------------------------ 通知の設定（Settings の即時保存を共通に使う）
+test.describe("Notification settings: delivery is separate from the personal setting and from reading", () => {
+  test("browser permission: push stays on in the personal setting, but this browser does not receive it; delivery is not reading", async ({ page }) => {
+    await page.goto("/#/notifications")
+    const settings = page.getByTestId("ntf-settings-demo")
+    await expect(settings.getByTestId("ntf-delivery-note")).toHaveText(
+      "ここでは、通知を届けるかどうかを決めます。メールやプッシュ通知で届いても、通知は既読になりません。既読になるのは、アプリ内で通知を開いたときです。"
+    )
+    const permission = settings.getByTestId("ntf-browser-permission")
+    // 初期値でプッシュ通知がオンの種類は「コメントでのメンション」だけ（model.ts）
+    await expect(permission).toContainText("プッシュ通知をオンにしている 1 種類の通知は、許可されるまでこのブラウザには届きません（設定はオンのまま保存されています）。")
+    await expect(settings.getByRole("switch", { name: "コメントでのメンション：プッシュ通知" })).toHaveAttribute("aria-checked", "true")
+    await permission.getByRole("button", { name: "ブラウザの通知を許可する" }).click()
+    await expect(permission).not.toContainText("許可されるまでこのブラウザには届きません")
+  })
+})
+
 test.describe("Settings screenshots", () => {
   test.use({ reducedMotion: "reduce" })
   test("desktop, mobile and 320px", async ({ page, isMobile }, info) => {

@@ -2,6 +2,10 @@
 // 取得の遅延と失敗、既読の更新の失敗と結果の不明、新着の到着、重複の配信、対象の削除、閲覧の権限の喪失、
 // 通知の設定の保存の失敗を再現し、Patterns の挙動を確かめる。検品からは window.__fdSaNotificationsServer で設定する。
 //
+// 応答の保留と解放（Deferred）：hold[kind] を true にすると、その種類の応答を release(kind) まで返さない。
+// 固定の応答時間に頼らず、検品が応答の順序を決める（A の応答を保留 → B へ切り替え → A へ戻る → 最初の A の応答を解放）。
+// 新着の配信も holdDeliveries で保留し、releaseDeliveries で届ける（届ける先は配信した時点の購読者）。
+//
 // 模擬のデータの範囲：通知は佐藤 花子（u-sato）だけが持つ。ほかの利用者の通知は 0 件として返す。
 
 import type { NotificationPage } from "@/patterns/notification-feed"
@@ -35,6 +39,21 @@ export type NotificationScope = { userId: UserId; workspaceId: WorkspaceId }
 export type TargetCheck = { status: "ok" } | { status: "deleted" } | { status: "forbidden" }
 
 type Kind = "list" | "read" | "readAll" | "resolve" | "settings" | "saveSetting" | "remove"
+
+/** 保留している応答。release で解放する */
+type Held = { seq: number; kind: Kind; ids?: string[]; workspaceId?: WorkspaceId; settle: (outcome?: ReleaseOutcome) => void }
+
+/**
+ * 保留した応答を解放するときの結果。MockOutcome に加えて、abort：製品の通信の層が独自に中止した場合の AbortError
+ * （タイムアウト、利用者の取り消し）。サーバーでは処理を済ませている（要求を受け付けた時点で処理する）。
+ */
+export type ReleaseOutcome = MockOutcome | "abort"
+
+/** 新着の配信の記録。購読者（label）ごとに、receive が受け付けたか（false：古い購読として捨てた） */
+export type DeliveryLog = { workspaceId: WorkspaceId; ids: string[]; results: { label: string; accepted: boolean }[] }
+
+/** 一括既読の応答の形（製品の API の違いの再現） */
+export type ReadReport = "ids" | "count" | "none" | "invalid-count" | "extra-id"
 
 export type NotificationRequestLog = {
   kind: Kind
@@ -80,7 +99,19 @@ type Config = {
   pageSize: number | null
   /** 既読の更新などを、応答の時点で処理する（既定は要求を受け付けた時点）。処理中の取得との競合の検品 */
   processAtResponse: boolean
+  /** true の種類の応答を、release まで保留する（Deferred） */
+  hold: Partial<Record<Kind, boolean>>
+  /** true の間、新着の配信を保留する（releaseDeliveries で届ける） */
+  holdDeliveries: boolean
+  /** 既読の更新と一括既読の応答の形。ids：更新した ID の一覧（既定）。count：件数だけ。none：何も返さない。
+   * invalid-count：要求より多い件数。extra-id：範囲の外の ID（処理中に届いた通知）を含める */
+  readReport: ReadReport
+  /** 一覧で、同じ通知を 2 回返す（重複した ID の検品） */
+  duplicateInList: boolean
+  /** 未読の件数に加える値（サーバーの件数と一覧が一致しない場合の検品） */
+  countOffset: number
   requests: NotificationRequestLog[]
+  deliveries: DeliveryLog[]
 }
 
 const initialConfig = (): Config => ({
@@ -95,7 +126,13 @@ const initialConfig = (): Config => ({
   listSnapshotAtStart: false,
   pageSize: null,
   processAtResponse: false,
+  hold: {},
+  holdDeliveries: false,
+  readReport: "ids",
+  duplicateInList: false,
+  countOffset: 0,
   requests: [],
+  deliveries: [],
 })
 
 // ---------------------------------------------------------------- データ
@@ -129,6 +166,8 @@ type Store = {
   tasks: Record<WorkspaceId, Map<string, { label: string; status: "open" | "done" }>>
   deletedTargets: Set<string>
   revokedTargets: Set<string>
+  /** 閲覧の権限を失った通知（一覧に返さず、既読の更新もしない） */
+  hiddenNotifications: Set<string>
   settings: Map<UserId, PersonalSettings>
   seq: number
   /** 受け付けた順の番号の最後の値 */
@@ -149,11 +188,16 @@ function initialStore(): Store {
     const key = taskKey(n)
     if (key && n.task !== "none") tasks[n.workspaceId].set(key, { label: n.target!.label, status: n.task === "done" ? "done" : "open" })
   }
-  return { notifications, tasks, deletedTargets: new Set(), revokedTargets: new Set(), settings: new Map(), seq: 0, sequence: order.length, older: 0 }
+  return { notifications, tasks, deletedTargets: new Set(), revokedTargets: new Set(), hiddenNotifications: new Set(), settings: new Map(), seq: 0, sequence: order.length, older: 0 }
 }
 
 let store = initialStore()
-const listeners = new Map<string, Set<(items: AppNotification[]) => void>>()
+/** 購読者。戻り値は受け付けたか（receive の結果）。void は受け付けたものとして記録する */
+type Listener = (items: AppNotification[]) => boolean | void
+const listeners = new Map<string, Set<{ listener: Listener; label: string }>>()
+let held: Held[] = []
+let heldSeq = 0
+let heldDeliveries: (() => void)[] = []
 const scopeId = (s: NotificationScope) => `${s.userId}:${s.workspaceId}`
 
 // ---------------------------------------------------------------- 設定と記録
@@ -162,6 +206,42 @@ export const notificationsServer = Object.assign(initialConfig(), {
   reset() {
     Object.assign(notificationsServer, initialConfig())
     store = initialStore()
+    held = []
+    heldDeliveries = []
+  },
+  /** 保留している応答の数（kind を省略するとすべて） */
+  heldCount(kind?: Kind) {
+    return held.filter((h) => !kind || h.kind === kind).length
+  },
+  /** 保留している応答の一覧（古い順） */
+  heldRequests() {
+    return held.map((h) => ({ seq: h.seq, kind: h.kind, ids: h.ids, workspaceId: h.workspaceId }))
+  },
+  /**
+   * 保留している応答を解放する。which：first（最も古い）、last（最も新しい）、all。outcome を渡すと、その結果で応答する
+   * （fail は処理しない、unknown は処理したうえで結果が不明として返す、abort は処理したうえで AbortError を返す）。解放した数を返す
+   */
+  release(kind: Kind, { which = "first", outcome, workspaceId }: { which?: "first" | "last" | "all"; outcome?: ReleaseOutcome; workspaceId?: WorkspaceId } = {}) {
+    const targets = held.filter((h) => h.kind === kind && (workspaceId === undefined || h.workspaceId === workspaceId))
+    const chosen = which === "all" ? targets : which === "last" ? targets.slice(-1) : targets.slice(0, 1)
+    held = held.filter((h) => !chosen.includes(h))
+    chosen.forEach((h) => h.settle(outcome))
+    return chosen.length
+  },
+  /** 保留している新着の配信を届ける */
+  releaseDeliveries() {
+    const list = heldDeliveries
+    heldDeliveries = []
+    list.forEach((f) => f())
+    return list.length
+  },
+  /** 通知そのものをサーバーで削除する（画面には知らせない） */
+  deleteNotification(workspaceId: WorkspaceId, id: string) {
+    store.notifications[workspaceId] = store.notifications[workspaceId].filter((n) => n.id !== id)
+  },
+  /** 通知そのものの閲覧の権限を失ったことを再現する（一覧に返さず、既読の更新の対象にしない） */
+  hideNotification(id: string) {
+    store.hiddenNotifications.add(id)
   },
   /** 新しい通知が届いたことを再現する。購読しているスコープに pushDelay の後で届ける */
   push(workspaceId: WorkspaceId, partial: Partial<Pick<AppNotification, "title" | "type" | "eventId" | "target" | "groupKey" | "task">> = {}) {
@@ -268,10 +348,41 @@ function settingsOf(userId: UserId) {
 }
 
 function deliver(workspaceId: WorkspaceId, items: AppNotification[]) {
-  // 届ける先は、到着した時点の購読者（切り替えの後に古いスコープへ届く場合の再現）
+  // 届ける先は、配信した時点の購読者（切り替えの後に古いスコープへ届く、古い WebSocket・SSE の再現）
   const targets = [...(listeners.get(`u-sato:${workspaceId}`) ?? [])]
   const copy = items.map((n) => view(n))
-  setTimeout(() => targets.forEach((l) => l(copy)), notificationsServer.pushDelay)
+  const send = () => {
+    const results = targets.map((t) => ({ label: t.label, accepted: t.listener(copy) !== false }))
+    notificationsServer.deliveries.push({ workspaceId, ids: copy.map((n) => n.id), results })
+  }
+  if (notificationsServer.holdDeliveries) heldDeliveries.push(send)
+  else setTimeout(send, notificationsServer.pushDelay)
+}
+
+/**
+ * 応答を待つ。hold の間は release まで、それ以外は latency の後に、結果（outcome）で解決する。
+ * AbortSignal に従う（ignoreAbort の間は従わない）。保留中に中止された場合は、保留の一覧から外す。
+ */
+function wait(kind: Kind, latency: number, outcome: MockOutcome, signal: AbortSignal | undefined, ids?: string[], workspaceId?: WorkspaceId): Promise<ReleaseOutcome> {
+  return new Promise<ReleaseOutcome>((resolve, reject) => {
+    let entry: Held | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    if (notificationsServer.hold[kind]) {
+      entry = { seq: ++heldSeq, kind, ids, workspaceId, settle: (o) => resolve(o ?? outcome) }
+      held.push(entry)
+    } else {
+      timer = setTimeout(() => resolve(outcome), latency)
+    }
+    if (signal && !notificationsServer.ignoreAbort) {
+      const onAbort = () => {
+        if (timer) clearTimeout(timer)
+        if (entry) held = held.filter((h) => h !== entry)
+        reject(new DOMException("aborted", "AbortError"))
+      }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener("abort", onAbort, { once: true })
+    }
+  })
 }
 
 function take(kind: Kind) {
@@ -296,48 +407,64 @@ function view(n: AppNotification): AppNotification {
 /**
  * 応答を遅らせる。処理（run）は要求を受け付けた時点で行う（サーバーは受け付けた順に処理する）。
  * processAtResponse の間は、応答の時点で処理する（処理が遅れるサーバーの再現）。
+ * 保留した応答を release の outcome で解放した場合は、その結果にする（fail：処理しない。要求の時点で処理済みなら取り消さない）。
  */
-function respond<T>(kind: Kind, signal: AbortSignal | undefined, run: () => T, failMessage: string): Promise<T> {
+function respond<T>(kind: Kind, signal: AbortSignal | undefined, run: () => T, failMessage: string, ids?: string[]): Promise<T> {
   const { outcome, latency } = take(kind)
   const atResponse = notificationsServer.processAtResponse
   let value: T | undefined
   let error: unknown = null
+  let processed = false
   const process = () => {
-    if (outcome === "fail") return
+    processed = true
     try {
       value = run()
     } catch (e) {
       error = e
     }
   }
-  if (!atResponse) process()
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (atResponse) process()
-      if (error) reject(error)
-      else if (outcome === "fail") reject(new MockRequestError(failMessage))
-      else if (outcome === "unknown") reject(new MockUnknownError())
-      else resolve(value as T)
-    }, latency)
-    if (signal && !notificationsServer.ignoreAbort) {
-      const onAbort = () => {
-        clearTimeout(timer)
-        reject(new DOMException("aborted", "AbortError"))
-      }
-      if (signal.aborted) onAbort()
-      else signal.addEventListener("abort", onAbort, { once: true })
-    }
+  if (!atResponse && outcome !== "fail") process()
+  return wait(kind, latency, outcome, signal, ids).then((final) => {
+    if (!processed && final !== "fail") process()
+    if (error) throw error
+    if (final === "abort") throw new DOMException("aborted by the product's request layer (mock)", "AbortError")
+    if (final === "fail") throw new MockRequestError(failMessage)
+    if (final === "unknown") throw new MockUnknownError()
+    return value as T
   })
 }
 
+/** 既読の更新の応答を、readReport の形にする（製品の API の違いの再現） */
+function report(updated: string[], requested: number, extra: string | null): UpdateResponse {
+  switch (notificationsServer.readReport) {
+    case "count":
+      return { count: updated.length }
+    case "none":
+      return undefined
+    case "invalid-count":
+      return { count: requested + 5 }
+    case "extra-id":
+      return { updated: extra ? [...updated, extra] : updated }
+    default:
+      return { updated }
+  }
+}
+
+/** 一覧に返す通知（閲覧の権限を失った通知を除く） */
+const visible = (workspaceId: WorkspaceId) => store.notifications[workspaceId].filter((n) => !store.hiddenNotifications.has(n.id))
+
 // ---------------------------------------------------------------- API（画面の部品に props で渡す）
+
+/** 既読の更新の応答。updated：実際に更新した ID。count：件数だけ。undefined：何も返さない（readReport で選ぶ） */
+export type UpdateResponse = { updated?: string[]; count?: number } | undefined
 
 export type NotificationsApi = {
   list: (scope: NotificationScope, context: { signal: AbortSignal }) => Promise<NotificationPage<AppNotification>>
-  updateRead: (scope: NotificationScope, ids: string[], read: boolean, context: { signal: AbortSignal }) => Promise<{ updated: string[] }>
-  markAllRead: (scope: NotificationScope, range: ReadAllRange, context: { signal: AbortSignal }) => Promise<{ updated: string[] }>
+  updateRead: (scope: NotificationScope, ids: string[], read: boolean, context: { signal: AbortSignal }) => Promise<UpdateResponse>
+  markAllRead: (scope: NotificationScope, range: ReadAllRange, context: { signal: AbortSignal }) => Promise<UpdateResponse>
   remove: (scope: NotificationScope, id: string, context?: { signal?: AbortSignal }) => Promise<void>
-  subscribe: (scope: NotificationScope, listener: (items: AppNotification[]) => void) => () => void
+  /** 新着の購読。listener の戻り値は受け付けたか（検品の記録 deliveries に、label とともに残す） */
+  subscribe: (scope: NotificationScope, listener: Listener, label?: string) => () => void
   resolveTarget: (scope: NotificationScope, target: NonNullable<AppNotification["target"]>, context?: { signal?: AbortSignal }) => Promise<TargetCheck>
   loadSettings: (userId: UserId, context: { signal: AbortSignal }) => Promise<PersonalSettings>
   saveSetting: (userId: UserId, workspaceId: WorkspaceId, patch: SettingPatch, context: { signal: AbortSignal }) => Promise<PersonalSettings>
@@ -347,28 +474,30 @@ export const notificationsApi: NotificationsApi = {
   list: (scope, { signal }) => {
     notificationsServer.requests.push({ kind: "list", ...scope })
     const { outcome, latency } = take("list")
-    const wait = notificationsServer.listLatencyByWorkspace[scope.workspaceId] ?? latency
-    const build = () => {
-      const all = scope.userId === "u-sato" ? store.notifications[scope.workspaceId].map(view) : []
+    const delay = notificationsServer.listLatencyByWorkspace[scope.workspaceId] ?? latency
+    const build = (): NotificationPage<AppNotification> => {
+      const all = scope.userId === "u-sato" ? visible(scope.workspaceId).map(view) : []
       const sorted = [...all].sort((a, b) => b.createdAt - a.createdAt || b.sequence - a.sequence)
       const size = notificationsServer.pageSize
-      const items = size === null ? sorted : sorted.slice(0, size)
-      const unread = all.filter((n) => !n.read).length
+      const page = size === null ? sorted : sorted.slice(0, size)
+      const items = notificationsServer.duplicateInList && page.length > 0 ? [...page, { ...page[0] }] : page
+      const unread = all.filter((n) => !n.read).length + notificationsServer.countOffset
       return {
         items,
         unreadCount: notificationsServer.countMode === "exact" ? unread : null,
-        hasMore: notificationsServer.countMode === "unknown" || items.length < sorted.length,
+        hasMore: notificationsServer.countMode === "unknown" || page.length < sorted.length,
+        // 一覧と件数が反映している、受け付けた順の番号の最大値（保留中の新着を二重に数えないために使う）
+        asOf: store.sequence,
       }
     }
     // 要求を受け付けた時点の一覧（応答までの間に確定した既読の状態を含まない）
     const snapshot = notificationsServer.listSnapshotAtStart ? build() : null
-    return mockRequest({
-      latency: wait,
-      outcome,
-      signal,
-      ignoreAbort: notificationsServer.ignoreAbort,
-      failMessage: "お知らせを取得できませんでした（模擬）",
-      run: () => snapshot ?? build(),
+    return wait("list", delay, outcome, signal, undefined, scope.workspaceId).then((final) => {
+      if (final === "fail") throw new MockRequestError("お知らせを取得できませんでした（模擬）")
+      if (final === "abort") throw new DOMException("aborted by the product's request layer (mock)", "AbortError")
+      const page = snapshot ?? build()
+      if (final === "unknown") throw new MockUnknownError()
+      return page
     })
   },
   updateRead: (scope, ids, read, { signal }) => {
@@ -377,16 +506,18 @@ export const notificationsApi: NotificationsApi = {
       "read",
       signal,
       () => {
+        // 削除された通知と、閲覧の権限を失った通知は更新しない（updated に含めない）
         const updated: string[] = []
-        for (const n of store.notifications[scope.workspaceId]) {
+        for (const n of visible(scope.workspaceId)) {
           if (ids.includes(n.id)) {
             n.read = read
             updated.push(n.id)
           }
         }
-        return { updated }
+        return report(updated, ids.length, null)
       },
-      "既読の状態を更新できませんでした（模擬）"
+      "既読の状態を更新できませんでした（模擬）",
+      ids
     )
   },
   markAllRead: (scope, range, { signal }) => {
@@ -397,16 +528,23 @@ export const notificationsApi: NotificationsApi = {
       () => {
         // 範囲（ids：開始した時点の ID、cursor：開始した時点の最も新しい通知までの受け付けた順の番号）の通知だけを既読にする。
         // 処理中に届いた通知は含めない。
+        // 範囲のスコープを確かめる（製品のサーバーは、要求の認可のスコープと範囲のスコープが一致することを確かめる）
+        if (range.scope !== undefined && !range.scope.startsWith(`${scope.userId}:${scope.workspaceId}:`)) {
+          throw new MockRequestError("範囲のスコープが要求と一致しません（模擬）", "scope")
+        }
         const updated: string[] = []
-        for (const n of store.notifications[scope.workspaceId]) {
+        for (const n of visible(scope.workspaceId)) {
           if (!n.read && isInReadAllRange(n, range)) {
             n.read = true
             updated.push(n.id)
           }
         }
-        return { updated }
+        // extra-id：範囲の外の通知（処理中に届いた最も新しい未読）を、誤って結果に含めるサーバーの再現（実際には更新しない）
+        const outside = visible(scope.workspaceId).find((n) => !n.read && !isInReadAllRange(n, range))
+        return report(updated, range.ids.length, outside?.id ?? null)
       },
-      "すべて既読にできませんでした（模擬）"
+      "すべて既読にできませんでした（模擬）",
+      range.ids
     )
   },
   remove: (scope, id, context) => {
@@ -421,12 +559,13 @@ export const notificationsApi: NotificationsApi = {
       "お知らせを削除できませんでした（模擬）"
     )
   },
-  subscribe: (scope, listener) => {
+  subscribe: (scope, listener, label = "") => {
     const key = scopeId(scope)
     const set = listeners.get(key) ?? new Set()
-    set.add(listener)
+    const entry = { listener, label }
+    set.add(entry)
     listeners.set(key, set)
-    return () => set.delete(listener)
+    return () => set.delete(entry)
   },
   resolveTarget: (scope, target, context) => {
     notificationsServer.requests.push({ kind: "resolve", ...scope, ids: [target.id] })

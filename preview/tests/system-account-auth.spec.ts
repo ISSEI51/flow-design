@@ -6,6 +6,7 @@ import { collectPageErrors } from "./page-errors"
 
 // Patterns / System & Account / Authentication の検品（資料のページ #/authentication の例）。
 // 模擬のサーバーは window.__fdSaAuthServer で設定する（応答の時間、結果、ignoreAbort、受け付けた要求、送信したメール）。
+// 応答の順序に依存する検品は、固定の応答時間や待ち時間ではなく、要求の保留（hold）と解放（release）で順序を決める。
 // 期待値は仕様（docs/web/patterns/authentication.md）から決める。画面の表示を写して期待値にしない。
 collectPageErrors(test)
 
@@ -13,6 +14,23 @@ type Server = NonNullable<Window["__fdSaAuthServer"]>
 const server = <T,>(page: Page, fn: (s: Server) => T) =>
   page.evaluate((src) => new Function("s", `return (${src})(s)`)(window.__fdSaAuthServer), fn.toString()) as Promise<T>
 const requests = (page: Page, kind: string) => server(page, (s) => s.requests).then((r) => r.filter((x) => x.kind === kind))
+// 要求を保留する／保留した要求の数が n になるまで待つ／最も古い要求を解放する
+const hold = (page: Page, kind: string, on = true) => page.evaluate(([k, v]) => (window.__fdSaAuthServer!.hold[k as "sign-in"] = v as boolean), [kind, on] as const)
+const waitHeld = (page: Page, kind: string, n = 1) => expect.poll(() => page.evaluate((k) => window.__fdSaAuthServer!.heldCount(k as "sign-in"), kind)).toBe(n)
+const release = async (page: Page, kind: string) => {
+  expect(await page.evaluate((k) => window.__fdSaAuthServer!.release(k as "sign-in"), kind)).toBe(true)
+  await settle(page)
+}
+// 解放した応答（latency 0 の setTimeout）と、それによる React の描画が終わるまで、タイマーと描画のフレームを順に待つ（固定の時間ではない）
+const settle = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        let n = 0
+        const step = () => (++n > 4 ? requestAnimationFrame(() => resolve()) : setTimeout(step, 0))
+        step()
+      })
+  )
 const fast = (page: Page) =>
   server(page, (s) => {
     for (const k of Object.keys(s.latency) as (keyof typeof s.latency)[]) s.latency[k] = 60
@@ -373,7 +391,8 @@ test.describe("Authentication errors", () => {
 test.describe("Sign-in transitions", () => {
   test("double submission sends one request; the button shows loading and keeps focus", async ({ page }) => {
     await open(page)
-    await server(page, (s) => (s.latency["sign-in"] = 800))
+    // 応答を保留している間に、Enter の連打とボタンの押下を行う（操作の速さに依存しない）
+    await hold(page, "sign-in")
     const f = frame(page, "auth-signin-frame")
     await email(f, "auth-signin").fill(sato.email)
     await password(f, "auth-signin").fill(demoPassword)
@@ -383,6 +402,9 @@ test.describe("Sign-in transitions", () => {
     await expect(button).toHaveAttribute("data-loading", "true")
     await expect(button).toHaveAttribute("aria-disabled", "true")
     await button.click({ force: true })
+    await waitHeld(page, "sign-in", 1)
+    expect(await requests(page, "sign-in")).toHaveLength(1)
+    await release(page, "sign-in")
     await expect(frame(page, "auth-signin-frame").getByTestId("auth-signin-mfa-code")).toBeVisible()
     expect(await requests(page, "sign-in")).toHaveLength(1)
   })
@@ -443,6 +465,12 @@ test.describe("Sign-in transitions", () => {
     expect((await cells(1))[1]).toContain("/w/hq/home（既定の画面")
     expect((await cells(2))[1]).toContain("/w/hq/home（既定の画面")
     for (let i = 3; i < 8; i++) for (const c of await cells(i)) expect(c).toContain("/w/hq/home（既定の画面。復帰先が同じオリジンの相対パスではない）")
+    // 指定なし
+    for (const c of await cells(8)) expect(c).toContain("（既定の画面。復帰先の指定がない）")
+    // 不完全なエンコード、ドットのセグメント、二重のエンコード：安全性を確定できないため、既定の画面
+    for (const i of [9, 10, 11]) for (const c of await cells(i)) expect(c).toContain("/w/hq/home（既定の画面。復帰先が同じオリジンの相対パスではない）")
+    // エンコードした検索の条件は、入力した値のまま戻す
+    for (const c of await cells(12)) expect(c).toContain("/w/hq/customers?q=%E9%9D%92%E5%B1%B1（元の目的の画面）")
   })
 
   test("organization policy: SSO only (no password, no external accounts) for 西日本営業部", async ({ page }) => {
@@ -476,14 +504,14 @@ test.describe("Sign-in transitions", () => {
 
   test("a response after the screen is gone is ignored (AbortSignal ignored by the server)", async ({ page }) => {
     await open(page)
-    await server(page, (s) => {
-      s.ignoreAbort = true
-      s.latency["sign-in"] = 600
-    })
+    await server(page, (s) => (s.ignoreAbort = true))
+    await hold(page, "sign-in")
     const f = frame(page, "auth-signin-frame")
     await signIn(f, "auth-signin", sato.email, demoPassword)
+    await waitHeld(page, "sign-in", 1)
+    // 応答の前に画面を作り直し、その後に古い応答を届ける
     await page.getByTestId("auth-signin-restart").click()
-    await page.waitForTimeout(900)
+    await release(page, "sign-in")
     await expect(page.getByTestId("auth-signin-state")).toHaveText("状態：未認証")
     await expect(frame(page, "auth-signin-frame").getByTestId("auth-signin-mfa-code")).toHaveCount(0)
   })
@@ -602,6 +630,174 @@ test.describe("Verification code", () => {
     await expect(m.getByTestId("auth-mfa-status")).toContainText("新しいコードを送信しました")
     await expect(m.getByTestId("auth-mfa-resend")).toBeDisabled()
     expect(await requests(page, "mfa-send")).toHaveLength(1)
+  })
+})
+
+// ------------------------------------------------------------------ 認証フォーム（v0.1 の最終調整）
+test.describe("Authentication forms: validation rules, code input and stale responses", () => {
+  const mfa = (page: Page) => frame(page, "auth-mfa-frame")
+  const code = (page: Page) => mfa(page).getByTestId("auth-mfa-code")
+  const codeError = (page: Page) => mfa(page).locator("[data-slot=field]").filter({ has: page.getByTestId("auth-mfa-code") }).locator("[data-slot=field-error]")
+
+  test("sign-in sends a password without trimming or strength rules; a whitespace-only password is not empty", async ({ page }) => {
+    await open(page)
+    const f = frame(page, "auth-signin-frame")
+    await signIn(f, "auth-signin", sato.email, "   ")
+    await expect(f.getByTestId("auth-signin-error")).toContainText("メールアドレスまたはパスワードが正しくありません")
+    await expect(f.locator("[data-slot=field-error]")).toHaveCount(0)
+    // 前後に空白を付けたパスワードは、空白を取り除かずに送る（模擬のサーバーは一致しないと判断する）
+    await signIn(f, "auth-signin", sato.email, ` ${demoPassword} `)
+    await expect(f.getByTestId("auth-signin-error")).toContainText("メールアドレスまたはパスワードが正しくありません")
+    expect(await requests(page, "sign-in")).toHaveLength(2)
+    await expect(f.getByTestId("auth-signin-mfa-code")).toHaveCount(0)
+  })
+
+  test("too many digits: not truncated, explained next to the field, nothing is sent", async ({ page }) => {
+    await open(page)
+    await code(page).fill("0123456")
+    await expect(code(page)).toHaveValue("0123456")
+    await mfa(page).getByTestId("auth-mfa-submit").click()
+    await expect(codeError(page)).toHaveText("確認コードは 6 桁で入力してください（入力：7 桁）")
+    await expect(code(page)).toBeFocused()
+    expect(await requests(page, "mfa")).toHaveLength(0)
+  })
+
+  test("unexpected characters are kept and reported instead of being removed", async ({ page }) => {
+    await open(page)
+    await code(page).fill("01a345")
+    // 「a」を取り除いて「01345」として送らない
+    await expect(code(page)).toHaveValue("01a345")
+    await mfa(page).getByTestId("auth-mfa-submit").click()
+    await expect(codeError(page)).toHaveText("確認コードは数字だけで入力してください")
+    expect(await requests(page, "mfa")).toHaveLength(0)
+    // 先頭の 0 を含む正しいコードは送る
+    await code(page).fill(demoVerificationCode)
+    await mfa(page).getByTestId("auth-mfa-submit").click()
+    await expect(page.getByTestId("auth-mfa-result")).toHaveText("認証済み：佐藤 花子")
+  })
+
+  test("IME: no normalization and no automatic submission while composing; one submission after commit", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "CDP（Chromium のみ）で IME を再現するため")
+    await open(page)
+    await page.getByTestId("auth-mfa-auto-submit").check()
+    await code(page).focus()
+    const cdp = await page.context().newCDPSession(page)
+    // 6 文字の変換中の文字（未確定）：桁数が揃っても送信しない
+    await cdp.send("Input.imeSetComposition", { text: "０１２３４５", selectionStart: 6, selectionEnd: 6 })
+    await expect(code(page)).toHaveValue("０１２３４５")
+    await expect(code(page)).toHaveAttribute("data-composing", "true")
+    await settle(page)
+    expect(await requests(page, "mfa")).toHaveLength(0)
+    // 確定すると整え（全角の数字の変換は製品の指定）、1 回だけ送信する
+    await cdp.send("Input.insertText", { text: "０１２３４５" })
+    await expect(page.getByTestId("auth-mfa-result")).toHaveText("認証済み：佐藤 花子")
+    expect(await requests(page, "mfa")).toHaveLength(1)
+  })
+
+  test("paste and one-time-code autofill: normalized and submitted once when automatic submission is enabled", async ({ page }) => {
+    await open(page)
+    await page.getByTestId("auth-mfa-auto-submit").check()
+    await hold(page, "mfa")
+    // 自動入力（autocomplete="one-time-code"）は、値の置き換えの input イベントとして届く
+    await code(page).evaluate((el: HTMLInputElement, v) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v)
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: v }))
+    }, " 012-345 ")
+    await expect(code(page)).toHaveValue("012345")
+    await waitHeld(page, "mfa", 1)
+    // 同じ値のペーストと、送信中の Enter・ボタンの押下で、二重に送信しない
+    await code(page).fill("012345")
+    await code(page).press("Enter")
+    await mfa(page).getByTestId("auth-mfa-submit").click({ force: true })
+    await expect(mfa(page).getByTestId("auth-mfa-submit")).toHaveAttribute("data-loading", "true")
+    await settle(page)
+    expect(await requests(page, "mfa")).toHaveLength(1)
+    await release(page, "mfa")
+    await expect(page.getByTestId("auth-mfa-result")).toHaveText("認証済み：佐藤 花子")
+    expect(await requests(page, "mfa")).toHaveLength(1)
+  })
+
+  test("case-sensitive recovery codes are not uppercased; the keyboard does not capitalize them", async ({ page }) => {
+    await open(page)
+    await page.getByRole("radio", { name: "区別する（入力のまま送る）" }).check()
+    await mfa(page).getByTestId("auth-mfa-other").click()
+    await mfa(page).getByRole("button", { name: "リカバリーコードを使う" }).click()
+    await expect(code(page)).toHaveAttribute("autocapitalize", "none")
+    await code(page).fill("7kq2-m9xd")
+    await expect(code(page)).toHaveValue("7kq2m9xd")
+    await mfa(page).getByTestId("auth-mfa-submit").click()
+    // 入力のまま送り、サーバーが区別して比べる（大文字のコードとは一致しない）
+    await expect(mfa(page).getByTestId("auth-mfa-error")).toContainText("リカバリーコードが正しくありません")
+    await code(page).fill("7KQ2-M9XD")
+    await expect(code(page)).toHaveValue("7KQ2M9XD")
+    await mfa(page).getByTestId("auth-mfa-submit").click()
+    await expect(page.getByTestId("auth-mfa-result")).toHaveText("認証済み：佐藤 花子")
+    // 区別しない製品の設定では、大文字にそろえ、キーボードも大文字にする
+    await page.getByTestId("auth-mfa-restart").click()
+    await page.getByRole("radio", { name: "区別しない（大文字にそろえる）" }).check()
+    await mfa(page).getByTestId("auth-mfa-other").click()
+    await mfa(page).getByRole("button", { name: "リカバリーコードを使う" }).click()
+    await expect(code(page)).toHaveAttribute("autocapitalize", "characters")
+  })
+
+  test("after resending the code, the result of verifying the previous code is not applied", async ({ page }) => {
+    await open(page)
+    await server(page, (s) => {
+      s.resendCooldownMs = 0
+      s.ignoreAbort = true
+    })
+    // 鈴木 一郎：SMS だけ
+    await page.getByRole("radio", { name: /鈴木 一郎/ }).check()
+    await expect(mfa(page).getByTestId("auth-mfa")).toHaveAttribute("data-method", "sms")
+    await hold(page, "mfa")
+    await code(page).fill("999999")
+    await mfa(page).getByTestId("auth-mfa-submit").click()
+    await waitHeld(page, "mfa", 1)
+    // 確認の途中で再送信する（再送信は確認の結果を待たない）
+    await mfa(page).getByTestId("auth-mfa-resend").click()
+    await expect(mfa(page).getByTestId("auth-mfa-status")).toContainText("新しいコードを送信しました")
+    // 新しいコードの入力を、前のコードの確認の Loading で止めない
+    await expect(mfa(page).getByTestId("auth-mfa-submit")).not.toHaveAttribute("data-loading", "true")
+    // 前のコードの確認の結果（不一致）を届ける：新しいコードの画面に反映しない
+    await release(page, "mfa")
+    await expect(mfa(page).getByTestId("auth-mfa-error")).toBeEmpty()
+    await expect(mfa(page).getByTestId("auth-mfa-status")).toContainText("新しいコードを送信しました")
+    // 新しい確認は通常どおり
+    await hold(page, "mfa", false)
+    await code(page).fill(demoVerificationCode)
+    await mfa(page).getByTestId("auth-mfa-submit").click()
+    await expect(page.getByTestId("auth-mfa-result")).toHaveText("認証済み：鈴木 一郎")
+  })
+
+  test("after changing the method, an older response (verification or code sending) is not applied", async ({ page }) => {
+    await open(page)
+    await server(page, (s) => (s.ignoreAbort = true))
+    const m = mfa(page)
+    // 1. 認証アプリのコードの確認を保留したまま、リカバリーコードに変える
+    await hold(page, "mfa")
+    await code(page).fill("999999")
+    await m.getByTestId("auth-mfa-submit").click()
+    await waitHeld(page, "mfa", 1)
+    await m.getByTestId("auth-mfa-other").click()
+    await m.getByRole("button", { name: "リカバリーコードを使う" }).click()
+    await expect(m.getByTestId("auth-mfa")).toHaveAttribute("data-method", "recovery-code")
+    await release(page, "mfa")
+    await expect(m.getByTestId("auth-mfa-error")).toBeEmpty()
+    await expect(m.getByTestId("auth-mfa")).toHaveAttribute("data-method", "recovery-code")
+    await hold(page, "mfa", false)
+    // 2. SMS の送信を保留したまま、認証アプリに戻す：送信の応答で SMS に切り替えない
+    await hold(page, "mfa-send")
+    await m.getByTestId("auth-mfa-other").click()
+    await m.getByRole("button", { name: "SMS でコードを受け取る" }).click()
+    await waitHeld(page, "mfa-send", 1)
+    await m.getByRole("button", { name: "認証アプリのコードを使う" }).click()
+    await expect(m.getByTestId("auth-mfa")).toHaveAttribute("data-method", "totp")
+    await release(page, "mfa-send")
+    await expect(m.getByTestId("auth-mfa")).toHaveAttribute("data-method", "totp")
+    await expect(m.getByTestId("auth-mfa-status")).toBeEmpty()
+    await code(page).fill(demoVerificationCode)
+    await m.getByTestId("auth-mfa-submit").click()
+    await expect(page.getByTestId("auth-mfa-result")).toHaveText("認証済み：佐藤 花子")
   })
 })
 
@@ -869,11 +1065,10 @@ test.describe("Session expiry", () => {
     await open(page)
     await page.getByTestId("auth-session-note").fill("未保存の下書き")
     await page.getByTestId("auth-session-expire").click()
-    await server(page, (x) => {
-      x.ignoreAbort = true
-      x.latency.permissions = 1200
-    })
+    await server(page, (x) => (x.ignoreAbort = true))
+    await hold(page, "permissions")
     await reauth(page)
+    await waitHeld(page, "permissions", 1)
     const verifying = page.getByTestId("auth-session-verifying")
     await expect(verifying).toContainText("権限を確かめています")
     // 確認の途中は内容を表示せず、再試行の操作もない（二重に確かめない）
@@ -882,8 +1077,47 @@ test.describe("Session expiry", () => {
     // 応答の前にページを離れる。AbortSignal に従わない応答が後から届いても、例外やエラーにしない（collectPageErrors）
     await page.goto("/#/data-states")
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible()
-    await page.waitForTimeout(1500)
+    await release(page, "permissions")
     expect(await requests(page, "permissions")).toHaveLength(1)
+    // 古い応答の後に、照会（load）を続けない
+    expect(await requests(page, "load")).toHaveLength(0)
+  })
+
+  test("same user without the view permission: neither the customer nor the draft is shown; the save result is not queried", async ({ page }) => {
+    await open(page)
+    await page.getByRole("radio", { name: "閲覧の権限がなくなる" }).check()
+    await page.getByTestId("auth-session-expire-on-save").check()
+    await page.getByTestId("auth-session-note").fill("閲覧できなくなる下書き")
+    await page.getByTestId("auth-session-save").click()
+    await expect(s(page).getByTestId("auth-reauth")).toBeVisible()
+    await reauth(page)
+    const blocked = s(page).getByTestId("auth-session-no-access")
+    await expect(blocked).toBeVisible()
+    await expect(blocked.getByTestId("auth-session-message")).toContainText("閲覧の権限がなくなったため")
+    await expect(page.getByTestId("auth-session-content")).toHaveCount(0)
+    await expect(s(page).getByText(company)).toHaveCount(0)
+    await expect(page.getByText("閲覧できなくなる下書き")).toHaveCount(0)
+    await expect(page.getByText("来月の更新の前に")).toHaveCount(0)
+    // 閲覧できない利用者の認可では、保存の結果を照会しない。保存を再送信しない
+    expect(await requests(page, "load")).toHaveLength(0)
+    expect(await requests(page, "save")).toHaveLength(1)
+  })
+
+  test("same user in another workspace: the previous work is not restored and the previous workspace's data is not shown", async ({ page }) => {
+    await open(page)
+    await page.getByRole("radio", { name: "別のワークスペース（西日本営業部）" }).check()
+    await page.getByTestId("auth-session-note").fill("本社営業部の下書き")
+    await page.getByTestId("auth-session-expire").click()
+    await reauth(page)
+    const other = s(page).getByTestId("auth-session-other-workspace")
+    await expect(other).toContainText("西日本営業部のホーム")
+    await expect(page.getByTestId("auth-session-content")).toHaveCount(0)
+    await expect(s(page).getByText(company)).toHaveCount(0)
+    await expect(page.getByText("本社営業部の下書き")).toHaveCount(0)
+    await expect(page.getByTestId("auth-session-log")).toContainText("別のワークスペースでログインしました")
+    await expect(page.getByTestId("auth-session-log")).toContainText("入力、通知、キャッシュ、非同期の結果、結果が不明な保存")
+    // 前のワークスペースのデータを照会しない
+    expect(await requests(page, "load")).toHaveLength(0)
   })
 
   test("a different user: the previous user's draft and data are discarded", async ({ page }) => {
@@ -896,6 +1130,8 @@ test.describe("Session expiry", () => {
     await expect(page.getByText("佐藤の未保存の下書き")).toHaveCount(0)
     await expect(page.getByText("来月の更新の前に")).toHaveCount(0)
     await expect(page.getByTestId("auth-session-message")).toBeEmpty()
+    // 破棄の対象：入力、認証情報、通知、キャッシュ、非同期の結果、結果が不明な保存
+    await expect(page.getByTestId("auth-session-log")).toContainText("入力、認証情報、通知、キャッシュ、非同期の結果、結果が不明な保存")
   })
 })
 
@@ -960,8 +1196,12 @@ test.describe("Sign-out and account switching", () => {
     await open(page)
     const f = a(page)
     const toastText = /顧客の書き出しが完了しました/
-    // A（本社営業部）で開始 → B（西日本営業部）→ A に戻る。最初の A の結果は反映しない
+    // A（本社営業部）で開始 → 応答を保留 → B（西日本営業部）→ A に戻る → 最初の A の応答を解放する。最初の A の結果は反映しない。
+    // サーバーは AbortSignal に従わない（中止しても応答が届く）
+    await server(page, (s) => (s.ignoreAbort = true))
+    await hold(page, "export")
     await f.getByTestId("auth-account-export").click()
+    await waitHeld(page, "export", 1)
     const select = async (name: string) => {
       await f.getByTestId("auth-account-workspace").click()
       await page.getByRole("option", { name }).click()
@@ -969,11 +1209,13 @@ test.describe("Sign-out and account switching", () => {
     await select("西日本営業部")
     await expect(f.getByTestId("auth-account-summary")).toContainText("西日本営業部")
     await select("本社営業部")
-    await page.waitForTimeout(3400)
+    await expect(f.getByTestId("auth-account-summary")).toContainText("本社営業部")
+    await release(page, "export")
     await expect(page.getByText(toastText)).toHaveCount(0)
     // 同じスコープで完了した結果は知らせ、スコープが変わったら閉じる
+    await hold(page, "export", false)
     await f.getByTestId("auth-account-export").click()
-    await expect(page.getByText("顧客の書き出しが完了しました（本社営業部）")).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText("顧客の書き出しが完了しました（本社営業部）")).toBeVisible()
     await select("西日本営業部")
     await expect(page.getByText(toastText)).toHaveCount(0)
   })
@@ -1002,6 +1244,51 @@ test.describe("Credentials are not persisted", () => {
     // パスワードの欄の値は、最初の要素の確認の後に残さない（追加の確認の画面に戻っても空）
     expect(await page.locator("input[type=password]").evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).filter((v) => v !== ""))).toEqual([])
   })
+
+  test("recovery codes, new passwords and re-authentication also stay out of the URL, storage, history state and console", async ({ page }) => {
+    const logs: string[] = []
+    page.on("console", (m) => logs.push(m.text()))
+    await open(page)
+    const newPassword = "a-new-long-password-42"
+    const signUpPassword = "sign-up-long-pass-77"
+    // リカバリーコード
+    const m = frame(page, "auth-mfa-frame")
+    await m.getByTestId("auth-mfa-other").click()
+    await m.getByRole("button", { name: "リカバリーコードを使う" }).click()
+    await m.getByTestId("auth-mfa-code").fill("7KQ2-M9XD")
+    await m.getByTestId("auth-mfa-submit").click()
+    await expect(page.getByTestId("auth-mfa-result")).toBeVisible()
+    // 新規登録のパスワード
+    const up = frame(page, "auth-signup-frame")
+    await up.getByTestId("auth-signup-email").fill("new.user@example.com")
+    await up.getByTestId("auth-signup-password").fill(signUpPassword)
+    await up.getByTestId("auth-signup-terms").click()
+    await up.getByTestId("auth-signup-submit").click()
+    await expect(up.getByTestId("auth-verify")).toBeVisible()
+    // パスワードの再設定
+    const r = frame(page, "auth-reset-frame")
+    await r.getByTestId("auth-reset-request-email").fill(sato.email)
+    await r.getByTestId("auth-reset-request-submit").click()
+    await page.getByTestId("auth-reset-mailbox").getByRole("button", { name: "リンクを開く" }).click()
+    await r.getByTestId("auth-new-password-password").fill(newPassword)
+    await r.getByTestId("auth-new-password-submit").click()
+    await expect(r.getByTestId("auth-reset-signin")).toBeVisible()
+    // セッション切れの再認証（パスワードと確認コード）
+    const sf = frame(page, "auth-session-frame")
+    await page.getByTestId("auth-session-expire").click()
+    await sf.getByTestId("auth-reauth-password").fill(demoPassword)
+    await sf.getByTestId("auth-reauth-submit").click()
+    await enterCode(page, "auth-reauth-mfa")
+    await expect(sf.getByTestId("auth-session-content")).toBeVisible()
+    const dump = await page.evaluate(() => {
+      const store = (s: Storage) => Array.from({ length: s.length }, (_, i) => `${s.key(i)}=${s.getItem(s.key(i)!)}`).join("\n")
+      return [store(localStorage), store(sessionStorage), document.cookie, location.href, JSON.stringify(history.state), JSON.stringify(window.__fdSaAuthServer?.requests)].join("\n")
+    })
+    for (const secret of [demoPassword, demoVerificationCode, "7KQ2M9XD", "7KQ2-M9XD", newPassword, signUpPassword]) {
+      expect(dump, secret).not.toContain(secret)
+      expect(logs.join("\n"), secret).not.toContain(secret)
+    }
+  })
 })
 
 // ------------------------------------------------------------------ 動きを減らす設定
@@ -1009,7 +1296,8 @@ test.describe("Reduced motion", () => {
   test.use({ reducedMotion: "reduce" })
   test("the loading spinner does not rotate", async ({ page }) => {
     await open(page)
-    await server(page, (s) => (s.latency["sign-in"] = 1500))
+    // 応答を保留して、Loading の状態を保つ
+    await hold(page, "sign-in")
     const f = frame(page, "auth-signin-frame")
     await signIn(f, "auth-signin", sato.email, demoPassword)
     const spinner = submit(f, "auth-signin").locator("[data-slot=button-spinner] svg")

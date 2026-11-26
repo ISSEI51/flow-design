@@ -7,14 +7,19 @@
 // - Checklist の完了は、製品が渡す「実際の作業結果」（完了した作業の ID）だけで判定する。作業のボタンを押したこと、
 //   Checklist を非表示にしたことは、完了として扱わない。
 // - 非表示（visibility）と完了（progress）を別の値として返す。非表示にしても、必須の作業の達成（requirementsMet）は変わらない。
+// - 必須の条件（requirementsMet）は、Checklist の表示の対象（items）ではなく、すべての作業の定義と実際の作業結果から判定する。
+//   権限のない作業を Checklist から除いても、招待されたメンバーに組織の作業を示さなくても、必須の条件は達成にならない。
 // - アカウント単位の作業はアカウントの結果だけ、組織単位の作業は組織の結果だけで判定する（別の範囲の結果を混ぜない）。
 // - 権限のない作業を Checklist に含めない。招待されたメンバーには、組織で完了済みの作業を再び示さない。
+// - 対象の作業が 0 件の場合（progress が none）と、すべて完了した場合（completed）を区別する。0 件を完了として扱わない。
 // - 初期作業が 1 件以下の場合は、Checklist を使わない（presentation が none）。
+// - 完了は、渡された結果だけから毎回導く。完了した作業が後から未完了になった場合（結果から ID が消えた場合）は、未完了に戻る。
 //
 // この部品が持たないもの（製品の責務）
 // - 状態の永続化（表示の状態、スキップ、途中の入力、閉じた案内）。サーバーなどに保存し、再読み込みや別の端末でも同じ状態にする。
 // - 実際の作業結果の取得（顧客の件数、招待の件数、支払い方法の有無など）。サンプルデータは実際の作業結果に含めない。
-// - 利用開始の要件の強制（必須の設定がない場合に機能を制限するかどうか）、権限の実際の検査（バックエンド）、計測。
+// - 利用開始の要件の強制（必須の設定がない場合に機能を制限するかどうか。requirementsMet を使い、Checklist の表示で判断しない）、
+//   権限の実際の検査（バックエンド）、計測。
 
 // ---------------------------------------------------------------- 初回の画面
 
@@ -31,6 +36,8 @@ type FirstScreen =
 /**
  * 認証の後に表示する画面を決める。歓迎するだけの画面（Welcome）は返さない。
  * requiredSetup には「利用開始の前に必要な設定」だけを渡す。利用開始の後でもできる設定、特定の機能を使うときに必要な設定は渡さない。
+ * 必須の設定が完了していない間の操作の制限は、この結果（required-setup）で製品の利用画面へ移らないことで行う。認証の直後だけでなく、
+ * 製品の画面へ移るたび（直接の URL、ブックマークを含む）に製品のルーターが判定し直し、バックエンドも要求ごとに要件を確かめる。
  */
 function resolveFirstScreen({
   hasWorkspace,
@@ -55,6 +62,12 @@ function resolveFirstScreen({
 
 /** 進捗の状態。表示の状態（ChecklistVisibility）とは別に持つ */
 type OnboardingProgress = "not-started" | "in-progress" | "interrupted" | "skipped" | "completed"
+
+/**
+ * Checklist の進捗。none は対象の作業が 0 件（権限と利用者の種類で、すべて除いた）。
+ * none は完了ではない（利用者は作業をしていない）。必須の条件は requirementsMet で別に判定する。
+ */
+type ChecklistProgress = "none" | Extract<OnboardingProgress, "not-started" | "in-progress" | "completed">
 
 /** Checklist の表示の状態。利用者が選ぶ。完了とは関係しない */
 type ChecklistVisibility = "expanded" | "collapsed" | "hidden"
@@ -120,7 +133,7 @@ type ChecklistItem<Id extends string = string> = {
 }
 
 type ChecklistPresentation =
-  /** Checklist を使わない（対象の作業が 1 件以下） */
+  /** Checklist を使わない（対象の作業が 0 件、または minTasks より少ない） */
   | "none"
   /** 非表示にした（製品は、再表示の入口を残す） */
   | "hidden"
@@ -129,21 +142,76 @@ type ChecklistPresentation =
   | "expanded"
   | "collapsed"
 
+/** 必須の作業の状態。Checklist の表示の対象（items）に含まれるかどうかに関係なく、すべての作業の定義から導く */
+type RequiredTaskStatus<Id extends string = string> = {
+  id: Id
+  title: string
+  scope: OnboardingTaskScope
+  /** 作業に必要な権限（null は誰でも行える） */
+  permission: string | null
+  /** 現在の利用者が、権限で行える */
+  permitted: boolean
+  done: boolean
+}
+
+type Requirements<Id extends string = string> = {
+  /** 必須の作業がすべて完了した（実際の作業結果による）。権限、利用者の種類、表示の状態に関係しない */
+  met: boolean
+  /** 完了していない必須の作業（権限のないものを含む） */
+  outstanding: RequiredTaskStatus<Id>[]
+}
+
+/**
+ * 必須の条件を導く。Checklist の表示の対象とは別の値。
+ * 権限のない作業も対象にする（権限がないことは、作業が完了したことを意味しない）。
+ */
+function deriveRequirements<Id extends string, P extends string>({
+  tasks,
+  permissions,
+  results,
+}: {
+  tasks: readonly OnboardingTaskDefinition<Id, P>[]
+  permissions: readonly P[]
+  results: OnboardingTaskResults<Id>
+}): Requirements<Id> {
+  const account = new Set<string>(results.account)
+  const workspace = new Set<string>(results.workspace)
+  const outstanding = tasks
+    .filter((t) => t.required)
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      scope: t.scope,
+      permission: t.permission ?? null,
+      permitted: !t.permission || permissions.includes(t.permission),
+      done: (t.scope === "account" ? account : workspace).has(t.id),
+    }))
+    .filter((r) => !r.done)
+  return { met: outstanding.length === 0, outstanding }
+}
+
 type Checklist<Id extends string = string> = {
   /** 表示する作業（権限と利用者の種類で絞り込んだもの） */
   items: ChecklistItem<Id>[]
   doneCount: number
   total: number
-  /** 作業の進捗。表示の状態とは別 */
-  progress: Extract<OnboardingProgress, "not-started" | "in-progress" | "completed">
+  /** 作業の進捗。表示の状態とは別。対象の作業が 0 件の場合は none（完了ではない） */
+  progress: ChecklistProgress
   /** 利用者が選んだ表示の状態 */
   visibility: ChecklistVisibility
   /** 実際に表示する形 */
   presentation: ChecklistPresentation
-  /** 必須の作業がすべて完了した。非表示にしても true にならない */
+  /**
+   * 必須の作業がすべて完了した（requirements.met と同じ）。非表示にしても true にならない。
+   * 権限のない必須の作業が完了していない場合も false（Checklist から除いたことで達成にしない）
+   */
   requirementsMet: boolean
-  /** 完了していない必須の作業（権限のある作業だけ） */
+  /** 完了していない必須の作業のうち、この利用者が行えるもの（Checklist に表示する作業） */
   outstandingRequired: ChecklistItem<Id>[]
+  /** 完了していない必須の作業のうち、この利用者に権限がないもの（Checklist に表示しない。ほかの利用者が行う） */
+  outstandingRequiredWithoutPermission: RequiredTaskStatus<Id>[]
+  /** 必須の条件。Checklist の表示の対象とは別に、すべての作業の定義から導く */
+  requirements: Requirements<Id>
 }
 
 /**
@@ -151,7 +219,9 @@ type Checklist<Id extends string = string> = {
  * - permissions に含まれない権限が必要な作業は除く。
  * - audience が invited（既存の組織に招待されたメンバー）の場合、組織で完了済みの作業を除く（設定済みの項目を再設定させない）。
  * - 完了は results だけで判定する。アカウント単位の作業は results.account、組織単位の作業は results.workspace だけを見る。
- * - 対象の作業が minTasks（既定 2）より少ない場合、presentation は none。
+ * - 対象の作業が 0 件の場合、progress は none（completed にしない）。
+ * - 対象の作業が 0 件、または minTasks（既定 2）より少ない場合、presentation は none。
+ * - requirementsMet は、Checklist の対象ではなく、すべての作業の定義から判定する（deriveRequirements）。
  */
 function deriveChecklist<Id extends string, P extends string>({
   tasks,
@@ -185,10 +255,11 @@ function deriveChecklist<Id extends string, P extends string>({
     .filter((item) => !(audience === "invited" && item.scope === "workspace" && item.done))
   const doneCount = items.filter((i) => i.done).length
   const total = items.length
-  const progress = total > 0 && doneCount === total ? "completed" : doneCount === 0 ? "not-started" : "in-progress"
+  const progress: ChecklistProgress = total === 0 ? "none" : doneCount === total ? "completed" : doneCount === 0 ? "not-started" : "in-progress"
   const outstandingRequired = items.filter((i) => i.required && !i.done)
+  const requirements = deriveRequirements({ tasks, permissions, results })
   const presentation: ChecklistPresentation =
-    total < minTasks ? "none" : visibility === "hidden" ? "hidden" : progress === "completed" ? "completed" : visibility
+    total === 0 || total < minTasks ? "none" : visibility === "hidden" ? "hidden" : progress === "completed" ? "completed" : visibility
   return {
     items,
     doneCount,
@@ -196,8 +267,10 @@ function deriveChecklist<Id extends string, P extends string>({
     progress,
     visibility,
     presentation,
-    requirementsMet: outstandingRequired.length === 0,
+    requirementsMet: requirements.met,
     outstandingRequired,
+    outstandingRequiredWithoutPermission: requirements.outstanding.filter((r) => !r.permitted),
+    requirements,
   }
 }
 
@@ -215,15 +288,18 @@ function pickGuidance<Id extends string>(
   return candidates.find((c) => c.eligible && !closed.has(c.id))?.id ?? null
 }
 
-export { deriveChecklist, getSetupStatus, pickGuidance, resolveFirstScreen }
+export { deriveChecklist, deriveRequirements, getSetupStatus, pickGuidance, resolveFirstScreen }
 export type {
   Checklist,
   ChecklistItem,
   ChecklistPresentation,
+  ChecklistProgress,
   ChecklistVisibility,
   FirstScreen,
   OnboardingProgress,
   OnboardingTaskDefinition,
   OnboardingTaskResults,
   OnboardingTaskScope,
+  RequiredTaskStatus,
+  Requirements,
 }

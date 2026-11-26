@@ -2,6 +2,7 @@
 // 端末のネットワーク（模擬の navigator.onLine）、サービスへの経路、機能ごとの稼働状態、状態の API の失敗、保存の結果、
 // 長時間の処理（ジョブ）の進捗とキャンセルを再現し、Patterns の挙動を確かめる。
 // 検品からは window.__fdSaSystemServer で設定する（応答の時間、結果、ignoreAbort、受け付けた要求の記録、reset()）。
+// 応答の順序を検品で決める場合は hold で要求を保留し、release / releaseAll で結果を決めて解放する（固定の応答時間に頼らない）。
 
 import type { BrowserOnlineSource } from "@/patterns/system-status-hooks"
 import type { JobSnapshot, JobState, RetryPolicy, ServiceHealth } from "@/patterns/system-status"
@@ -123,7 +124,16 @@ type ServerConfig = {
   statusPollInterval: number
   /** 受け付けた要求（検品用）。サービスに届かなかった要求も記録する（reached） */
   requests: { kind: RequestKind; workspace?: string; detail?: string; reached: boolean }[]
+  /** 保留する要求の種類（検品用）。保留した要求は、release か releaseAll で結果を決めるまで応答しない */
+  hold: Partial<Record<HoldableKind, boolean>>
+  /** ジョブが正しくない値を返す（検品用）。progress：処理中に合計を超える件数。counts：完了の件数の合計が全体を超える */
+  jobInvalidReport: "none" | "progress" | "counts"
 }
+
+type HoldableKind = "probe" | "list" | "save" | "job-list" | "job-start" | "register"
+type HeldOutcome = "success" | "fail"
+/** 保留している要求（検品用）。id は保留した順の番号 */
+type HeldRequest = { id: number; kind: HoldableKind; detail?: string; aborted: boolean; settled: boolean; settle: (outcome: HeldOutcome) => void }
 
 const pastIncidents = (): Incident[] => [
   {
@@ -186,6 +196,8 @@ const initialConfig = (): ServerConfig => ({
   syncOutcome: "success",
   statusPollInterval: 5000,
   requests: [],
+  hold: {},
+  jobInvalidReport: "none",
 })
 
 // ---------------------------------------------------------------- 状態の場面（資料のページの操作と検品で使う）
@@ -269,6 +281,9 @@ let jobTimer: ReturnType<typeof setInterval> | null = null
 /** オフラインの登録の同期で、サーバーが受け付けた登録（端末の ID ごと。重複の防止の確認に使う） */
 let registered: Record<string, { name: string; workspace: WorkspaceId }> = {}
 let listCalls = 0
+/** 保留している要求（検品用） */
+let held: HeldRequest[] = []
+let heldSeq = 0
 
 function resetStore() {
   memos = {
@@ -281,6 +296,7 @@ function resetStore() {
   listCalls = 0
   if (jobTimer) clearInterval(jobTimer)
   jobTimer = null
+  held = []
 }
 resetStore()
 
@@ -301,6 +317,42 @@ function record(kind: RequestKind, workspace?: string, detail?: string) {
   const reached = config.browserOnline && config.reachable
   config.requests.push({ kind, workspace, detail, reached })
   return reached
+}
+
+/**
+ * 保留した要求。release で結果を決めるまで応答しない。signal に従う場合は、中止で AbortError にする（ignoreAbort では従わない）。
+ * 中止の後に release しても、ignoreAbort の場合は結果を返す（AbortSignal に従わない処理の模擬）。
+ * value はサーバーでの処理。success で release したときに実行する（保存は、そのときにサーバーで処理される）。
+ */
+function holdRequest<T>(kind: HoldableKind, detail: string | undefined, signal: AbortSignal | undefined, value: () => T, failMessage: string, failCode: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const entry: HeldRequest = {
+      id: ++heldSeq,
+      kind,
+      detail,
+      aborted: false,
+      settled: false,
+      settle: (outcome) => {
+        if (entry.settled) return
+        entry.settled = true
+        if (outcome === "success") resolve(value())
+        else reject(new MockRequestError(failMessage, failCode))
+      },
+    }
+    held.push(entry)
+    if (signal && !config.ignoreAbort) {
+      const onAbort = () => {
+        entry.aborted = true
+        if (entry.settled) return
+        entry.settled = true
+        reject(new DOMException("aborted", "AbortError"))
+      }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener("abort", onAbort, { once: true })
+    } else if (signal) {
+      signal.addEventListener("abort", () => (entry.aborted = true), { once: true })
+    }
+  })
 }
 
 /** サービスに届かない要求（処理されない失敗）。応答の時間の後に失敗する */
@@ -337,13 +389,14 @@ function advanceJobs() {
     const total = 1240
     const done = Math.min(total, j.internalDone + 310)
     j.internalDone = done
-    j.progress = config.jobReportsProgress ? { done, total } : null
+    j.progress = config.jobReportsProgress ? { done: config.jobInvalidReport === "progress" ? done + total : done, total } : null
     j.revision++
     changed = true
     if (done >= total) {
       const outcome = config.jobOutcome
       j.state = outcome
       j.counts = outcome === "partial" ? { succeeded: total - 12, failed: 12 } : outcome === "succeeded" ? { succeeded: total, failed: 0 } : null
+      if (j.counts && config.jobInvalidReport === "counts") j.counts = { succeeded: total, failed: 12 }
     }
   }
   if (!jobs.some((j) => j.state === "queued" || j.state === "running" || j.state === "cancel-requested")) {
@@ -410,6 +463,21 @@ export const systemServer = Object.assign(config, {
     }
   },
   version: () => version,
+  /** 保留している要求（検品用）。settled は結果を決めたか、中止されたもの */
+  held: () => held.map(({ id, kind, detail, aborted, settled }) => ({ id, kind, detail, aborted, settled })),
+  /** 保留している要求の結果を決める（id は held() の id）。結果を決めた要求の数を返す */
+  release(id: number, outcome: HeldOutcome = "success") {
+    const entry = held.find((h) => h.id === id && !h.settled)
+    if (!entry) return 0
+    entry.settle(outcome)
+    return 1
+  },
+  /** 保留しているその種類の要求の結果を、すべて決める */
+  releaseAll(kind: HoldableKind, outcome: HeldOutcome = "success") {
+    const list = held.filter((h) => h.kind === kind && !h.settled)
+    for (const h of list) h.settle(outcome)
+    return list.length
+  },
   /** 模擬の navigator.onLine（useConnectivity の browserOnline に渡す） */
   browser: {
     get: () => config.browserOnline,
@@ -424,10 +492,14 @@ export const systemServer = Object.assign(config, {
   retry: { baseDelay: 1000, maxDelay: 8000, maxAttempts: 4 } satisfies RetryPolicy,
 
   // -------------------------------------------------------------- API
-  /** 疎通の確認。ネットワークの経路を確かめる（サービスの稼働は getServiceStatus で確かめる） */
-  probe({ signal }: { signal: AbortSignal }): Promise<void> {
-    const reached = record("probe")
+  /**
+   * 疎通の確認。ネットワークの経路を確かめる（サービスの稼働は getServiceStatus で確かめる）。target は接続先（記録だけに使う）。
+   * hold.probe の間は保留する（release で結果を決める。reachable が false でも、決めた結果を返す）。
+   */
+  probe({ signal, target }: { signal: AbortSignal; target?: string }): Promise<void> {
+    const reached = record("probe", undefined, target)
     if (!config.browserOnline) return Promise.reject(new MockRequestError("ネットワークに接続していません", "network"))
+    if (config.hold.probe) return holdRequest("probe", target, signal, () => undefined, "サービスに接続できませんでした", "network")
     if (!reached) return unreachable(config.latency.probe, signal)
     if (config.probeFailures > 0) {
       config.probeFailures--
@@ -457,6 +529,15 @@ export const systemServer = Object.assign(config, {
   listCustomers(workspace: WorkspaceId, query: string, signal?: AbortSignal): Promise<{ id: string; company: string; owner: string }[]> {
     if (!record("list", workspace, query)) return unreachable(config.latency.list, signal)
     listCalls++
+    if (config.hold.list)
+      return holdRequest(
+        "list",
+        `${workspace}:${query}`,
+        signal,
+        () => customerSets[workspace].filter((c) => !query || c.company.includes(query)).map((c) => ({ id: c.id, company: c.company, owner: c.owner })),
+        "サービスに接続できませんでした",
+        "network"
+      )
     if (config.listFailures > 0) {
       config.listFailures--
       return mockRequest({ latency: config.latency.list, outcome: "fail", signal, run: () => [], failMessage: "顧客の一覧を取得できませんでした", failCode: "server" })
@@ -478,6 +559,14 @@ export const systemServer = Object.assign(config, {
 
   saveMemo(input: { workspace: WorkspaceId; customerId: string; text: string; requestId: string }, signal?: AbortSignal): Promise<MemoRecord> {
     if (!record("save", input.workspace, input.requestId)) return unreachable(config.latency.save, signal)
+    const saveRun = () => {
+      const prev = memos[input.workspace][input.customerId]
+      const next = { customerId: input.customerId, text: input.text, revision: (prev?.revision ?? 0) + 1, requestId: input.requestId }
+      memos[input.workspace][input.customerId] = next
+      notify()
+      return { ...next }
+    }
+    if (config.hold.save) return holdRequest("save", `${input.workspace}:${input.requestId}`, signal, saveRun, "保存できませんでした", "save")
     return mockRequest({
       latency: config.latency.save,
       outcome: config.saveOutcome,
@@ -514,13 +603,7 @@ export const systemServer = Object.assign(config, {
 
   startJob(workspace: WorkspaceId, kind: JobKind, signal?: AbortSignal): Promise<JobRecord> {
     if (!record("job-start", workspace, kind)) return unreachable(config.latency["job-start"], signal)
-    return mockRequest({
-      latency: config.latency["job-start"],
-      outcome: config.jobStartOutcome,
-      failMessage: "開始できませんでした",
-      failCode: "job-start",
-      signal,
-      run: () => {
+    const run = () => {
         const job: InternalJob = {
           id: `job-${kind}-${++jobNumber}`,
           revision: 1,
@@ -538,7 +621,16 @@ export const systemServer = Object.assign(config, {
         ensureJobTimer()
         notify()
         return snapshotJob(job)
-      },
+    }
+    // 保留した開始の要求は、release の結果で応答する（success：サーバーで開始する。fail：開始しない）
+    if (config.hold["job-start"]) return holdRequest("job-start", workspace, signal, run, "開始できませんでした", "job-start")
+    return mockRequest({
+      latency: config.latency["job-start"],
+      outcome: config.jobStartOutcome,
+      failMessage: "開始できませんでした",
+      failCode: "job-start",
+      signal,
+      run,
     })
   },
 
@@ -547,6 +639,7 @@ export const systemServer = Object.assign(config, {
     const latency = config.jobListLatencies.length > 0 ? config.jobListLatencies.shift()! : config.latency["job-list"]
     if (!record("job-list", workspace)) return unreachable(latency, signal)
     const snapshot = jobs.filter((j) => j.workspace === workspace).map(snapshotJob)
+    if (config.hold["job-list"]) return holdRequest("job-list", workspace, signal, () => snapshot, "処理の状況を取得できませんでした", "server")
     return mockRequest({ latency, signal, ignoreAbort: config.ignoreAbort, run: () => snapshot })
   },
 
@@ -573,6 +666,20 @@ export const systemServer = Object.assign(config, {
   registerCustomer(input: { workspace: WorkspaceId; localId: string; name: string }, signal?: AbortSignal): Promise<{ id: string }> {
     if (!record("register", input.workspace, input.localId)) return unreachable(config.latency.register, signal)
     const outcome = config.syncOutcome
+    // 保留した登録の要求は、release の結果で応答する（success：サーバーで登録する。fail：登録しない）
+    if (config.hold.register)
+      return holdRequest(
+        "register",
+        `${input.workspace}:${input.localId}`,
+        signal,
+        () => {
+          registered[input.localId] ??= { name: input.name, workspace: input.workspace }
+          notify()
+          return { id: `C-NEW-${input.localId}` }
+        },
+        "登録できませんでした",
+        "register",
+      )
     if (outcome === "conflict")
       return mockRequest({ latency: config.latency.register, outcome: "fail", signal, run: () => ({ id: "" }), failMessage: "同じ名前の顧客が、ほかの利用者によって登録されています", failCode: "conflict" })
     return mockRequest({

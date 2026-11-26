@@ -1,9 +1,11 @@
 // Permission States のプレビューの模擬のサーバー。実際の認可は行わない。Registry には含めない。
 // 実際の製品と同じく、操作を受け付けた時点（応答の直前）の権限で認可を判断し、閲覧できないデータを応答に含めない。
 // 検品から window.__fdSaPermissionServer で設定する（応答の時間、結果、ignoreAbort、受け付けた要求の記録、reset()）。
+// 応答の順序を検品で制御する場合は、hold で種類ごとに要求を保留し、release で解放する（固定の応答時間に依存しない）。
+// 保留した要求は、解放した時点でサーバーの処理（認可を含む）を行う。
 // このファイルは相対パスだけを import する（ブラウザを使わない検品から読み込むため）。
 
-import { mockRequest, MockRequestError, type MockOutcome } from "./mock"
+import { mockRequest, MockRequestError, MockUnknownError, type MockOutcome } from "./mock"
 import {
   memberships as seedMemberships,
   permissionLabels,
@@ -65,6 +67,26 @@ type Config = {
   ignoreAbort: boolean
   /** 受け付けた要求（検品用） */
   log: { kind: PermissionServerKind; scope: string; detail?: string }[]
+  /** 保留する要求の種類。true の種類の要求は、release まで応答しない（検品用） */
+  hold: Partial<Record<PermissionServerKind, boolean>>
+  /** 保留中の要求（受け付けた順）。中止された要求も、ignoreAbort が true の場合は残る */
+  held: HeldRequest[]
+}
+
+/** 保留中の要求 */
+export type HeldRequest = {
+  kind: PermissionServerKind
+  scope: string
+  detail?: string
+  /** log の位置 */
+  logIndex: number
+  /** 要求した側が中止した（AbortSignal） */
+  aborted: boolean
+  /**
+   * 解放する。サーバーの処理を行い、結果（outcome。省略時は設定の値）を返す。
+   * process が false の場合は、サーバーで処理せずに、結果が不明な失敗（要求が届かなかったが、届いたかを確かめられない）を返す
+   */
+  release: (outcome?: MockOutcome, options?: { process?: boolean }) => void
 }
 
 const initialConfig = (): Config => ({
@@ -73,6 +95,8 @@ const initialConfig = (): Config => ({
   outcome: {},
   ignoreAbort: false,
   log: [],
+  hold: {},
+  held: [],
 })
 
 // ---------------------------------------------------------------- サーバーの状態
@@ -124,8 +148,45 @@ function notify(scope: string) {
   for (const l of [...listeners]) l(scope)
 }
 
-function request<T>(kind: PermissionServerKind, scope: string, signal: AbortSignal | undefined, run: () => T, detail?: string, latency?: number) {
-  permissionServer.log.push({ kind, scope, detail })
+function request<T>(kind: PermissionServerKind, scope: string, signal: AbortSignal | undefined, run: () => T, detail?: string, latency?: number): Promise<T> {
+  const logIndex = permissionServer.log.push({ kind, scope, detail }) - 1
+  if (permissionServer.hold[kind]) {
+    const ignoreAbort = permissionServer.ignoreAbort
+    return new Promise<T>((resolve, reject) => {
+      const entry: HeldRequest = {
+        kind,
+        scope,
+        detail,
+        logIndex,
+        aborted: false,
+        release: (outcome, { process = true } = {}) => {
+          permissionServer.held = permissionServer.held.filter((h) => h !== entry)
+          if (!process) {
+            reject(new MockUnknownError())
+            return
+          }
+          mockRequest({
+            latency: 0,
+            outcome: outcome ?? permissionServer.outcome[kind] ?? "success",
+            run,
+            failMessage: "サーバーに接続できませんでした（模擬）",
+            failCode: "network",
+          }).then(resolve, reject)
+        },
+      }
+      permissionServer.held.push(entry)
+      if (signal) {
+        const onAbort = () => {
+          entry.aborted = true
+          if (ignoreAbort) return
+          permissionServer.held = permissionServer.held.filter((h) => h !== entry)
+          reject(new DOMException("aborted", "AbortError"))
+        }
+        if (signal.aborted) onAbort()
+        else signal.addEventListener("abort", onAbort, { once: true })
+      }
+    })
+  }
   return mockRequest({
     latency: latency ?? permissionServer.latency[kind],
     outcome: permissionServer.outcome[kind] ?? "success",
@@ -285,14 +346,24 @@ const api = {
     return request("requests", scope, signal, () => state.requests.filter((r) => r.scope === scope).map((r) => ({ ...r })))
   },
 
-  listMembers(scope: string, { signal }: { signal?: AbortSignal } = {}): Promise<{ userId: UserId; name: string; email: string; role: RoleId }[]> {
-    return request("members", scope, signal, () => {
-      if (!has(scope, "members.view")) throw forbidden("メンバーを閲覧する権限がありません")
-      const ws = parse(scope).workspaceId
-      return state.memberships
-        .filter((m) => m.workspaceId === ws)
-        .map((m) => ({ userId: m.userId, name: users[m.userId].name, email: users[m.userId].email, role: m.role }))
-    })
+  /** purpose：要求の目的（受け付けた要求の記録 log の detail。検品で、どの画面の要求かを区別する） */
+  listMembers(
+    scope: string,
+    { signal, purpose }: { signal?: AbortSignal; purpose?: string } = {},
+  ): Promise<{ userId: UserId; name: string; email: string; role: RoleId }[]> {
+    return request(
+      "members",
+      scope,
+      signal,
+      () => {
+        if (!has(scope, "members.view")) throw forbidden("メンバーを閲覧する権限がありません")
+        const ws = parse(scope).workspaceId
+        return state.memberships
+          .filter((m) => m.workspaceId === ws)
+          .map((m) => ({ userId: m.userId, name: users[m.userId].name, email: users[m.userId].email, role: m.role }))
+      },
+      purpose,
+    )
   },
 
   /**
@@ -398,15 +469,36 @@ const simulate = {
   },
 }
 
+/**
+ * 保留中の要求を解放する（検品用）。kind と、scope または filter に一致するものを、受け付けた順に解放する。
+ * 解放した数を返す。応答を受け取った側の処理（then）が終わるまで待つ場合は、settle を await する。
+ */
+function release(
+  kind: PermissionServerKind,
+  { scope, outcome, last = false, process = true }: { scope?: string; outcome?: MockOutcome; last?: boolean; process?: boolean } = {},
+) {
+  const targets = permissionServer.held.filter((h) => h.kind === kind && (scope === undefined || h.scope === scope))
+  const chosen = last ? targets.slice(-1) : targets
+  for (const h of chosen) h.release(outcome, { process })
+  return chosen.length
+}
+
+/** 応答の処理（Promise の then と、それによる React の描画の予約）が進むのを待つ（検品用）。固定の時間を待たない */
+const settle = () => new Promise<void>((resolve) => setTimeout(() => setTimeout(resolve, 0), 0))
+
 export const permissionServer: Config & {
   api: typeof api
   simulate: typeof simulate
+  release: typeof release
+  settle: typeof settle
   /** 現在のサーバーの状態の写し（検品用） */
   inspect: () => { requests: PermissionRequestRecord[]; memberships: Membership[]; customers: PermissionCustomer[]; grants: Record<string, Permission[]> }
   reset: () => void
 } = Object.assign(initialConfig(), {
   api,
   simulate,
+  release,
+  settle,
   inspect: () => structuredClone({ requests: state.requests, memberships: state.memberships, customers: state.customers, grants: state.grants }),
   reset() {
     Object.assign(permissionServer, initialConfig())

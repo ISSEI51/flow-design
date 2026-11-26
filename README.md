@@ -193,7 +193,7 @@ Natural Motion
 | --- | --- |
 | 思想、原則、デザイントークン v0.1 | 完了 |
 | Components v0.1（39 種） | 完了 |
-| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：v0.1 確定候補、System & Account：初期実装） |
+| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：v0.1 確定候補、System & Account：v0.1 確定候補） |
 | Registry & Gallery、Agent Skills | 予定 |
 
 今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
@@ -208,7 +208,7 @@ Components が個々の UI の部品であるのに対し、Patterns はユー�
 | Data Browsing | Search & Filter、List & Detail、Bulk Actions、View Switching、Data States（[data-browsing.md](docs/web/patterns/data-browsing.md)） | v0.1 確定候補（最終レビュー前） |
 | Forms & Workflows | 登録・編集のフォーム、複数の手順の操作、未保存の変更の確認など | 未着手 |
 | Data Analysis | ダッシュボード、レポートなど | 未着手 |
-| System & Account | Authentication、Settings、Onboarding、Permission States、System States、Notifications（[system-and-account.md](docs/web/patterns/system-and-account.md)） | 初期実装（レビュー前） |
+| System & Account | Authentication、Settings、Onboarding、Permission States、System States、Notifications（[system-and-account.md](docs/web/patterns/system-and-account.md)） | v0.1 確定候補（最終レビュー前） |
 
 Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md)、一覧の検索と閲覧の Patterns は [Data Browsing](docs/web/patterns/data-browsing.md)、認証、設定、権限、障害、通知などの共通の体験の Patterns は [System & Account](docs/web/patterns/system-and-account.md) にまとめている。
 

@@ -2,8 +2,11 @@
 // 状態（Checklist の表示の状態、閉じた案内、組織の作成の途中の入力、実際の作業結果）はこのサーバーのメモリに持つ。
 // 部品を再マウントしても（再読み込みや別の端末の代わり）、ここから読み直すため初期状態に戻らない。ページを再読み込みすると初期値に戻る。
 // 検品からは window.__fdSaOnboardingServer で、応答の時間、結果（success / fail / unknown）、ignoreAbort、受け付けた要求を設定・確認する。
+// 応答の順序を検品で制御する場合は、holdWhen で要求を保留し、releaseHeld で解放する（固定の待ち時間に頼らない）。
 //
-// サンプルデータは、実際のデータと別の領域（sample）に置く。サンプルへの操作は実際のデータ、作業結果、集計、外部への送信に伝わらない。
+// サンプルデータは、実際のデータと別の領域（sample）に置く。サンプルへの操作は実際のデータ、作業結果、集計、請求、外部への送信に伝わらない。
+// 型でも分ける：実際の顧客（RealCustomer）とサンプルの顧客（SampleCustomer）は sample の値が異なる別の型で、
+// 実際の領域、請求の対象の件数（usageOf）、外部への送信の記録は RealCustomer と実際の領域だけを受け付ける。
 
 import type { ChecklistVisibility, OnboardingTaskResults } from "@/patterns/onboarding"
 
@@ -32,9 +35,14 @@ export type OnboardingRequestKind =
   | "find-created"
   | "find-request"
   | "join"
+  | "usage"
 
 export type DataSpace = "real" | "sample"
-export type OnboardingCustomer = { id: string; company: string; sample: boolean }
+/** 実際の顧客。集計、請求、外部への送信の対象になる */
+export type RealCustomer = { id: string; company: string; sample: false }
+/** サンプルの顧客。サンプルの領域にだけ置き、集計、請求、外部への送信、作業結果の対象にしない */
+export type SampleCustomer = { id: string; company: string; sample: true }
+export type OnboardingCustomer = RealCustomer | SampleCustomer
 
 /** 組織の作成の途中の入力（手順の境界で保存する） */
 export type SetupDraft = {
@@ -48,9 +56,9 @@ export type SetupDraft = {
 
 type WorkspaceStore = {
   name: string
-  real: OnboardingCustomer[]
+  real: RealCustomer[]
   /** サンプルの領域。null はサンプルを使っていない */
-  sample: OnboardingCustomer[] | null
+  sample: SampleCustomer[] | null
   invitations: string[]
   billing: boolean
   imports: number
@@ -74,9 +82,9 @@ type Store = {
   processed: Record<string, unknown>
 }
 
-const pick = (from: number, to: number) => seedCustomers.slice(from, to).map((c) => ({ id: c.id, company: c.company, sample: false }))
+const pick = (from: number, to: number): RealCustomer[] => seedCustomers.slice(from, to).map((c) => ({ id: c.id, company: c.company, sample: false }))
 
-const sampleSeed = (): OnboardingCustomer[] =>
+const sampleSeed = (): SampleCustomer[] =>
   ["サンプル商事株式会社", "株式会社サンプル製作所", "サンプル物産株式会社", "株式会社サンプル運輸"].map((company, i) => ({
     id: `S-${String(i + 1).padStart(3, "0")}`,
     company,
@@ -120,8 +128,14 @@ type ServerConfig = {
   /** 次の 1 回だけ、処理せずに応答を失う（結果が不明で、実際には処理されていない場合の検品） */
   dropNext: Partial<Record<OnboardingRequestKind, boolean>>
   /** 受け付けた要求（検品用） */
-  requests: { kind: OnboardingRequestKind; userId?: UserId; workspaceId?: string; space?: DataSpace }[]
+  requests: OnboardingRequestMeta[]
+  /** true を返した要求を、releaseHeld まで保留する（応答の順序の検品）。保留している間も、処理（run）はまだ行わない */
+  holdWhen: ((request: OnboardingRequestMeta) => boolean) | null
+  /** 保留している要求 */
+  held: (OnboardingRequestMeta & { deliver: () => Promise<void> })[]
 }
+
+export type OnboardingRequestMeta = { kind: OnboardingRequestKind; userId?: UserId; workspaceId?: string; space?: DataSpace }
 
 const initialConfig = (): ServerConfig => ({
   latency: {
@@ -144,6 +158,7 @@ const initialConfig = (): ServerConfig => ({
     "find-created": 300,
     "find-request": 300,
     join: 400,
+    usage: 300,
   },
   latencyByUser: {},
   outcome: {},
@@ -151,6 +166,8 @@ const initialConfig = (): ServerConfig => ({
   ignoreAbort: false,
   dropNext: {},
   requests: [],
+  holdWhen: null,
+  held: [],
 })
 
 let store = initialStore()
@@ -163,10 +180,32 @@ type Ctx = {
 
 function call<T>(kind: OnboardingRequestKind, meta: { userId?: UserId; workspaceId?: string; space?: DataSpace }, ctx: Ctx, run: () => T, failMessage?: string) {
   const s = onboardingServer
-  s.requests.push({ kind, ...meta })
+  const request: OnboardingRequestMeta = { kind, ...meta }
+  s.requests.push(request)
   const outcome = s.outcomeNext[kind] ?? s.outcome[kind] ?? "success"
   delete s.outcomeNext[kind]
+  if (s.holdWhen?.(request)) {
+    // 保留：releaseHeld で解放したときに処理し、応答を返す（AbortSignal と ignoreAbort はその時点で扱う）。
+    return new Promise<T>((resolve, reject) => {
+      s.held.push({
+        ...request,
+        deliver: () => {
+          const p = respond(kind, outcome, 0, ctx, run, failMessage)
+          p.then(resolve, reject)
+          return p.then(
+            () => undefined,
+            () => undefined
+          )
+        },
+      })
+    })
+  }
   const latency = (meta.userId && s.latencyByUser[meta.userId]) ?? s.latency[kind]
+  return respond(kind, outcome, latency, ctx, run, failMessage)
+}
+
+function respond<T>(kind: OnboardingRequestKind, outcome: MockOutcome, latency: number, ctx: Ctx, run: () => T, failMessage?: string) {
+  const s = onboardingServer
   if (s.dropNext[kind]) {
     delete s.dropNext[kind]
     return new Promise<T>((_, reject) => setTimeout(() => reject(new MockUnknownError()), latency))
@@ -200,6 +239,10 @@ function resultsOf(userId: UserId, workspaceId: string): OnboardingTaskResults<O
   return { account: store.avatars[userId] ? ["complete-profile"] : [], workspace }
 }
 
+/** 請求と集計の対象（模擬）。引数は実際の顧客の型だけを受け付け、サンプルの顧客を渡すと型の検査で失敗する */
+const billable = (customers: readonly RealCustomer[]) => ({ customers: customers.length })
+const usageOf = (workspaceId: string) => billable(ws(workspaceId).real)
+
 let seq = 0
 const nextId = (prefix: string) => `${prefix}-${String(++seq).padStart(4, "0")}`
 
@@ -232,22 +275,22 @@ export const onboardingApi = {
       return { rows: rows.slice(0, 6), total: rows.length, all: all.length, sampleAvailable: w.sample !== null }
     }, "顧客の一覧を取得できませんでした"),
   addCustomer: (workspaceId: string, space: DataSpace, company: string, ctx: Ctx = {}) =>
-    call("add-customer", { workspaceId, space }, ctx, () => {
+    call("add-customer", { workspaceId, space }, ctx, (): OnboardingCustomer => {
       const w = ws(workspaceId)
       if (space === "sample") {
         if (!w.sample) throw new Error("sample is not active")
-        const c = { id: nextId("S"), company, sample: true }
+        const c: SampleCustomer = { id: nextId("S"), company, sample: true }
         w.sample.unshift(c)
         return c
       }
-      const c = { id: nextId("C"), company, sample: false }
-      w.real.unshift(c)
-      return c
+      const r: RealCustomer = { id: nextId("C"), company, sample: false }
+      w.real.unshift(r)
+      return r
     }, "顧客を登録できませんでした"),
   importCustomers: (workspaceId: string, ctx: Ctx = {}) =>
     call("import", { workspaceId, space: "real" }, ctx, () => {
       const w = ws(workspaceId)
-      const rows = ["青葉精機株式会社", "株式会社みなと設計", "北斗食品株式会社"].map((company) => ({ id: nextId("C"), company, sample: false }))
+      const rows = ["青葉精機株式会社", "株式会社みなと設計", "北斗食品株式会社"].map((company): RealCustomer => ({ id: nextId("C"), company, sample: false }))
       w.real.unshift(...rows)
       w.imports++
       return rows.length
@@ -316,6 +359,8 @@ export const onboardingApi = {
   /** 結果が不明だった変更の要求が、処理されたかを確かめる。処理されていれば最初の結果、されていなければ null */
   findRequest: (requestId: string, ctx: Ctx = {}) =>
     call("find-request", {}, ctx, () => (requestId in store.processed ? store.processed[requestId] : null)),
+  /** 請求と集計の対象の件数（模擬）。実際の領域だけを数え、サンプルの領域を含めない */
+  getUsage: (workspaceId: string, ctx: Ctx = {}) => call("usage", { workspaceId, space: "real" }, ctx, () => usageOf(workspaceId)),
   workspaceName: (workspaceId: string) => store.workspaces[workspaceId]?.name ?? workspaceId,
 }
 
@@ -323,6 +368,7 @@ export type OnboardingApi = typeof onboardingApi
 
 export const onboardingServer: ServerConfig & {
   reset: () => void
+  releaseHeld: (match?: (request: OnboardingRequestMeta) => boolean) => Promise<number>
   /** 現在の保存内容の写し（検品用） */
   snapshot: () => Store
 } = Object.assign(initialConfig(), {
@@ -330,6 +376,20 @@ export const onboardingServer: ServerConfig & {
     Object.assign(onboardingServer, initialConfig())
     store = initialStore()
     seq = 0
+  },
+  /**
+   * 保留している要求を解放する（match を省略すると、すべて）。解放した要求の応答が届き、
+   * 呼び出し側の処理（Promise の then）と画面の更新が終わるまで待ってから、解放した件数を返す。
+   */
+  async releaseHeld(match?: (request: OnboardingRequestMeta) => boolean) {
+    const targets = onboardingServer.held.filter((r) => !match || match(r))
+    onboardingServer.held = onboardingServer.held.filter((r) => !targets.includes(r))
+    await Promise.all(targets.map((r) => r.deliver()))
+    await new Promise((r) => setTimeout(r, 0))
+    if (typeof requestAnimationFrame === "function") {
+      for (let i = 0; i < 2; i++) await new Promise((r) => requestAnimationFrame(() => r(undefined)))
+    }
+    return targets.length
   },
   snapshot: () => structuredClone(store),
 })

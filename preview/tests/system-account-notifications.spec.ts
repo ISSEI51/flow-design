@@ -6,6 +6,8 @@ import { collectPageErrors } from "./page-errors"
 // Patterns / System & Account / Notifications の検品（資料のページ #/notifications の例）。
 // 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
 // 模擬の通知サーバーは window.__fdSaNotificationsServer で設定する（応答の時間、結果、AbortSignal の無視、新着の配信）。
+// 応答の順序に依存する検品は、固定の応答時間ではなく、応答の保留と解放（hold / release、holdDeliveries / releaseDeliveries）で
+// 順序を決める（要求が保留されたことを heldCount で確かめてから、次の操作をする）。
 // 期待値は model.ts の通知のデータと、docs/web/patterns/notifications.md の仕様から決める。
 collectPageErrors(test)
 
@@ -16,6 +18,25 @@ const serverWith = <A, T>(page: Page, fn: (s: Server, arg: A) => T, arg: A) =>
   page.evaluate(({ src, arg }) => new Function("s", "a", `return (${src})(s, a)`)(window.__fdSaNotificationsServer, arg), { src: fn.toString(), arg }) as Promise<T>
 const requests = (page: Page, kind: string) => server(page, (s) => s.requests).then((r) => r.filter((x) => x.kind === kind))
 const stored = (page: Page, ws: "hq" | "west") => serverWith(page, (s, w) => s.stored(w), ws)
+type Kind = Parameters<Server["release"]>[0]
+/** その種類の応答を保留する（release まで返さない） */
+const hold = (page: Page, ...kinds: Kind[]) => serverWith(page, (s, ks) => ks.forEach((k) => (s.hold[k] = true)), kinds)
+const heldCount = (page: Page, kind: Kind) => serverWith(page, (s, k) => s.heldCount(k), kind)
+/** 保留した応答を n 件になるまで待つ（要求が送られたことの確認） */
+const waitHeld = (page: Page, kind: Kind, n = 1) => expect.poll(() => heldCount(page, kind)).toBe(n)
+const release = (page: Page, kind: Kind, opts: Parameters<Server["release"]>[1] = {}) =>
+  serverWith(page, (s, a) => s.release(a.kind, a.opts), { kind, opts })
+/** 保留をやめ、保留している応答をすべて解放する */
+const releaseAll = (page: Page, kind: Kind) =>
+  serverWith(page, (s, k) => {
+    s.hold[k] = false
+    return s.release(k, { which: "all" })
+  }, kind)
+const deliveries = (page: Page) => server(page, (s) => s.deliveries)
+/** 購読者（label）が、最後の配信を受け付けたか */
+const lastAccepted = async (page: Page, label: string) => (await deliveries(page)).at(-1)?.results.find((r) => r.label === label)?.accepted
+/** 応答を解放した後、画面の更新（React の描画）が終わるまで待つ（時間ではなく、描画の 2 フレーム） */
+const settle = (page: Page) => page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0)))))
 
 const seed = (ws: "hq" | "west") => seedNotifications.filter((n) => n.workspaceId === ws)
 const unreadSeed = (ws: "hq" | "west") => seed(ws).filter((n) => !n.read)
@@ -70,9 +91,12 @@ test.describe("Notifications page", { tag: "@webkit" }, () => {
     const trigger = centerDemo(page).getByTestId("ntf-trigger")
     await expect(trigger).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("hq").length} 件`)
     await expect(trigger.locator("[data-slot=notification-indicator]")).toHaveText(String(unreadSeed("hq").length))
-    const center = await openCenter(page)
+    let center = await openCenter(page)
     await expect(item(center, "n-101")).toBeVisible()
-    await page.waitForTimeout(300)
+    // 閉じて開き直す（開閉の効果がすべて走った後）まで、既読の要求がない
+    await page.keyboard.press("Escape")
+    await expect(center).toBeHidden()
+    center = await openCenter(page)
     expect(await requests(page, "read")).toHaveLength(0)
     expect(await requests(page, "readAll")).toHaveLength(0)
     expect((await stored(page, "hq")).filter((n) => !n.read)).toHaveLength(unreadSeed("hq").length)
@@ -212,15 +236,17 @@ test.describe("Notification center", () => {
 
   test("a new notification arriving during read all stays unread (client and server)", async ({ page }) => {
     await openPage(page)
-    await server(page, (s) => (s.latency.readAll = 1500))
+    await hold(page, "readAll")
     const trigger = centerDemo(page).getByTestId("ntf-trigger")
     const center = await openCenter(page)
     await center.getByRole("button", { name: "すべて既読にする" }).click()
     await expect(center.getByText(/件を既読にしています/)).toBeVisible()
+    await waitHeld(page, "readAll")
     const newId = await server(page, (s) => s.push("hq"))
     // 開いている間は保留し、一覧を動かさない。件数には含める
     await expect(center.getByRole("button", { name: "新着 1 件を表示" })).toBeVisible()
-    await expect(center.locator("[data-slot=notification-read-all]")).toBeHidden({ timeout: 4000 })
+    await releaseAll(page, "readAll")
+    await expect(center.locator("[data-slot=notification-read-all]")).toBeHidden()
     await expect(trigger).toHaveAttribute("aria-label", "お知らせ、未読 1 件")
     await center.getByRole("button", { name: "新着 1 件を表示" }).click()
     await expect(item(center, newId)).not.toHaveAttribute("data-read")
@@ -269,13 +295,18 @@ test.describe("Notification center", () => {
   })
 
   test("initial loading is busy and announced; nothing is shown as empty while loading", async ({ page }) => {
-    await page.goto("/#/notifications")
+    await openPage(page)
+    // 取得の応答を保留したまま、通知センターを取得し直す（「遅い」は画面を開き直す操作。応答の時間は保留で決める）
+    await hold(page, "list")
     await centerDemo(page).getByText("遅い（3 秒）").click()
+    await waitHeld(page, "list")
     const center = await openCenter(page, centerDemo(page), { loaded: false })
     await expect(center.locator("[data-slot=notification-scroll]")).toHaveAttribute("aria-busy", "true")
     await expect(center.getByText("お知らせはありません")).toHaveCount(0)
     await expect(center.getByText("読み込み中")).toBeAttached()
-    await expect(item(center, "n-101")).toBeVisible({ timeout: 5000 })
+    await expect(centerDemo(page).getByTestId("ntf-trigger")).toHaveAttribute("aria-label", "お知らせ")
+    await releaseAll(page, "list")
+    await expect(item(center, "n-101")).toBeVisible()
   })
 
   test("open a notification: move to the target, mark it read, and return to the same item", async ({ page }) => {
@@ -295,18 +326,21 @@ test.describe("Notification center", () => {
 
   test("workspace A → B → A with responses that ignore AbortSignal: no stale notifications or counts", async ({ page }) => {
     await openPage(page)
-    await server(page, (s) => {
-      s.ignoreAbort = true
-      s.listLatencyByWorkspace = { hq: 1200, west: 300 }
-    })
+    await expect(centerDemo(page).getByTestId("ntf-trigger")).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("hq").length} 件`)
+    await server(page, (s) => (s.ignoreAbort = true))
+    await hold(page, "list")
     const trigger = centerDemo(page).getByTestId("ntf-trigger")
     const ws = centerDemo(page).getByRole("group", { name: "ワークスペース" })
+    const before = await heldCount(page, "list")
     await ws.getByText("西日本営業部").click()
     await ws.getByText("本社営業部").click()
     await ws.getByText("西日本営業部").click()
-    // 最後の B（西日本）の応答だけを反映する。前の A の応答（中止に従わず後から届く）を反映しない
+    // 3 回の取得（B、A、B）をすべて保留する。最後の B の応答を先に解放し、その後で前の A と B の応答（中止に従わない）を解放する
+    await waitHeld(page, "list", before + 3)
+    await release(page, "list", { which: "last" })
     await expect(trigger).toHaveAttribute("aria-label", `お知らせ、未読 ${unreadSeed("west").length} 件`)
-    await page.waitForTimeout(1500)
+    await releaseAll(page, "list")
+    await settle(page)
     await expect(trigger).toHaveAttribute("aria-label", `お知らせ、未読 ${unreadSeed("west").length} 件`)
     const center = await openCenter(page)
     await expect(center.locator("[data-notification-id]")).toHaveCount(seed("west").length)
@@ -318,7 +352,7 @@ test.describe("Notification center", () => {
     await openPage(page)
     const trigger = centerDemo(page).getByTestId("ntf-trigger")
     await expect(trigger).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("hq").length} 件`)
-    await server(page, (s) => (s.latency.list = 1000))
+    await hold(page, "list")
     // 切り替えた後のすべての描画（aria-label の変更）を記録し、前のアカウントの件数が一度も現れないことを確かめる。
     // 件数が不明の間（取得中）は件数を作らない。
     await trigger.evaluate((el) => {
@@ -327,7 +361,9 @@ test.describe("Notification center", () => {
     })
     await centerDemo(page).getByText("鈴木 一郎").click()
     await expect(trigger).toHaveAttribute("aria-label", "お知らせ")
-    await expect(trigger).toHaveAttribute("aria-label", "お知らせ、未読なし", { timeout: 3000 })
+    await waitHeld(page, "list")
+    await releaseAll(page, "list")
+    await expect(trigger).toHaveAttribute("aria-label", "お知らせ、未読なし")
     const seen = await page.evaluate(() => (window as unknown as { __ntfLabels: string[] }).__ntfLabels)
     expect(seen).toEqual(["お知らせ", "お知らせ、未読なし"])
     const center = await openCenter(page)
@@ -337,18 +373,18 @@ test.describe("Notification center", () => {
 
   test("a read update started in A is not applied after switching to B (ignoring AbortSignal)", async ({ page, isMobile }) => {
     await openPage(page)
-    await server(page, (s) => {
-      s.ignoreAbort = true
-      s.latency.read = 1200
-    })
+    await server(page, (s) => (s.ignoreAbort = true))
+    await hold(page, "read")
     const trigger = centerDemo(page).getByTestId("ntf-trigger")
     const center = await openCenter(page)
     await toggle(center, "n-101").click()
+    await waitHeld(page, "read")
     await page.keyboard.press("Escape")
     if (isMobile) await expect(center).toBeHidden()
     await centerDemo(page).getByRole("group", { name: "ワークスペース" }).getByText("西日本営業部").click()
     await expect(trigger).toHaveAttribute("aria-label", `お知らせ、未読 ${unreadSeed("west").length} 件`)
-    await page.waitForTimeout(1400)
+    await releaseAll(page, "read")
+    await settle(page)
     await expect(trigger).toHaveAttribute("aria-label", `お知らせ、未読 ${unreadSeed("west").length} 件`)
     const west = await openCenter(page)
     for (const n of unreadSeed("west")) await expect(item(west, n.id)).not.toHaveAttribute("data-read")
@@ -356,16 +392,16 @@ test.describe("Notification center", () => {
 
   test("unmounting while a read update is pending: the late response is not applied and nothing throws", async ({ page }) => {
     await openPage(page)
-    await server(page, (s) => {
-      s.ignoreAbort = true
-      s.latency.read = 800
-    })
+    await server(page, (s) => (s.ignoreAbort = true))
+    await hold(page, "read")
     const center = await openCenter(page)
     await toggle(center, "n-103").click()
+    await waitHeld(page, "read")
     await page.keyboard.press("Escape")
     await centerDemo(page).getByTestId("ntf-center-mount").click()
     await expect(centerDemo(page).getByTestId("ntf-trigger")).toHaveCount(0)
-    await page.waitForTimeout(1000)
+    await releaseAll(page, "read")
+    await settle(page)
     await centerDemo(page).getByTestId("ntf-center-mount").click()
     // 戻した後は、サーバーの状態を取得し直して表示する（サーバーでは処理されている）
     await expect(centerDemo(page).getByTestId("ntf-trigger")).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("hq").length - 1} 件`)
@@ -412,8 +448,12 @@ test.describe("Notification inbox", () => {
     await openPage(page)
     const list = inbox(page)
     await expect(item(list, "n-101")).toBeVisible()
+    const delivered = (await deliveries(page)).length
     await page.getByTestId("ntf-inbox-redeliver").click()
-    await page.waitForTimeout(300)
+    // 配信が届き、受け付けられた（重複のため一覧に加えない）ことを確かめてから、表示を確かめる
+    await expect.poll(async () => (await deliveries(page)).length).toBe(delivered + 1)
+    expect(await lastAccepted(page, "inbox")).toBe(true)
+    await settle(page)
     await expect(list.locator("[data-slot=notification-show-new]")).toHaveCount(0)
     await expect(list.locator('[data-notification-id="n-101"]')).toHaveCount(1)
     await page.getByTestId("ntf-inbox-same-title").click()
@@ -502,14 +542,17 @@ test.describe("Notification inbox", () => {
     await openPage(page)
     const list = inbox(page)
     await expect(item(list, "n-103")).toBeVisible()
-    await server(page, (s) => {
-      s.ignoreAbort = true
-      s.latencyQueue.read = [1200, 100]
-    })
-    await toggle(list, "n-103").click() // 既読にする（応答 1.2 秒）
-    await toggle(list, "n-103").click() // 未読に戻す（応答 0.1 秒）
+    await server(page, (s) => (s.ignoreAbort = true))
+    await hold(page, "read")
+    await toggle(list, "n-103").click() // 既読にする
+    await waitHeld(page, "read", 1)
+    await toggle(list, "n-103").click() // 未読に戻す
+    await waitHeld(page, "read", 2)
+    // 新しい要求（未読に戻す）の応答を先に、古い要求（既読にする）の応答を後に返す
+    await release(page, "read", { which: "last" })
     await expect(item(list, "n-103")).not.toHaveAttribute("data-read")
-    await page.waitForTimeout(1400)
+    await releaseAll(page, "read")
+    await settle(page)
     await expect(item(list, "n-103")).not.toHaveAttribute("data-read")
     expect((await stored(page, "hq")).find((n) => n.id === "n-103")!.read).toBe(false)
     await expect(list.locator("[data-slot=notification-update-error]")).toHaveCount(0)
@@ -739,13 +782,15 @@ test.describe("Read-all range, in-flight fetches, removal, live regions", () => 
     await openPage(page)
     await inboxDemo(page).getByTestId("ntf-inbox-paging").click()
     await inboxDemo(page).getByText("開始した時点までのすべて（カーソル）").click()
-    await server(page, (s) => (s.latency.readAll = 1200))
+    await hold(page, "readAll")
     const list = inbox(page)
     await expect(item(list, "n-101")).toBeVisible()
     await list.locator("[data-slot=notification-read-all]").click()
+    await waitHeld(page, "readAll")
     const newId = await server(page, (s) => s.push("hq"))
     await expect(list.getByRole("button", { name: "新着 1 件を表示" })).toBeVisible()
-    await expect(list.locator("[data-slot=notification-live]")).toHaveText(`${loadedHq() + older} 件を既読にしました`, { timeout: 4000 })
+    await releaseAll(page, "readAll")
+    await expect(list.locator("[data-slot=notification-live]")).toHaveText(`${loadedHq() + older} 件を既読にしました`)
     expect((await stored(page, "hq")).find((n) => n.id === newId)!.read).toBe(false)
     expect(await unreadOnServer(page)).toBe(1)
     // 成功した後の取得し直しの結果に新着が含まれる（保留は一覧と重複しないものだけのため、ボタンは消える）
@@ -762,21 +807,29 @@ test.describe("Read-all range, in-flight fetches, removal, live regions", () => 
     await server(page, (s) => {
       s.processAtResponse = true
       s.listSnapshotAtStart = true
-      s.latency.list = 600
-      s.latencyQueue.read = [300]
     })
-    await toggle(list, "n-102").click() // 既読（応答 300ms、応答の時点で処理）
-    await server(page, (s) => {
-      s.outcomeNext.read = "unknown"
-      s.latencyQueue.read = [20]
-    })
+    await hold(page, "read", "list")
+    await toggle(list, "n-102").click() // 1. 既読（応答を保留。サーバーではまだ処理していない）
+    await waitHeld(page, "read", 1)
+    await server(page, (s) => (s.outcomeNext.read = "unknown"))
+    await toggle(list, "n-103").click() // 2. 既読（結果が不明になる）
+    await waitHeld(page, "read", 2)
     const lists = (await requests(page, "list")).length
-    await toggle(list, "n-103").click() // 結果が不明 → 取得し直す（一覧は n-102 が未読の時点）
-    await expect.poll(async () => (await requests(page, "list")).length).toBe(lists + 1)
+    // 2 の応答（結果が不明）を先に返す → 取得し直す（一覧は n-102 が未読の時点。応答を保留）
+    await release(page, "read", { which: "last" })
+    await waitHeld(page, "list", 1)
+    expect((await requests(page, "list")).length).toBe(lists + 1)
+    // 結果が不明な通知は、取得し直した結果が届くまで「状態を確認中」
+    await expect(item(list, "n-103")).toHaveAttribute("data-verifying", "")
+    await expect(toggle(list, "n-103")).toHaveAttribute("aria-disabled", "true")
+    // 1 の応答を返す（サーバーで処理され、確定する）→ その後で、確定より前に始めた取得の応答を返す
+    await release(page, "read")
     await expect.poll(async () => (await stored(page, "hq")).find((n) => n.id === "n-102")!.read).toBe(true)
-    await page.waitForTimeout(900) // 取得の応答（n-102 が未読の一覧）が届いた後
+    await releaseAll(page, "list")
+    await expect(item(list, "n-103")).not.toHaveAttribute("data-verifying")
     await expect(item(list, "n-102")).toHaveAttribute("data-read", "")
-    // 範囲の文の件数も、確定した状態に合う（n-101 だけが未読。n-103 は結果が不明で、取得し直した値はサーバーで処理された既読）
+    await expect(item(list, "n-103")).toHaveAttribute("data-read", "")
+    // 範囲の文の件数も、確定した状態に合う（n-101 だけが未読）
     await expect(list.locator("[data-slot=notification-read-all]")).toHaveAccessibleDescription("対象：本社営業部の未読 1 件")
   })
 
@@ -789,12 +842,66 @@ test.describe("Read-all range, in-flight fetches, removal, live regions", () => 
     await expect(list.locator("[data-slot=notification-remove-error]")).toContainText(`「${title("n-102")}」を削除できませんでした`)
     await expect(remove).toBeEnabled()
     await expect(item(list, "n-102")).toBeVisible()
-    await server(page, (s) => (s.latency.remove = 600))
+    await hold(page, "remove")
     await remove.click()
+    await waitHeld(page, "remove")
     await remove.click({ force: true })
     await remove.dispatchEvent("click")
+    await settle(page)
+    expect(await heldCount(page, "remove")).toBe(1)
+    await releaseAll(page, "remove")
     await expect(item(list, "n-102")).toHaveCount(0)
     expect(await requests(page, "remove")).toHaveLength(2) // 失敗した 1 回 ＋ 成功した 1 回
+  })
+
+  // 削除中の状態は、要求を始めたスコープの世代と組で持つ。scopeKey の文字列だけで持つと、A → B → A の最初の A の要求が
+  // 戻った A で「削除中」のまま残り、もう一度削除できなくなる。
+  test("removal started in A, then A → B → A: the first A's request does not stay 'removing' in the current A", async ({ page }) => {
+    await openPage(page)
+    // 応答の時点で処理する（中止された要求は処理されない）
+    await server(page, (s) => (s.processAtResponse = true))
+    const list = inbox(page)
+    const ws = page.getByTestId("ntf-inbox-demo").getByRole("group", { name: "ワークスペース" })
+    const remove = () => item(list, "n-102").getByRole("button", { name: /のお知らせを削除$/ })
+    await expect(item(list, "n-102")).toBeVisible()
+    await hold(page, "remove")
+    await remove().click()
+    await waitHeld(page, "remove")
+    await expect(remove()).toHaveAttribute("data-loading", "true")
+    // B へ切り替えると、A の削除の要求は中止される（保留の一覧から外れ、サーバーは処理しない）
+    await ws.getByText("西日本営業部").click()
+    await waitHeld(page, "remove", 0)
+    await ws.getByText("本社営業部").click()
+    await expect(item(list, "n-102")).toBeVisible()
+    await settle(page)
+    await expect(remove()).not.toHaveAttribute("data-loading")
+    await expect(list.locator("[data-slot=notification-remove-error]")).toHaveCount(0)
+    // もう一度削除できる
+    await remove().click()
+    await waitHeld(page, "remove")
+    await releaseAll(page, "remove")
+    await expect(item(list, "n-102")).toHaveCount(0)
+    expect((await stored(page, "hq")).some((n) => n.id === "n-102")).toBe(false)
+    expect((await requests(page, "remove")).map((r) => r.workspaceId)).toEqual(["hq", "hq"])
+  })
+
+  test("removal ending with an AbortError in the same scope: treated as unknown and re-fetched, not left 'removing'", async ({ page }) => {
+    await openPage(page)
+    const list = inbox(page)
+    const remove = () => item(list, "n-103").getByRole("button", { name: /のお知らせを削除$/ })
+    await expect(item(list, "n-103")).toBeVisible()
+    await hold(page, "remove", "list")
+    await remove().click()
+    await waitHeld(page, "remove")
+    await expect(remove()).toHaveAttribute("data-loading", "true")
+    // 製品の通信の層の中止。模擬のサーバーは要求を受け付けた時点で削除している
+    expect(await release(page, "remove", { outcome: "abort" })).toBe(1)
+    await waitHeld(page, "list")
+    await expect(list.locator("[data-slot=notification-remove-error]")).toContainText(`「${title("n-103")}」を削除できたかを確認できませんでした`)
+    await expect(remove()).not.toHaveAttribute("data-loading")
+    await releaseAll(page, "list")
+    await expect(item(list, "n-103")).toHaveCount(0)
+    expect((await stored(page, "hq")).some((n) => n.id === "n-103")).toBe(false)
   })
 
   test("settings: failure and unknown results are announced; unknown is a warning, not an error", async ({ page }) => {
@@ -832,5 +939,440 @@ test.describe("Read-all range, in-flight fetches, removal, live regions", () => 
     const after = (await item(center, "n-101").boundingBox())!
     expect(Math.abs(after.y - before.y)).toBeLessThan(1)
     await expect(openButton(center, "n-101")).toBeVisible()
+  })
+})
+
+// ------------------------------------------------------------------ 購読の世代（v0.1 の最終調整）
+// 古い購読（WebSocket・SSE）から届いた通知を受け付けないことを、模擬のサーバーの配信の記録（購読者ごとの accepted）と画面で確かめる。
+// 配信は holdDeliveries で保留し、届ける先は配信した時点の購読者になる（古い購読へ届く状況の再現）。
+test.describe("Subscription generations", () => {
+  const ws = (page: Page) => centerDemo(page).getByRole("group", { name: "ワークスペース" })
+  const trigger = (page: Page) => centerDemo(page).getByTestId("ntf-trigger")
+  const nav = (page: Page) => page.getByTestId("ntf-nav-demo")
+
+  test("A → B → A: a notification from the first A's subscription is not accepted by the current A", async ({ page }) => {
+    await openPage(page)
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("hq").length} 件`)
+    await server(page, (s) => (s.holdDeliveries = true))
+    // 最初の A の購読に届く通知（配信を保留）。その後で、サーバーから通知を削除する（取得し直した一覧には含まれない）
+    const id = await server(page, (s) => s.push("hq"))
+    await serverWith(page, (s, i) => s.deleteNotification("hq", i), id)
+    await ws(page).getByText("西日本営業部").click()
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("west").length} 件`)
+    await ws(page).getByText("本社営業部").click()
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("hq").length} 件`)
+    await server(page, (s) => s.releaseDeliveries())
+    await expect.poll(() => lastAccepted(page, "center")).toBe(false)
+    await settle(page)
+    // 受け付けていれば、通知センターを閉じている間は一覧に加わり、件数が増える
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("hq").length} 件`)
+    const center = await openCenter(page)
+    await expect(item(center, id)).toHaveCount(0)
+    await expect(center.locator("[data-slot=notification-show-new]")).toHaveCount(0)
+    // 現在の A の購読には届く
+    await server(page, (s) => (s.holdDeliveries = false))
+    const next = await server(page, (s) => s.push("hq"))
+    await expect(center.getByRole("button", { name: "新着 1 件を表示" })).toBeVisible()
+    expect(await lastAccepted(page, "center")).toBe(true)
+    expect((await deliveries(page)).at(-1)!.ids).toEqual([next])
+  })
+
+  test("after unsubscribing (unmount), a late notification is not accepted", async ({ page }) => {
+    await openPage(page)
+    await expect(trigger(page)).toHaveAccessibleName(/未読 3 件/)
+    await server(page, (s) => (s.holdDeliveries = true))
+    await server(page, (s) => s.push("hq"))
+    await centerDemo(page).getByTestId("ntf-center-mount").click()
+    await expect(trigger(page)).toHaveCount(0)
+    await server(page, (s) => s.releaseDeliveries())
+    await expect.poll(() => lastAccepted(page, "center")).toBe(false)
+    // 同じ時点の、解除していない購読（専用のページ）は受け付ける
+    expect(await lastAccepted(page, "inbox")).toBe(true)
+  })
+
+  test("a scope change while fetching is paused: the old subscription is not accepted; resuming subscribes to the new scope", async ({ page }) => {
+    await openPage(page)
+    await expect(trigger(page)).toHaveAccessibleName(/未読 3 件/)
+    await server(page, (s) => (s.holdDeliveries = true))
+    await server(page, (s) => s.push("hq"))
+    await centerDemo(page).getByTestId("ntf-center-pause").check()
+    await ws(page).getByText("西日本営業部").click()
+    await server(page, (s) => s.releaseDeliveries())
+    await expect.poll(() => lastAccepted(page, "center")).toBe(false)
+    // 取得を止めている間は、件数を示さない
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ")
+    await server(page, (s) => (s.holdDeliveries = false))
+    await centerDemo(page).getByTestId("ntf-center-pause").uncheck()
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("west").length} 件`)
+    await server(page, (s) => s.push("west"))
+    await expect.poll(() => lastAccepted(page, "center")).toBe(true)
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${unreadSeed("west").length + 1} 件`)
+  })
+
+  test("an authorization change in the same workspace: the subscription from before the change is not accepted", async ({ page }) => {
+    await openPage(page)
+    const navTrigger = nav(page).getByTestId("ntf-trigger")
+    await expect(navTrigger).toHaveAccessibleName(/未読 3 件/)
+    await server(page, (s) => (s.holdDeliveries = true))
+    const id = await server(page, (s) => s.push("hq"))
+    await serverWith(page, (s, i) => s.deleteNotification("hq", i), id)
+    const lists = (await requests(page, "list")).length
+    await nav(page).getByTestId("ntf-nav-scope").click()
+    await expect.poll(async () => (await requests(page, "list")).length).toBeGreaterThan(lists)
+    await expect(navTrigger).toHaveAccessibleName(/未読 3 件/)
+    await server(page, (s) => s.releaseDeliveries())
+    await expect.poll(() => lastAccepted(page, "nav")).toBe(false)
+    await settle(page)
+    await expect(navTrigger).toHaveAccessibleName(/未読 3 件/)
+    const center = await openCenter(page, nav(page))
+    await expect(item(center, id)).toHaveCount(0)
+  })
+})
+
+// ------------------------------------------------------------------ 既読・未読の更新（v0.1 の最終調整）
+test.describe("Read updates: ordering, partial results, verification", () => {
+  const trigger = (page: Page) => centerDemo(page).getByTestId("ntf-trigger")
+  const total = unreadSeed("hq").length
+
+  test("the same ID read → unread → read: only the last request decides, in any response order", async ({ page }) => {
+    await openPage(page)
+    await server(page, (s) => (s.ignoreAbort = true))
+    await hold(page, "read")
+    const center = await openCenter(page)
+    for (let i = 1; i <= 3; i++) {
+      await toggle(center, "n-103").click()
+      await waitHeld(page, "read", i)
+    }
+    await expect(item(center, "n-103")).toHaveAttribute("data-read", "")
+    // 最後の要求（既読）の応答を先に返し、前の 2 件（既読、未読）の応答を後で返す
+    await release(page, "read", { which: "last" })
+    await expect(trigger(page)).toHaveAttribute("aria-label", `お知らせ、未読 ${total - 1} 件`)
+    await release(page, "read", { which: "last" }) // 未読に戻す（古い）
+    await release(page, "read") // 既読にする（最も古い）
+    await settle(page)
+    await expect(item(center, "n-103")).toHaveAttribute("data-read", "")
+    await expect(trigger(page)).toHaveAttribute("aria-label", `お知らせ、未読 ${total - 1} 件`)
+    await expect(center.locator("[data-slot=notification-update-error]")).toHaveCount(0)
+    // 模擬のサーバーは受け付けた順に処理する（最後の要求の値）
+    expect((await stored(page, "hq")).find((n) => n.id === "n-103")!.read).toBe(true)
+  })
+
+  test("an individual unread during read all is kept; the older read-all result does not overwrite it", async ({ page }) => {
+    await openPage(page)
+    await hold(page, "readAll")
+    const center = await openCenter(page)
+    await center.getByRole("button", { name: "すべて既読にする" }).click()
+    await waitHeld(page, "readAll")
+    await expect(item(center, "n-102")).toHaveAttribute("data-read", "")
+    // 一括既読の処理中に、1 件を未読に戻す（こちらの応答は先に返る）
+    await toggle(center, "n-102").click()
+    await expect.poll(async () => (await stored(page, "hq")).find((n) => n.id === "n-102")!.read).toBe(false)
+    await releaseAll(page, "readAll")
+    await expect(center.locator("[data-slot=notification-live]")).toHaveText(`${total} 件を既読にしました`)
+    await settle(page)
+    await expect(item(center, "n-102")).not.toHaveAttribute("data-read")
+    await expect(item(center, "n-101")).toHaveAttribute("data-read", "")
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読 1 件")
+    expect((await stored(page, "hq")).filter((n) => !n.read).map((n) => n.id)).toEqual(["n-102"])
+  })
+
+  test("unknown result: shown as verifying with an unknown count until the re-fetch confirms it", async ({ page }) => {
+    await openPage(page)
+    await server(page, (s) => (s.outcomeNext.read = "unknown"))
+    await hold(page, "list")
+    const center = await openCenter(page)
+    await toggle(center, "n-101").click()
+    await waitHeld(page, "list")
+    await expect(item(center, "n-101")).toHaveAttribute("data-verifying", "")
+    await expect(item(center, "n-101")).toContainText("状態を確認中")
+    await expect(toggle(center, "n-101")).toHaveAttribute("aria-disabled", "true")
+    // 結果が確定するまで件数を示さない（未読があることだけがわかる）
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読あり")
+    await expect(center.locator("[data-slot=notification-update-error]")).toContainText("更新できたかを確認できませんでした")
+    await releaseAll(page, "list")
+    await expect(item(center, "n-101")).not.toHaveAttribute("data-verifying")
+    await expect(item(center, "n-101")).toHaveAttribute("data-read", "")
+    await expect(trigger(page)).toHaveAttribute("aria-label", `お知らせ、未読 ${total - 1} 件`)
+  })
+
+  // M3：製品の通信の層が、同じスコープの中で独自に中止した（タイムアウト、利用者の取り消し）AbortError。
+  // サーバーでは処理されている（模擬のサーバーは要求を受け付けた時点で処理する）。結果が不明と同じに扱い、更新中のまま残さない。
+  test("an AbortError in the same scope (product timeout): treated as unknown and re-fetched, not left updating", async ({ page }) => {
+    await openPage(page)
+    await hold(page, "read", "list")
+    const center = await openCenter(page)
+    await toggle(center, "n-101").click()
+    await waitHeld(page, "read")
+    await expect(item(center, "n-101")).toHaveAttribute("data-read", "")
+    const lists = (await requests(page, "list")).length
+    expect(await release(page, "read", { outcome: "abort" })).toBe(1)
+    // 取得し直しを始め（応答は保留）、その間は「確認中」で、件数を示さない
+    await waitHeld(page, "list")
+    expect((await requests(page, "list")).length).toBe(lists + 1)
+    await expect(item(center, "n-101")).toHaveAttribute("data-verifying", "")
+    await expect(toggle(center, "n-101")).toHaveAttribute("aria-disabled", "true")
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読あり")
+    await expect(center.locator("[data-slot=notification-update-error]")).toContainText("更新できたかを確認できませんでした")
+    // 取得し直した結果（サーバーでは既読）で確定する
+    await releaseAll(page, "list")
+    await expect(item(center, "n-101")).not.toHaveAttribute("data-verifying")
+    await expect(item(center, "n-101")).toHaveAttribute("data-read", "")
+    await expect(trigger(page)).toHaveAttribute("aria-label", `お知らせ、未読 ${total - 1} 件`)
+    // 次の操作を受け付ける（未読に戻す）
+    await toggle(center, "n-101").click()
+    await waitHeld(page, "read")
+    await releaseAll(page, "read")
+    await expect(item(center, "n-101")).not.toHaveAttribute("data-read")
+    await expect(trigger(page)).toHaveAttribute("aria-label", `お知らせ、未読 ${total} 件`)
+    expect((await stored(page, "hq")).find((n) => n.id === "n-101")!.read).toBe(false)
+  })
+
+  test("read all ending with an AbortError in the same scope: the running range is released and the result is re-fetched", async ({ page }) => {
+    await openPage(page)
+    await hold(page, "readAll", "list")
+    const center = await openCenter(page)
+    const readAllButton = center.locator("[data-slot=notification-read-all]")
+    await readAllButton.click()
+    await waitHeld(page, "readAll")
+    await expect(readAllButton).toHaveAttribute("data-loading", "true")
+    await expect(center.getByText(`${total} 件を既読にしています`)).toBeVisible()
+    expect(await release(page, "readAll", { outcome: "abort" })).toBe(1)
+    await waitHeld(page, "list")
+    // 一括既読の実行中の範囲を解除する（「既読にしています」のまま残らない）。範囲の通知は確認中で、件数は示さない
+    await expect(center.getByText(/件を既読にしています/)).toHaveCount(0)
+    await expect(center.locator("[data-notification-id][data-verifying]")).toHaveCount(total)
+    await expect(readAllButton).toBeHidden()
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ")
+    await expect(center.locator("[data-slot=notification-update-error]")).toContainText("更新できたかを確認できませんでした")
+    await releaseAll(page, "list")
+    await expect(center.locator("[data-notification-id][data-verifying]")).toHaveCount(0)
+    await expect(center.locator("[data-notification-id]:not([data-read])")).toHaveCount(0)
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読なし")
+    expect((await stored(page, "hq")).filter((n) => !n.read)).toHaveLength(0)
+    // 新着が届いた後に、もう一度一括既読を始められる（前の範囲が残っていない）
+    const newId = await server(page, (s) => s.push("hq"))
+    await center.getByRole("button", { name: "新着 1 件を表示" }).click()
+    await expect(item(center, newId)).not.toHaveAttribute("data-read")
+    await readAllButton.click()
+    await waitHeld(page, "readAll")
+    await releaseAll(page, "readAll")
+    await expect(item(center, newId)).toHaveAttribute("data-read", "")
+    expect((await requests(page, "readAll")).length).toBe(2)
+  })
+
+  test("a deleted notification and a notification without access are not updated: reverted, explained, re-fetched", async ({ page }) => {
+    await openPage(page)
+    const list = inbox(page)
+    await expect(item(list, "n-102")).toBeVisible()
+    await server(page, (s) => s.deleteNotification("hq", "n-102"))
+    await toggle(list, "n-102").click()
+    const error = list.locator("[data-slot=notification-update-error]")
+    await expect(error).toContainText("1 件は既読にできませんでした（削除されたか、閲覧できなくなったお知らせです）")
+    await expect(item(list, "n-102")).toHaveCount(0)
+    await server(page, (s) => s.hideNotification("n-103"))
+    await toggle(list, "n-103").click()
+    await expect(error).toContainText("1 件は既読にできませんでした")
+    await expect(item(list, "n-103")).toHaveCount(0)
+    expect((await stored(page, "hq")).find((n) => n.id === "n-103")!.read).toBe(false)
+  })
+
+  test("duplicate IDs in the list are shown and counted once", async ({ page }) => {
+    await openPage(page)
+    await server(page, (s) => (s.duplicateInList = true))
+    const ws = centerDemo(page).getByRole("group", { name: "ワークスペース" })
+    await ws.getByText("西日本営業部").click()
+    await ws.getByText("本社営業部").click()
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${total} 件`)
+    const center = await openCenter(page)
+    await expect(item(center, "n-101")).toHaveCount(1)
+  })
+
+  test("a server count that disagrees with a complete list: the list is used", async ({ page }) => {
+    await openPage(page)
+    await server(page, (s) => (s.countOffset = -2))
+    const ws = centerDemo(page).getByRole("group", { name: "ワークスペース" })
+    await ws.getByText("西日本営業部").click()
+    await ws.getByText("本社営業部").click()
+    await expect(trigger(page)).toHaveAccessibleName(`お知らせ、未読 ${total} 件`)
+  })
+
+  test("a held arrival that the re-fetched list also contains is not counted twice", async ({ page }) => {
+    await openPage(page)
+    const center = await openCenter(page)
+    const id = await server(page, (s) => s.push("hq"))
+    await expect(center.getByRole("button", { name: "新着 1 件を表示" })).toBeVisible()
+    await expect(trigger(page)).toHaveAttribute("aria-label", `お知らせ、未読 ${total + 1} 件`)
+    // 結果が不明 → 取得し直す。取得した一覧に保留中の新着が含まれる
+    await server(page, (s) => (s.outcomeNext.read = "unknown"))
+    await toggle(center, "n-101").click()
+    await expect(item(center, id)).toBeVisible()
+    await expect(center.locator("[data-slot=notification-show-new]")).toHaveCount(0)
+    const onServer = (await stored(page, "hq")).filter((n) => !n.read).length
+    await expect(trigger(page)).toHaveAttribute("aria-label", `お知らせ、未読 ${onServer} 件`)
+  })
+})
+
+// ------------------------------------------------------------------ 一括既読の結果（v0.1 の最終調整）
+test.describe("Read-all results come from the confirmed response", () => {
+  const live = (root: Locator) => root.locator("[data-slot=notification-live]")
+  const trigger = (page: Page) => centerDemo(page).getByTestId("ntf-trigger")
+
+  test("partial success: the count is the confirmed IDs, and the rest is explained", async ({ page }) => {
+    await openPage(page)
+    const center = await openCenter(page)
+    await server(page, (s) => s.deleteNotification("hq", "n-102"))
+    await center.getByRole("button", { name: "すべて既読にする" }).click()
+    await expect(live(center)).toHaveText("2 件を既読にしました。1 件は既読にできませんでした")
+    await expect(center.locator("[data-slot=notification-update-error]")).toContainText("1 件は既読にできませんでした")
+    await expect(item(center, "n-102")).toHaveCount(0)
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読なし")
+  })
+
+  test("no result reported: the requested count is not announced; the state is verified by re-fetching", async ({ page }) => {
+    await openPage(page)
+    await server(page, (s) => (s.readReport = "none"))
+    await hold(page, "list")
+    const center = await openCenter(page)
+    await center.getByRole("button", { name: "すべて既読にする" }).click()
+    await waitHeld(page, "list")
+    await expect(live(center)).toHaveText("既読にした件数を確認しています")
+    await expect(center.locator("[data-notification-id][data-verifying]")).toHaveCount(unreadSeed("hq").length)
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ")
+    await releaseAll(page, "list")
+    await expect(center.locator("[data-notification-id][data-verifying]")).toHaveCount(0)
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読なし")
+  })
+
+  test("an invalid count (more than requested) is not used", async ({ page }) => {
+    await openPage(page)
+    await server(page, (s) => (s.readReport = "invalid-count"))
+    const center = await openCenter(page)
+    await center.getByRole("button", { name: "すべて既読にする" }).click()
+    await expect(live(center)).toHaveText("既読にした件数を確認しています")
+    await expect(center.locator("[data-notification-id][data-verifying]")).toHaveCount(0)
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読なし")
+  })
+
+  test("an out-of-range ID in the response (arrived during the run) is not counted or marked read", async ({ page }) => {
+    await openPage(page)
+    // 応答の時点で処理するサーバーが、処理中に届いた通知の ID を結果に含める（実際には更新しない）
+    await server(page, (s) => {
+      s.readReport = "extra-id"
+      s.processAtResponse = true
+    })
+    await hold(page, "readAll")
+    const center = await openCenter(page)
+    await center.getByRole("button", { name: "すべて既読にする" }).click()
+    await waitHeld(page, "readAll")
+    const id = await server(page, (s) => s.push("hq"))
+    await expect(center.getByRole("button", { name: "新着 1 件を表示" })).toBeVisible()
+    await releaseAll(page, "readAll")
+    // 範囲の外の ID を含む結果は、取得し直して確かめる（取得した一覧に新着が含まれ、保留は消える）
+    await expect(center.locator("[data-slot=notification-show-new]")).toHaveCount(0)
+    await expect(live(center)).toHaveText(`${unreadSeed("hq").length} 件を既読にしました`)
+    await expect(item(center, id)).not.toHaveAttribute("data-read")
+    expect((await stored(page, "hq")).find((n) => n.id === id)!.read).toBe(false)
+    await expect(trigger(page)).toHaveAttribute("aria-label", "お知らせ、未読 1 件")
+  })
+
+  test("cursor range text says that unloaded notifications are included", async ({ page }) => {
+    await openPage(page)
+    const demo = page.getByTestId("ntf-inbox-demo")
+    await demo.getByTestId("ntf-inbox-paging").click()
+    await demo.getByText("開始した時点までのすべて（カーソル）").click()
+    await expect(inbox(page).locator("[data-slot=notification-read-all]")).toHaveAccessibleDescription(/読み込んでいない古いお知らせを含む/)
+  })
+})
+
+// ------------------------------------------------------------------ 通知から対象への移動の競合（v0.1 の最終調整）
+test.describe("Navigation from a notification: changes between selection and move", () => {
+  const nav = (page: Page) => page.getByTestId("ntf-nav-demo")
+
+  test("workspace change while the target is checked: no move, not marked read, no notice", async ({ page, isMobile }) => {
+    await openPage(page)
+    await hold(page, "resolve")
+    const center = await openCenter(page)
+    await openButton(center, "n-102").click()
+    await waitHeld(page, "resolve")
+    await page.keyboard.press("Escape")
+    if (isMobile) await expect(center).toBeHidden()
+    await centerDemo(page).getByRole("group", { name: "ワークスペース" }).getByText("西日本営業部").click()
+    await expect(centerDemo(page).getByTestId("ntf-trigger")).toHaveAccessibleName(/未読 2 件/)
+    await releaseAll(page, "resolve")
+    await settle(page)
+    await expect(centerDemo(page).getByTestId("ntf-target")).toHaveCount(0)
+    await expect(centerDemo(page)).toContainText("西日本営業部の顧客の一覧（例）")
+    expect((await stored(page, "hq")).find((n) => n.id === "n-102")!.read).toBe(false)
+    expect(await requests(page, "read")).toHaveLength(0)
+    const west = await openCenter(page)
+    await expect(west.locator("[data-slot=notification-navigate-notice]")).toHaveCount(0)
+  })
+
+  test("an older selection is superseded: only the last opened notification moves and is marked read", async ({ page }) => {
+    await openPage(page)
+    await hold(page, "resolve")
+    const center = await openCenter(page)
+    await openButton(center, "n-101").click()
+    await waitHeld(page, "resolve", 1)
+    await openButton(center, "n-103").click()
+    await waitHeld(page, "resolve", 2)
+    await release(page, "resolve") // 古い選択（n-101）の確認の応答
+    await settle(page)
+    await expect(centerDemo(page).getByTestId("ntf-target")).toHaveCount(0)
+    await release(page, "resolve")
+    await expect(centerDemo(page).getByTestId("ntf-target-title")).toHaveText(seed("hq")[2].target!.label)
+    await expect.poll(async () => (await stored(page, "hq")).find((n) => n.id === "n-103")!.read).toBe(true)
+    expect((await stored(page, "hq")).find((n) => n.id === "n-101")!.read).toBe(false)
+  })
+
+  test("authorization change while the target is checked: no move, not marked read", async ({ page, isMobile }) => {
+    await openPage(page)
+    await hold(page, "resolve")
+    const center = await openCenter(page, nav(page))
+    await openButton(center, "n-103").click()
+    await waitHeld(page, "resolve")
+    await page.keyboard.press("Escape")
+    if (isMobile) await expect(center).toBeHidden()
+    await nav(page).getByTestId("ntf-nav-scope").click()
+    await releaseAll(page, "resolve")
+    await settle(page)
+    await expect(nav(page).getByTestId("ntf-target-title")).toHaveText("株式会社サンプルの詳細（編集中）")
+    expect((await stored(page, "hq")).find((n) => n.id === "n-103")!.read).toBe(false)
+  })
+
+  test("target validation fails: not moved, the reason is shown, not marked read", async ({ page }) => {
+    await openPage(page)
+    await server(page, (s) => (s.outcomeNext.resolve = "fail"))
+    const center = await openCenter(page, nav(page))
+    await openButton(center, "n-103").click()
+    await expect(center.locator("[data-slot=notification-navigate-notice]")).toContainText("対象を確認できませんでした")
+    await expect(nav(page).getByTestId("ntf-target-title")).toHaveText("株式会社サンプルの詳細（編集中）")
+    await settle(page)
+    expect((await stored(page, "hq")).find((n) => n.id === "n-103")!.read).toBe(false)
+    expect(await requests(page, "read")).toHaveLength(0)
+  })
+
+  test("sensitive content follows the current view permission: hidden title, no target, cannot be opened", async ({ page }) => {
+    await openPage(page)
+    await nav(page).getByTestId("ntf-nav-can-view").uncheck()
+    const center = await openCenter(page, nav(page))
+    for (const id of ["n-101", "n-102"]) {
+      await expect(item(center, id)).toHaveAttribute("data-hidden-content", "")
+      await expect(item(center, id)).toContainText("閲覧できない内容のお知らせ")
+      await expect(item(center, id)).not.toContainText(title(id))
+      await expect(item(center, id)).not.toContainText(seedNotifications.find((n) => n.id === id)!.target!.label)
+      await expect(openButton(center, id)).toHaveCount(0)
+      await expect(toggle(center, id)).toHaveAccessibleName("「閲覧できない内容のお知らせ」を既読にする")
+    }
+    // 顧客以外の通知は表示する
+    await expect(openButton(center, "n-103")).toContainText(title("n-103"))
+    // 権限が戻れば、取得し直さなくても表示する（モバイルの Sheet はモーダルのため、閉じてから操作する）
+    await page.keyboard.press("Escape")
+    await expect(center).toBeHidden()
+    const lists = (await requests(page, "list")).length
+    await nav(page).getByTestId("ntf-nav-can-view").check()
+    const reopened = await openCenter(page, nav(page))
+    await expect(openButton(reopened, "n-101")).toContainText(title("n-101"))
+    expect((await requests(page, "list")).length).toBe(lists)
   })
 })

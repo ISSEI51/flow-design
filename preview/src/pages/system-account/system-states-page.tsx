@@ -69,7 +69,12 @@ function RetryDetails({ monitor }: { monitor: SystemMonitor }) {
     return () => clearInterval(id)
   }, [])
   const next = c.nextCheckAt !== null && now !== null ? Math.max(0, Math.ceil((c.nextCheckAt - now) / 1000)) : null
-  const status = { online: "接続している", connecting: "再接続の確認中", offline: c.reason === "browser" ? "オフライン（端末）" : "接続できない（自動の確認を終了）" }[c.status]
+  const status = {
+    unknown: c.checking ? "接続を確認している（まだ確認していない）" : "接続を確認していない",
+    online: "接続している",
+    connecting: "再接続の確認中",
+    offline: c.reason === "browser" ? "オフライン（端末）" : "接続できない（自動の確認を終了）",
+  }[c.status]
   return (
     <div className="flex flex-col gap-4" data-testid="sys-retry">
       <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-ui">
@@ -371,8 +376,8 @@ export function SystemStatesPage() {
       <Section title="正常状態" lead="通常の業務の画面では、正常の状態を表示しない。電話、機器の操作、リアルタイムの監視など、接続の状態が判断に必要な製品だけ、常に表示する。状態を確認できていない場合は、正常と表示しない。">
         <DemoFrame testId="sys-indicator-demo">
           <div className="flex flex-col gap-4">
-            <p className="text-ui text-muted-foreground">通話の画面の例（接続の状態は模擬）</p>
-            <CallConnectionIndicator monitor={monitor} />
+            <p className="text-ui text-muted-foreground">通話の画面の例（接続の状態は模擬）。接続を確認するまで「正常」と示さず、通話を開始させない。</p>
+            <CallConnectionIndicator api={api} />
           </div>
         </DemoFrame>
         <div className="mt-10">
