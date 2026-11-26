@@ -187,18 +187,21 @@ Registry の部品は、どの状態も保存しない（LocalStorage、セッ�
 - 実施日：2026-11-26
 - 環境：macOS（Darwin 25.6）、Node.js 26.10.0、Playwright 1.65.1（Chromium 159、WebKit 27.x）
 
+最新の `origin/main`（a41b086、App Structure v0.1 確定）との統合の候補（fe462b8）での結果。
+
 | 確認 | 結果 |
 | --- | --- |
 | `npm run typecheck` | 成功（exit 0） |
 | `npm run preview:build` | 成功（exit 0）。チャンクの大きさの警告は従来どおり（範囲外） |
 | `npm run test:tokens` | 成功（failed 0） |
-| `npm run test:ssr` | 84 件成功（Data Browsing の 12 件を含む） |
-| `npm run test:patterns` | 259 件成功、55 件 skip、失敗 0 件（2 ワーカー） |
-| `npm run test:components`（独立したレビューの指摘への対処の後） | 1769 件成功、204 件 skip、失敗 1 件（10.6 分、4 ワーカー） |
+| `npm run test:ssr` | 統合の前：84 件成功（Data Browsing の 12 件を含む）。統合の候補：下の一括の実行に含まれ、すべて成功 |
+| `npm run test:patterns` | 統合の前：259 件成功、55 件 skip、失敗 0 件。統合の候補：下の一括の実行に含まれ、すべて成功 |
+| `npm run test:components`（統合の候補、2 回目） | 2062 件のうち 1833 件成功、229 件 skip、失敗 0 件（11.5 分、3 ワーカー） |
 
-- `test:components` の失敗 1 件は、App Structure の既存のテスト `app-structure.spec.ts` の「after navigating, focus moves to the page title…」（219 行の、現在地の背景色の判定）である。Data Browsing の変更を含まない `origin/main`（09a7000）の写しで、同じテストを `desktop` と `webkit` で 10 回ずつ実行し、20 回中 10 回失敗することを確かめた（この変更による失敗ではない）。テストは変更していない。App Structure の v0.1 の調整で扱う事項として報告する。
-- 対処の前の一括の実行：1760 件成功、204 件 skip、失敗 2 件（上の既存のテストと、Data Browsing の Tooltip の判定。後者は、閉じる途中の Tooltip と開いた Tooltip の 2 つに一致していたため、開いた Tooltip だけを選ぶ判定に直した）。
-- 負荷の高い状態（他の作業の検品と同時、load average 約 9）で `test:patterns` を 4 ワーカーで実行したときは、6 件が時間切れ（30 秒、Vite の SSR の接続の切断を含む）で失敗した。2 ワーカーで実行し直し、すべて成功した。
+- 統合の候補の 1 回目の一括の実行では、Components の既存のテスト `advanced.spec.ts` の「Select selected weight」（`webkit-mobile`）が 1 件失敗した。Select は変更していない。同じテストを 10 回続けて実行して 10 回成功し、`advanced.spec.ts` を `webkit-mobile` で実行し直して 77 件すべて成功した。負荷の高い状態での既存のテストの不安定さと判断した（テストは変更していない）。
+- 統合の前の一括の実行では、App Structure の既存のテスト（`app-structure.spec.ts` の移動の後の現在地の背景色の判定）が失敗した。統合の前の `origin/main`（09a7000）の写しでも、20 回中 10 回失敗した。App Structure v0.1（a41b086）との統合の後の 2 回の一括の実行では、失敗していない。
+- 独立したレビューの指摘への対処の前の一括の実行では、Data Browsing の Tooltip の判定が失敗した（閉じる途中の Tooltip にも一致した）。開いた Tooltip だけを選ぶ判定に直した。
+- 負荷の高い状態（他の作業の検品と同時、load average 約 9）で `test:patterns` を 4 ワーカーで実行したときは、6 件が時間切れ（30 秒）で失敗した。2 ワーカーで実行し直し、すべて成功した。
 - 記録された例外は、Vite の HMR の接続のコンソールのエラー（SSR の検品、`consoleEnvironment`）だけである。製品の例外とコンソールのエラーは 0 件。
 - 既存のテストの削除、skip の追加、許容誤差の拡大はしていない。新しいテストの skip は、既存の規則（デスクトップだけ・モバイルだけの表示、ハードウェアキーボードの操作、Chromium の CDP による IME の再現）によるもの。
 
