@@ -2,8 +2,10 @@ import { useState } from "react"
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { AnalysisPeriodFilter, ComparisonSelect, GranularitySelect } from "@/patterns/analysis-controls"
-import { buildBuckets, describeRange, granularityLabels, toInstantRange, type WeekStartsOn } from "@/patterns/analysis-period"
+import { buildBuckets, describeRange, granularityLabels, hoursInDay, toInstantRange, type WeekStartsOn } from "@/patterns/analysis-period"
+import { fromDateString, makeDate } from "@/lib/date"
 import { scopeFilters, useAnalysisQuery } from "@/patterns/analysis-query"
 
 import { defaultAnalysisFilters, newAccountsIn, planLabels, plans, regionLabels, regions, type AnalysisFilters, type Plan, type Region } from "../../data/data-analysis/subscriptions"
@@ -71,7 +73,8 @@ function PeriodDemo() {
             <span className="text-muted-foreground">[{la?.start}, {la?.end})（America/Los_Angeles）</span>
           </dd>
         </dl>
-        <div className="max-w-full overflow-x-auto">
+        <div className="min-w-0 max-w-full">
+          <TableScrollArea>
           <Table density="compact">
             <TableCaption className="sr-only">集計の区間</TableCaption>
             <TableHeader>
@@ -90,8 +93,65 @@ function PeriodDemo() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table></TableScrollArea>
           {buckets.length > 12 && <p className="mt-2 text-caption text-muted-foreground">ほか {buckets.length - 12} 区間</p>}
+        </div>
+      </div>
+    </DemoFrame>
+  )
+}
+
+// ---------------------------------------------------------------- 時間別の区間とタイムゾーン
+const tzCases: [string, string, string][] = [
+  ["Asia/Tokyo", "2026-11-25", "日本（夏時間なし）"],
+  ["America/New_York", "2026-03-08", "ニューヨーク：夏時間の開始（23 時間）"],
+  ["America/New_York", "2026-11-01", "ニューヨーク：夏時間の終了（25 時間）"],
+  ["Europe/Berlin", "2026-10-25", "ベルリン：夏時間の終了（25 時間）"],
+  ["Asia/Kathmandu", "2026-11-25", "カトマンズ：UTC+5:45"],
+  ["Australia/Lord_Howe", "2026-10-04", "ロード・ハウ島：30 分の夏時間（23.5 時間）"],
+]
+
+function TimeZoneDemo() {
+  const [i, setI] = useState(2)
+  const [tz, date, name] = tzCases[i]
+  const d = fromDateString(date)!
+  const buckets = buildBuckets({ from: d, to: d }, "hour", { today: makeDate(2030, 1, 1)!, timeZone: tz })
+  return (
+    <DemoFrame testId="af-timezone">
+      <div className="flex flex-col gap-4">
+        <DemoControls legend="集計のタイムゾーンと日付（製品が明示的に渡す）">
+          {tzCases.map(([, , label], k) => (
+            <Radio key={label} name="af-tz" checked={i === k} onChange={() => setI(k)}>
+              {label}
+            </Radio>
+          ))}
+        </DemoControls>
+        <p className="text-ui" data-testid="af-tz-summary">
+          {name}：{date.replaceAll("-", "/")} は {hoursInDay(date, tz)} 時間、時間別の区間は {buckets.length} 個
+        </p>
+        <div className="min-w-0 max-w-full">
+          <TableScrollArea>
+          <Table density="compact" data-testid="af-tz-table">
+            <TableCaption className="sr-only">時間別の区間</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead>区間</TableHead>
+                <TableHead>開始の時刻（キー）</TableHead>
+                <TableHead align="right">長さ</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {buckets.map((b) => (
+                <TableRow key={b.key}>
+                  <TableCell className="whitespace-nowrap">{b.label}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">{b.key}</TableCell>
+                  <TableCell align="right" className="whitespace-nowrap tabular-nums">
+                    {b.durationMinutes}分{b.partial && <span className="text-caption text-muted-foreground">（夏時間）</span>}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table></TableScrollArea>
         </div>
       </div>
     </DemoFrame>
@@ -144,7 +204,7 @@ function ScopeDemo() {
           <dd>{describe(global)}</dd>
           <dt className="text-muted-foreground">このグラフに適用する条件</dt>
           <dd data-testid="af-scope-effective">
-            {scoped.status === "conflict" ? (
+            {scoped.status !== "ready" ? (
               <span className="text-destructive">全体の条件と重ならないため、このグラフに表示できる対象はありません（全体の条件を上書きしません）</span>
             ) : (
               <>
@@ -179,6 +239,10 @@ export function AnalysisFiltersPage() {
 
       <Section title="期間、集計単位、比較" lead="プリセットはすぐに適用する。期間の指定は「この期間で集計」で適用する（片方の日付だけを変えた途中の期間で集計しない）。今日より後の日は選べない。期間と集計単位は別に持ち、手動で選んだ集計単位は使える限り維持する。">
         <PeriodDemo />
+      </Section>
+
+      <Section title="時間別の区間とタイムゾーン" lead="時間別の区間は、集計のタイムゾーンのローカル時刻の「時」で区切った実際の区間（半開区間）。夏時間の開始日は存在しない時刻の区間を作らず（23 区間）、終了日は同じ時刻を時差で区別する（25 区間）。">
+        <TimeZoneDemo />
       </Section>
 
       <Section title="全体条件と個別条件" lead="個別条件は全体条件を引き継ぎ、さらに絞り込む。重ならない場合は、全体条件を黙って上書きせず、表示できる対象がないことを示す。">

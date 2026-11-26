@@ -2,7 +2,7 @@
 
 分析の画面を、利用者が考える順に並べる。
 
-状態：初期実装（レビュー前） ・ 実装：[`registry/patterns/analysis-region.tsx`](../../../registry/patterns/analysis-region.tsx)（`AnalysisRegion`、`AnalysisScopeNote`）、App Structure の [Page Layout](page-layout.md)、[Section Layout](section-layout.md) ・ 全体：[Data Analysis](data-analysis.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/analysis-region.tsx`](../../../registry/patterns/analysis-region.tsx)（`AnalysisRegion`、`AnalysisScopeNote`）、App Structure の [Page Layout](page-layout.md)、[Section Layout](section-layout.md) ・ 全体：[Data Analysis](data-analysis.md)
 
 ## 目的
 
@@ -40,7 +40,8 @@
 | `title`、`description` | 見出し（h2 か h3）と補足 |
 | `actions` | この領域だけの操作（集計単位、表示形式、この表だけの比較）。見出しの右に置く |
 | `conditions` | 全体条件と異なる条件（`AnalysisScopeNote`）。見出しの下に置く |
-| `status` | `useBrowseData` の `status`。`loading` は Skeleton を 200ms 遅らせて示し、`refreshing` は前の内容を 200ms 後に薄く表示し「更新中」を示す |
+| `status` | `useBrowseData` の `status`。`loading` は Skeleton を 200ms 遅らせて示す。`refreshing` は前の内容を薄くせずに残し、200ms 後から見出しの右に「更新中」と `staleLabel` を示す |
+| `staleLabel` | 再取得の間に表示している前の結果の条件（「2026/11/01〜2026/11/25・絞り込みなしの結果（前の条件）」）。どの条件の結果かを誤認させない |
 | `error` | 領域の取得の失敗（`DataRegionError`）。`variant: "warning"` は前の内容を残す、既定は前の条件の内容を表示しない |
 | `divider` | 前の領域との間の細い線（Section Layout の `divider`） |
 
@@ -109,7 +110,9 @@ Section Layout の優先順位を守る：余白 → 文字の強弱 → 細い�
 
 - 独立した領域は、個別に読み込み、再取得、エラーを示す（領域ごとの `useBrowseData`）。一部の失敗で、ほかの領域を隠さない。
 - 比べる必要のある指標（同じ時点の MRR、契約企業数、売上）は、1 回の要求で取得し、集計の時点をそろえる（検証画面の「主要な指標」）。
-- 古い結果を残す場合は、200ms 後から薄く表示し「更新中」を示す。現在の条件の結果と誤認させない。
+- 古い結果を残す場合は、内容を薄くしない（数値と文字のコントラストを保つ）。200ms 後から、見出しの右に「更新中」と、表示中の結果の条件（`staleLabel`）を文字で示す。短い再取得では示さない。
+- 安全性に必要な操作の制限は、表示を遅らせず、`useBrowseData` の `status`（変更の操作は `canOperate`）ですぐに行う。
+- アカウント、ワークスペース、権限の境界をまたいだ古い結果は表示しない（`useBrowseData` の `scopeKey`。変わった時点で初回の読み込みに戻る）。
 - リアルタイムの更新は、値をその場で書き換え、行の順序、フォーカス、スクロールの位置を変えない。新しい項目（アラート）は件数を示し、利用者が押したときに一覧へ加える。自動の更新を止められるようにする。
 
 ### カスタマイズ
@@ -134,7 +137,8 @@ Section Layout の優先順位を守る：余白 → 文字の強弱 → 細い�
 | 並べたグラフの軸の範囲が異なる | 差を誤って読む | 軸と単位をそろえる |
 | 全体を 1 画面に詰め込む | グラフが小さく読めない | 自然なスクロール |
 | 1 つの領域の失敗でページ全体をエラーにする | 使える情報まで見えなくなる | 領域ごとのエラーと再試行 |
-| 再取得のたびに領域を空にする | 読めない、領域が縮む | 前の内容を薄く残す |
+| 再取得のたびに領域を空にする | 読めない、領域が縮む | 前の内容を残し、更新中と前の条件を文字で示す |
+| 再取得中の内容を薄く（opacity）する | 数値と文字のコントラストが下がる | 更新中の表示を別に置く |
 | リアルタイムの更新で一覧の先頭に項目を差し込む | 読んでいる位置とフォーカスが動く | 件数を示し、押したときに加える |
 | 機能しない装飾のボタン（「詳細」「…」） | 押しても何も起きない | 実際の操作だけを置く |
 

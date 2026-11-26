@@ -115,7 +115,9 @@ function MetricValue({
       {/* 画面の文字と読み上げを一致させる。省略した場合も、表示した値（約4.42億円）を読む */}
       <data value={String(value.value)} title={f.approximate ? f.exactText : undefined} className="min-w-0 [overflow-wrap:anywhere]">
         {f.parts.approximate && <span className={unitSize[size]}>{f.parts.approximate}</span>}
+        {f.parts.signBeforePrefix && f.parts.sign && <span>{f.parts.sign}</span>}
         {f.parts.prefix && <span className={unitSize[size]}>{f.parts.prefix}</span>}
+        {!f.parts.signBeforePrefix && f.parts.sign && <span>{f.parts.sign}</span>}
         <span>{f.parts.number}</span>
         {f.parts.suffix && <span className={cn("ms-0.5", unitSize[size])}>{f.parts.suffix}</span>}
       </data>
@@ -279,7 +281,7 @@ function MetricTarget({
    * 期間の経過。達成率と区別して、別の文で示す。途中の期間の値を期間の全体の目標（月の上限など）と比べる場合は、必ず渡す
    * （月の初めほど、目標から遠く、上限の内に見えるため）
    */
-  elapsed?: { elapsedDays: number; totalDays: number; ratio: number }
+  elapsed?: { elapsedDays: number; totalDays: number; ratio: number; todayInProgress?: boolean }
   className?: string
 }) {
   const p = getTargetProgress({ value, target, direction })
@@ -288,9 +290,8 @@ function MetricTarget({
   if (p.status === "invalid") {
     const reason = {
       "target-missing": "目標が設定されていません",
-      "value-missing": "現在値がないため、達成率を算出できません",
-      "target-zero": `${name}が 0 のため、達成率を算出できません`,
-      "target-negative": `${name}がマイナスのため、達成率を算出できません`,
+      "value-missing": "現在値がないため、目標と比べられません",
+      "not-finite": "値が大きすぎるため、目標と比べられません",
     }[p.reason]
     return (
       <p data-slot="metric-target" data-state="invalid" className={cn("text-caption text-muted-foreground", className)}>
@@ -298,40 +299,69 @@ function MetricTarget({
       </p>
     )
   }
-  // 上限の目標（limit）は、割合の割合（「上限 1.5% に対して 42.6%」）を示さない。現在値と上限を同じ単位で比べる。
+  // 上限の目標（limit）は、割合の割合（「上限 1.5% に対して 42.6%」）を示さない。現在値と上限を同じ単位の差で示す。
+  // 目標値が 0 や負の場合は、達成率（割合）を示さず、達成・未達と実数の差を示す（バーを描かない）。
   // 割合（ratio）の差は pt、それ以外は値の単位（件、円）で示す。
-  const gapText = (gap: number) =>
-    format?.style === "ratio" ? `${(Math.abs(gap) * 100).toFixed(format.maximumFractionDigits ?? 1)}pt` : (formatMetricValue(Math.abs(gap), format)?.text ?? "—")
-  const ratioText = percent(p.ratio)
-  const mainText = p.kind === "achievement" ? ratioText : p.met ? `あと ${gapText(p.remaining)}` : `${gapText(p.remaining)} 超過`
+  const gapText = (gap: number) => {
+    if (format?.style !== "ratio") return formatMetricValue(Math.abs(gap), format)?.text ?? "—"
+    const digits = format.maximumFractionDigits ?? 1
+    const pt = Math.abs(gap) * 100
+    // 丸めると 0 になる小さな差を「0.0pt」と示さない
+    return gap !== 0 && Number(pt.toFixed(digits)) === 0 ? `${(1 / 10 ** digits).toFixed(digits)}pt未満` : `${pt.toFixed(digits)}pt`
+  }
+  const ratioText = p.ratio === null ? null : percent(p.ratio)
+  const gapPhrase = p.kind === "achievement" ? (p.met ? (p.remaining === 0 ? "達成" : `${gapText(p.remaining)} 超過`) : `あと ${gapText(p.remaining)}`) : p.met ? `あと ${gapText(p.remaining)}` : `${gapText(p.remaining)} 超過`
+  const mainText = p.kind === "achievement" && ratioText !== null ? ratioText : gapPhrase
   const statusText =
-    p.kind === "achievement" ? (p.met ? (p.ratio > 1 ? "目標を超えています" : "目標に達しました") : null) : p.met ? null : `${name}を超えています`
-  const aria =
     p.kind === "achievement"
-      ? `${name} ${targetText} に対して ${ratioText}${statusText ? `、${statusText}` : ""}`
+      ? p.met
+        ? p.ratio !== null && p.ratio > 1
+          ? "目標を超えています"
+          : "目標に達しました"
+        : null
       : p.met
-        ? `${name} ${targetText} まで、あと ${gapText(p.remaining)}`
-        : `${name} ${targetText} を ${gapText(p.remaining)} 超えています`
+        ? null
+        : `${name}を超えています`
+  const aria =
+    p.kind === "achievement" && ratioText !== null
+      ? `${name} ${targetText} に対して ${ratioText}${statusText ? `、${statusText}` : ""}`
+      : p.kind === "achievement"
+        ? `${name} ${targetText}、${p.met ? `達成${p.remaining !== 0 ? `（${gapText(p.remaining)} 超過）` : ""}` : `あと ${gapText(p.remaining)}`}`
+        : p.met
+          ? `${name} ${targetText} まで、あと ${gapText(p.remaining)}`
+          : `${name} ${targetText} を ${gapText(p.remaining)} 超えています`
+  const labelSuffix = p.kind === "achievement" ? (ratioText !== null ? "に対して" : "") : p.met ? "まで" : "を"
   return (
     <div data-slot="metric-target" data-kind={p.kind} data-met={p.met || undefined} className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-      <Progress
-        value={p.barValue}
-        // 読み上げる値は、表示の範囲（0〜100）に収める前の実際の値
-        getAriaValueText={() => aria}
-        className="gap-y-1.5"
-      >
-        <ProgressLabel className="text-caption font-normal text-muted-foreground">
-          {name} {targetText}
-          {p.kind === "achievement" ? "に対して" : p.met ? "まで" : "を"}
-        </ProgressLabel>
-        <ProgressValue className="ms-auto text-caption font-medium tabular-nums text-foreground">{() => mainText}</ProgressValue>
-      </Progress>
+      {p.barValue !== null ? (
+        <Progress
+          value={p.barValue}
+          // 読み上げる値は、表示の範囲（0〜100）に収める前の実際の値
+          getAriaValueText={() => aria}
+          className="gap-y-1.5"
+        >
+          <ProgressLabel className="text-caption font-normal text-muted-foreground">
+            {name} {targetText}
+            {labelSuffix}
+          </ProgressLabel>
+          <ProgressValue className="ms-auto text-caption font-medium tabular-nums text-foreground">{() => mainText}</ProgressValue>
+        </Progress>
+      ) : (
+        <p className="flex flex-wrap justify-between gap-x-3 text-caption" data-slot="metric-target-text">
+          <span className="text-muted-foreground">
+            {name} {targetText}
+            {labelSuffix}
+          </span>
+          <span className="font-medium tabular-nums">{mainText}</span>
+          <span className="sr-only">{aria}</span>
+        </p>
+      )}
       {(statusText || elapsed) && (
         <p className="flex flex-wrap gap-x-3 text-caption text-muted-foreground">
           {statusText && <span>{statusText}</span>}
           {elapsed && (
             <span data-slot="metric-target-elapsed">
-              期間の経過 {elapsed.elapsedDays} / {elapsed.totalDays}日（{percent(elapsed.ratio)}）
+              期間の経過 {elapsed.elapsedDays} / {elapsed.totalDays}日（{percent(elapsed.ratio)}）{elapsed.todayInProgress ? "・今日は途中" : ""}
             </span>
           )}
         </p>

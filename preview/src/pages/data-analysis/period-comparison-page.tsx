@@ -4,7 +4,19 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "rec
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, chartAnimation, chartStyles, type ChartConfig } from "@/components/ui/chart"
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDate, isBeforeDate, makeDate } from "@/lib/date"
-import { alignBuckets, buildBuckets, comparisonLabels, comparisonRange, describeRange, resolvePeriod, type ComparisonMode } from "@/patterns/analysis-period"
+import {
+  alignBuckets,
+  buildBuckets,
+  comparisonBasisLabels,
+  comparisonLabels,
+  comparisonRange,
+  describeRange,
+  resolvePeriod,
+  type AlignBy,
+  type ComparisonBasis,
+  type ComparisonMode,
+} from "@/patterns/analysis-period"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { compareValues, describeComparison, type ComparableValue } from "@/patterns/comparison"
 import { ComparisonValue } from "@/patterns/metric"
 
@@ -46,7 +58,8 @@ function RangeDemo() {
             </Radio>
           ))}
         </DemoControls>
-        <div className="max-w-full overflow-x-auto">
+        <div className="min-w-0 max-w-full">
+          <TableScrollArea>
           <Table>
             <TableCaption className="sr-only">比較期間</TableCaption>
             <TableHeader>
@@ -85,8 +98,113 @@ function RangeDemo() {
                 )
               )}
             </TableBody>
-          </Table>
+          </Table></TableScrollArea>
         </div>
+      </div>
+    </DemoFrame>
+  )
+}
+
+// ---------------------------------------------------------------- 比較の方式
+const bases: ComparisonBasis[] = ["elapsed-days", "calendar", "weekday", "business-days", "point-in-time", "elapsed-time"]
+// 例の営業日のカレンダー（土日を休み）。実際の営業日のカレンダーは製品の責務
+const weekdays = { isBusinessDay: (d: Date) => d.getDay() !== 0 && d.getDay() !== 6 }
+
+function BasisDemo() {
+  const [todayIndex, setTodayIndex] = useState(0)
+  const ctx = { ...analysisContext, today: todays[todayIndex][1], timeZone: "Asia/Tokyo", asOf: Date.UTC(todays[todayIndex][1].getFullYear(), todays[todayIndex][1].getMonth(), todays[todayIndex][1].getDate(), 5, 30) }
+  const p = resolvePeriod({ kind: "relative", id: "this-month" }, ctx)
+  if (p.status !== "ready") return null
+  return (
+    <DemoFrame testId="pc-basis">
+      <div className="flex flex-col gap-4">
+        <DemoControls legend="今日（集計済みの時刻は 14:30）">
+          {todays.map(([l], k) => (
+            <Radio key={l} name="pc-basis-today" checked={todayIndex === k} onChange={() => setTodayIndex(k)}>
+              {l}
+            </Radio>
+          ))}
+        </DemoControls>
+        <p className="text-ui">今月（{describeRange(p.range)}）を前月と比べる場合</p>
+        <div className="min-w-0 max-w-full">
+          <TableScrollArea>
+          <Table>
+            <TableCaption className="sr-only">比較の方式ごとの比較期間</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead>比較の方式</TableHead>
+                <TableHead>比較期間</TableHead>
+                <TableHead>公平な比較か</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bases.map((b) => {
+                const c = comparisonRange({ period: p, mode: "previous-month", basis: b, context: ctx, businessCalendar: weekdays })
+                return (
+                  <TableRow key={b} data-basis={b}>
+                    <TableCell className="whitespace-nowrap">{comparisonBasisLabels[b]}</TableCell>
+                    <TableCell className="tabular-nums">
+                      {c.status === "ready" ? describeRange(c.range) : "—"}
+                      {c.status === "ready" && c.note && <span className="block text-caption text-muted-foreground">{c.note}</span>}
+                    </TableCell>
+                    <TableCell>{c.status === "ready" ? (c.fair ? "公平" : `公平ではない：${c.reason}`) : "比較できない"}</TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table></TableScrollArea>
+        </div>
+        <p className="text-caption text-muted-foreground">営業日は例として土日を休みにしている（祝日は含めていない）。実際の営業日のカレンダーは製品が渡す。</p>
+      </div>
+    </DemoFrame>
+  )
+}
+
+// ---------------------------------------------------------------- 区間の位置合わせ
+function AlignDemo() {
+  const [by, setBy] = useState<AlignBy>("elapsed")
+  const cur = buildBuckets({ from: makeDate(2026, 11, 1)!, to: ANALYSIS_TODAY }, "week", analysisContext)
+  const prev = buildBuckets({ from: makeDate(2026, 10, 1)!, to: makeDate(2026, 10, 25)! }, "week", analysisContext)
+  const rows = alignBuckets(cur, prev, { by })
+  return (
+    <DemoFrame testId="pc-align">
+      <div className="flex flex-col gap-4">
+        <DemoControls legend="対応付けの方法（週別。今月の 11/1〜25 と前月の 10/1〜25）">
+          {(
+            [
+              ["position", "順番"],
+              ["elapsed", "期間の開始からの経過"],
+              ["calendar", "暦の位置"],
+            ] as [AlignBy, string][]
+          ).map(([v, l]) => (
+            <Radio key={v} name="pc-align-by" checked={by === v} onChange={() => setBy(v)}>
+              {l}
+            </Radio>
+          ))}
+        </DemoControls>
+        <div className="min-w-0 max-w-full">
+          <TableScrollArea>
+          <Table density="compact">
+            <TableCaption className="sr-only">区間の対応付け</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead>今月の区間</TableHead>
+                <TableHead>前月の区間</TableHead>
+                <TableHead>数値として比べられるか</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.key} data-comparable={r.comparable}>
+                  <TableCell className="tabular-nums">{r.current ? `${describeRange(r.current)}（${r.current.days}日）` : "—"}</TableCell>
+                  <TableCell className="tabular-nums">{r.baseline ? `${describeRange(r.baseline)}（${r.baseline.days}日）` : "—"}</TableCell>
+                  <TableCell>{r.comparable ? "比べられる" : `比べない：${r.reason}`}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table></TableScrollArea>
+        </div>
+        <p className="text-caption text-muted-foreground">週の途中から始まる期間では、順番が同じでも区間の日数が異なる。比べられない区間には増減率を求めず、実際の日付のグラフにする。</p>
       </div>
     </DemoFrame>
   )
@@ -107,7 +225,8 @@ const cases: { label: string; current: ComparableValue; baseline: ComparableValu
 
 function CasesDemo() {
   return (
-    <div className="max-w-full overflow-x-auto" data-testid="pc-cases">
+    <div className="min-w-0 max-w-full" data-testid="pc-cases">
+      <TableScrollArea>
       <Table>
         <TableCaption className="sr-only">比較値の算出の可否</TableCaption>
         <TableHeader>
@@ -139,7 +258,7 @@ function CasesDemo() {
             )
           })}
         </TableBody>
-      </Table>
+      </Table></TableScrollArea>
     </div>
   )
 }
@@ -155,15 +274,17 @@ function OverlayChart() {
   if (p.status !== "ready") return null
   const cur = buildBuckets({ from: p.range.from, to: makeDate(2026, 11, 30)! }, "day", analysisContext)
   const prev = buildBuckets({ from: makeDate(2026, 10, 1)!, to: makeDate(2026, 10, 31)! }, "day", analysisContext)
-  let a = 0
-  let b = 0
+  let a: number | null = 0
+  let b: number | null = 0
   // 1 日目からの累計の売上を、期間の中の位置（経過日）でそろえて重ねる。未来の日は描かない（0 にしない）。
-  const rows = alignBuckets(cur, prev).map((r) => {
+  // 欠損の日がある場合は、それ以降の累計を求めない（欠損を 0 として累計に加えない）。
+  const add = (sum: number | null, v: number | null) => (sum === null || v === null ? null : sum + v)
+  const rows = alignBuckets(cur, prev).map((r, index) => {
     const future = r.current && isBeforeDate(ANALYSIS_TODAY, r.current.from)
-    if (r.current && !future) a += revenueIn(r.current, defaultAnalysisFilters) ?? 0
-    if (r.baseline) b += revenueIn(r.baseline, defaultAnalysisFilters) ?? 0
+    if (r.current && !future) a = add(a, revenueIn(r.current, defaultAnalysisFilters))
+    if (r.baseline) b = add(b, revenueIn(r.baseline, defaultAnalysisFilters))
     return {
-      day: `${r.index + 1}日目`,
+      day: `${index + 1}日目`,
       current: r.current && !future ? a : null,
       baseline: r.baseline ? b : null,
       currentDate: r.current ? formatDate(r.current.from) : "—",
@@ -314,6 +435,14 @@ export function PeriodComparisonPage() {
 
       <Section title="比較期間の決め方" lead="途中の期間（今月の 25 日間）は、前月の同じ 25 日間と比べる。比較先に同じ日がない場合（3/30 の前月、2/29 の前年）は月末に合わせ、そのことを示す。月の全体どうしは、日数が異なっても月の全体で比べる。">
         <RangeDemo />
+      </Section>
+
+      <Section title="比較の方式" lead="指標に合う比較の方式を製品が選ぶ。期間の途中の累積は同じ経過日数、時点の指標は同じ時点、曜日で変動する指標は同じ曜日。比較先が短く同じ経過を取れない場合は、切り詰めたことを示し、公平な比較として扱わない。">
+        <BasisDemo />
+      </Section>
+
+      <Section title="区間の位置合わせ" lead="区間を対応付けることと、数値として比べてよいことを区別する。区間の長さが異なる、片方がない、途中の区間は比べない。">
+        <AlignDemo />
       </Section>
 
       <Section title="比較値の算出の可否" lead="基準値が 0 の場合は増減率を算出できない。基準値がマイナスの場合は実数差を示す。NaN や Infinity を表示しない。割合どうしの差は pt で示す。">

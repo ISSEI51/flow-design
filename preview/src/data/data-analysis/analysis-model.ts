@@ -1,7 +1,7 @@
 import { addDays, addMonths, getDaysInMonth, startOfMonth } from "date-fns"
 
 import { fromDateString, isBeforeDate, makeDate, toDateString } from "@/lib/date"
-import { buildBuckets, type ComparisonRange, type DayRange, type Granularity, type ResolvedPeriod } from "@/patterns/analysis-period"
+import { buildBuckets, type PeriodContext, type ComparisonRange, type DayRange, type Granularity, type ResolvedPeriod } from "@/patterns/analysis-period"
 
 import {
   ANALYSIS_TODAY,
@@ -55,26 +55,48 @@ export function revenueTargetFor(full: DayRange): number | null {
   return sum
 }
 
-export function overviewData({ period, full, comparison, filters }: { period: ReadyPeriod; full: DayRange | null; comparison: ComparisonRange; filters: AnalysisFilters }) {
+/** ワークスペース（データのスコープ）の条件を加える。サーバーが行う（画面の絞り込みで外せない） */
+export function withScope(workspace: string, filters: AnalysisFilters): AnalysisFilters {
+  return workspace === "kyushu" ? { ...filters, regions: ["kyushu-okinawa"] } : filters
+}
+
+/**
+ * 主要な指標。累積の指標（売上、新規、解約率）は comparison（同じ経過日数など）、
+ * 時点の指標（MRR、契約企業数）は pointComparison（同じ時点）と比べる。指標に合う比較の方式を製品が選ぶ。
+ */
+export function overviewData({
+  period,
+  full,
+  comparison,
+  pointComparison,
+  filters,
+}: {
+  period: ReadyPeriod
+  full: DayRange | null
+  comparison: ComparisonRange
+  pointComparison?: ComparisonRange
+  filters: AnalysisFilters
+}) {
   const range = period.range
   const base = baselineRange(comparison)
+  const point = baselineRange(pointComparison ?? comparison)
   // 月の上限の目標は、期間が 1 か月（確定した月か、途中の月）の場合だけ比べる
   const singleMonth = full !== null && full.from.getDate() === 1 && toDateString(endOfMonthDay(full.from)) === toDateString(full.to)
   const revenue = revenueIn(range, filters)
   const gp = grossProfitIn(range, filters)
   const baseRevenue = or(base, (r) => revenueIn(r, filters))
   const baseGp = or(base, (r) => grossProfitIn(r, filters))
-  // 12 か月の月末の MRR（今月は今日の時点）。Sparkline に使う
+  // 期間の最終日（MRR を示す時点）で終わる 12 か月の月末の MRR。最後の点は期間の最終日の値で、主要な値と一致する。Sparkline に使う
   const spark: (number | null)[] = Array.from({ length: 12 }, (_, i) => {
-    const m = addMonths(startOfMonth(ANALYSIS_TODAY), i - 11)
-    const end = i === 11 ? ANALYSIS_TODAY : endOfMonthDay(m)
+    const m = addMonths(startOfMonth(range.to), i - 11)
+    const end = i === 11 ? range.to : endOfMonthDay(m)
     return mrrOn(end, filters)
   })
   return {
     asOf: range.to,
-    baselineAsOf: base?.to ?? null,
-    mrr: { current: mrrOn(range.to, filters), baseline: or(base, (r) => mrrOn(r.to, filters)) } as Pair,
-    accounts: { current: activeOn(range.to, filters), baseline: or(base, (r) => activeOn(r.to, filters)) } as Pair,
+    baselineAsOf: point?.to ?? null,
+    mrr: { current: mrrOn(range.to, filters), baseline: or(point, (r) => mrrOn(r.to, filters)) } as Pair,
+    accounts: { current: activeOn(range.to, filters), baseline: or(point, (r) => activeOn(r.to, filters)) } as Pair,
     revenue: { current: revenue, baseline: baseRevenue } as Pair,
     revenueTarget: full === null || filters.regions.length || filters.plans.length || filters.terms.length ? null : revenueTargetFor(full),
     churnRate: { current: churnRateIn(range, filters), baseline: or(base, (r) => churnRateIn(r, filters)) } as Pair,
@@ -176,8 +198,9 @@ export function retentionSummary({ range, base, filters }: { range: DayRange; ba
 }
 
 /** 集計単位ごとの解約率と、前年の同じ区間の解約率 */
-export function churnTrend({ range, granularity, filters }: { range: DayRange; granularity: Granularity; filters: AnalysisFilters }) {
-  return buildBuckets(range, granularity, { today: ANALYSIS_TODAY }).map((b) => {
+export function churnTrend({ range, granularity, filters, context }: { range: DayRange; granularity: Granularity; filters: AnalysisFilters; context?: PeriodContext }) {
+  // 区間の状態（確定・途中）は、製品が渡す集計の文脈（タイムゾーン、集計済みの時刻）で決める
+  return buildBuckets(range, granularity, { ...context, today: ANALYSIS_TODAY }).map((b) => {
     const py = { from: addMonths(b.from, -12), to: addMonths(b.to, -12) }
     return {
       key: b.key,
@@ -191,6 +214,11 @@ export function churnTrend({ range, granularity, filters }: { range: DayRange; g
       pyTo: toDateString(py.to),
       partial: b.partial,
       inProgress: b.inProgress,
+      /**
+       * 今日を含み、今後も値が増える区間。inProgress（集計済みの時刻より後を含む）とは別に、
+       * 集計は今日の終わりまで済んでいても、区間の単位（月など）が続いていて日数が少ない区間を示す
+       */
+      open: b.inProgress || (b.partial && toDateString(b.to) === toDateString(ANALYSIS_TODAY)),
       rate: churnRateIn(b, filters),
       churned: churnedIn(b, filters),
       previousYear: isBeforeDate(py.from, addDays(DATA_START, 1)) ? null : churnRateIn(py, filters),
@@ -224,20 +252,42 @@ export function churnByRegion({ range, filters }: { range: DayRange; filters: An
 }
 
 /** 解約した企業の一覧。権限のない取引先の明細は、サーバーで除き、件数だけを返す（クライアントで隠さない） */
-export function churnedAccountList({ range, filters, role, reason }: { range: DayRange; filters: AnalysisFilters; role: "manager" | "staff"; reason?: string | null }) {
+export function churnedAccountList({
+  range,
+  filters,
+  role,
+  reason,
+  hiddenCountPolicy = "show",
+}: {
+  range: DayRange
+  filters: AnalysisFilters
+  role: "manager" | "staff"
+  reason?: string | null
+  /** hide：閲覧できない明細の件数を返さない（total と hidden を null にする） */
+  hiddenCountPolicy?: "show" | "hide"
+}) {
   // 集計の範囲の外を含む期間は、集計の値と同じ条件で数えられないため、明細も返さない
-  if (!inDataRange(range)) return { rows: [] as ReturnType<typeof churnedAccounts>, total: null, hidden: 0, outOfRange: true as const }
+  if (!inDataRange(range)) return { rows: [] as ReturnType<typeof churnedAccounts>, total: null, hidden: null as number | null, concealed: false, outOfRange: true as const }
   const all = churnedAccounts(range, filters).filter((r) => !reason || r.reason === reason)
   const visible = role === "manager" ? all : all.filter((r) => !r.restricted)
-  return { rows: visible.map(({ restricted: _restricted, ...r }) => r), total: all.length as number | null, hidden: all.length - visible.length, outOfRange: false as const }
+  const hidden = all.length - visible.length
+  const conceal = hiddenCountPolicy === "hide" && hidden > 0
+  return {
+    rows: visible.map(({ restricted: _restricted, ...r }) => r),
+    total: (conceal ? null : all.length) as number | null,
+    hidden: (conceal ? null : hidden) as number | null,
+    concealed: conceal,
+    outOfRange: false as const,
+  }
 }
 export type ChurnedListRow = Omit<ReturnType<typeof churnedAccounts>[number], "restricted">
 
 // ---------------------------------------------------------------- 企業の詳細
 /** 企業の詳細。閲覧の権限が限られた取引先は、staff には返さない（forbidden）。存在しない ID は null */
-export function accountDetail(id: string, role: "manager" | "staff") {
+export function accountDetail(id: string, role: "manager" | "staff", workspace = "hq") {
   const a = accountById.get(id)
-  if (!a) return null
+  // ワークスペースの外の企業は、存在しないものとして扱う（別のスコープの情報を返さない）
+  if (!a || (workspace === "kyushu" && a.region !== "kyushu-okinawa")) return null
   if (role === "staff" && a.restricted) throw new AnalysisRequestError("この企業の詳細を表示する権限がありません", "forbidden")
   const last = a.end ? addDays(fromDateString(a.end)!, -1) : ANALYSIS_TODAY
   // 最後の 12 か月の月末の月額（契約していない月は null。0 にしない）

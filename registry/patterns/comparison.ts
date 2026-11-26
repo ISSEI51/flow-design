@@ -42,9 +42,10 @@ type ComparisonResult =
       current: number
       baseline: number
       difference: number
-      /** 増減率。基準値が 0 以下のときは null（rateUnavailable に理由） */
+      /** 増減率。算出できないときは null（rateUnavailable に理由） */
       rate: number | null
-      rateUnavailable: "baseline-zero" | "baseline-negative" | null
+      /** baseline-zero：基準値が 0。baseline-negative：基準値がマイナス。not-finite：計算の結果が有限の数にならない（値が極端に大きい・小さい） */
+      rateUnavailable: "baseline-zero" | "baseline-negative" | "not-finite" | null
       /** ratio の場合のパーセントポイント差。amount は null */
       points: number | null
       /** 増減の向き。丸める前の値で判定する */
@@ -64,12 +65,18 @@ function compareValues({
   baseline,
   kind = "amount",
   incomparableReason,
+  tolerance,
 }: {
   current: ComparableValue
   /** 基準値。比較しない・比較のデータがない場合は undefined */
   baseline: ComparableValue | undefined
   kind?: ValueKind
   incomparableReason?: string | null
+  /**
+   * 変化なしとみなす差の大きさ（値の単位。割合は 0〜1 の単位）。指標の精度に合わせて製品が指定する。
+   * 省略すると、浮動小数点の計算の誤差（値の大きさの 1e-12 倍）だけを変化なしとする。意味のある小さい差は 0 にしない
+   */
+  tolerance?: number
 }): ComparisonResult {
   if (current.status === "loading" || baseline?.status === "loading") return { status: "loading" }
   if (current.status === "unavailable") return { status: "current-unavailable" }
@@ -80,19 +87,30 @@ function compareValues({
   if (!isFiniteNumber(baseline.value)) return { status: "no-baseline" }
   const c = current.value
   const b = baseline.value
-  const difference = c - b
-  const rateUnavailable = b === 0 ? "baseline-zero" : b < 0 ? "baseline-negative" : null
-  const rate = rateUnavailable ? null : difference / b
+  const raw = c - b
+  // 有限の値どうしでも、差が有限にならない場合がある（Number.MAX_VALUE − (−Number.MAX_VALUE)）。
+  if (!Number.isFinite(raw)) return { status: "incomparable", reason: "値が大きすぎるため、差を計算できません" }
+  if (tolerance !== undefined && !(Number.isFinite(tolerance) && tolerance >= 0)) throw new RangeError(`compareValues: tolerance は 0 以上の有限の数にしてください（${tolerance}）`)
+  const limit = tolerance ?? Math.max(Math.abs(c), Math.abs(b)) * 1e-12
+  const difference = Math.abs(raw) <= limit ? 0 : raw
+  let rateUnavailable: "baseline-zero" | "baseline-negative" | "not-finite" | null = b === 0 ? "baseline-zero" : b < 0 ? "baseline-negative" : null
+  let rate: number | null = rateUnavailable ? null : difference / b
+  if (rate !== null && !Number.isFinite(rate)) {
+    // 基準値が正でも、極端に小さい値では増減率が有限にならない（1e308 / 1e-10）
+    rate = null
+    rateUnavailable = "not-finite"
+  }
   const change = difference > 0 ? "increase" : difference < 0 ? "decrease" : "unchanged"
   const signChange = b < 0 && c > 0 ? "negative-to-positive" : b > 0 && c < 0 ? "positive-to-negative" : null
+  const points = kind === "ratio" ? difference * 100 : null
   return {
     status: "ready",
     current: c,
     baseline: b,
     difference,
-    rate: rate !== null && Number.isFinite(rate) ? rate : null,
+    rate,
     rateUnavailable,
-    points: kind === "ratio" ? difference * 100 : null,
+    points: points !== null && Number.isFinite(points) ? points : null,
     change,
     signChange,
   }
@@ -157,8 +175,9 @@ function signed(value: number, digits: number, locale: string, unit: string) {
   const nf = new Intl.NumberFormat(locale, { maximumFractionDigits: digits, minimumFractionDigits: digits, useGrouping: "always" as unknown as boolean })
   const sign = value > 0 ? "+" : value < 0 ? MINUS : "±"
   if (value !== 0 && Number(abs.toFixed(digits)) === 0) {
+    // 丸めると 0 になる小さな差。増加は「+0.1pt未満」、減少は「−0.1〜0pt」（「−0.1pt未満」は −0.1pt より小さい意味になるため）
     const min = nf.format(1 / 10 ** digits)
-    return `${sign}${min}${unit}未満`
+    return value > 0 ? `+${min}${unit}未満` : `${MINUS}${min}〜0${unit}`
   }
   return `${sign}${nf.format(abs)}${unit}`
 }
@@ -172,6 +191,8 @@ function formatDifference(difference: number, format: MetricFormat = {}) {
   }
   const f = formatMetricValue(Math.abs(difference), format)
   if (!f) return null
+  // 丸めると 0 になる小さな減少は「−0.1〜0%」のように範囲で示す（「−0.1%未満」は −0.1% より小さい意味になる）
+  if (difference < 0 && Math.abs(difference) > 0 && f.parts.suffix.endsWith("未満")) return formatMetricValue(difference, format)?.text ?? null
   const sign = difference > 0 ? "+" : MINUS
   // 「約」は符号の前に置く（約+4.42億円 ではなく 約 +4.42億円 と読まれないよう、符号を数値の直前に置く）
   return `${f.parts.approximate}${sign}${f.parts.prefix}${f.parts.number}${f.parts.suffix}`
@@ -185,6 +206,10 @@ function describeComparison(result: ComparisonResult, options: ComparisonDisplay
   }
   const locale = options.format?.locale ?? "ja-JP"
   const kind = options.kind ?? (options.format?.style === "ratio" ? "ratio" : "amount")
+  // 指標の種類と表示形式が一致しない（割合の指標を金額の形式で示す、など）場合は、誤った単位で示さない。
+  if (options.format && (kind === "ratio") !== (options.format.style === "ratio")) {
+    return { text: "表示できません（指標の種類と表示形式が一致しません）", detail: null, change: null, evaluation: null, evaluationLabel: "", available: false }
+  }
   const evaluation = evaluateChange(result.change, options.direction ?? "neutral")
   const base = {
     change: result.change,
@@ -208,7 +233,12 @@ function describeComparison(result: ComparisonResult, options: ComparisonDisplay
   const rate = rateText()
   if (rate === null) {
     // 基準値が 0 や負の場合は、増減率を示さず、実数差と理由を示す。
-    const reason = result.rateUnavailable === "baseline-zero" ? "基準が 0 のため増減率は算出できません" : "基準がマイナスのため増減率は示しません"
+    const reason =
+      result.rateUnavailable === "baseline-zero"
+        ? "基準が 0 のため増減率は算出できません"
+        : result.rateUnavailable === "baseline-negative"
+          ? "基準がマイナスのため増減率は示しません"
+          : "値の大きさのため増減率は算出できません"
     return { ...base, text: diffText(), detail: signNote ?? reason }
   }
   return { ...base, text: rate, detail: signNote }
@@ -219,23 +249,27 @@ function describeComparison(result: ComparisonResult, options: ComparisonDisplay
 type TargetProgress =
   | {
       status: "ready"
-      /** achievement：目標に対する達成（売上など）。limit：上限に対する割合（解約率、エラー件数など） */
+      /** achievement：目標に対する達成（売上など）。limit：上限の目標（解約率、エラー件数など） */
       kind: "achievement" | "limit"
-      /** 現在値 ÷ 目標値。100% を超える値もそのまま持つ */
-      ratio: number
-      /** Progress の表示に使う 0〜100。表示範囲に収めた値であり、達成率の数値として表示しない */
-      barValue: number
-      /** achievement：目標に達した。limit：上限の内に収まっている */
+      /**
+       * 現在値 ÷ 目標値。100% を超える値もそのまま持つ。目標値が 0 や負の場合は、割合として意味がないため null
+       * （達成・未達は met で判定できる）
+       */
+      ratio: number | null
+      /** Progress の表示に使う 0〜100。ratio が null の場合は null（バーを示さない）。達成率の数値として表示しない */
+      barValue: number | null
+      /** achievement：目標に達した（現在値 ≧ 目標値）。limit：上限の内（現在値 ≦ 目標値） */
       met: boolean
       /** 目標値 − 現在値 */
       remaining: number
     }
-  | { status: "invalid"; reason: "value-missing" | "target-missing" | "target-zero" | "target-negative" }
+  | { status: "invalid"; reason: "value-missing" | "target-missing" | "not-finite" }
 
 /**
- * 目標に対する現在値の割合。
+ * 目標に対する現在値。達成率を算出できることと、目標を達成したかを判定できることを分ける。
  * - direction が decrease の指標は、上限の目標として扱う（kind: "limit"）。達成率という表現を使わない
- * - 目標値が 0、負、欠損の場合は、割合を算出しない（不正な達成率を表示しない）
+ * - 目標値が 0 や負の場合（エラー 0 件の上限、損益 0 円、赤字を −50 万円まで減らす）は、割合（ratio）を算出せず、
+ *   met と remaining（実数の差）で示す。不正な達成率を生成しない
  */
 function getTargetProgress({
   value,
@@ -248,17 +282,18 @@ function getTargetProgress({
 }): TargetProgress {
   if (!isFiniteNumber(target)) return { status: "invalid", reason: "target-missing" }
   if (!isFiniteNumber(value)) return { status: "invalid", reason: "value-missing" }
-  if (target === 0) return { status: "invalid", reason: "target-zero" }
-  if (target < 0) return { status: "invalid", reason: "target-negative" }
-  const ratio = value / target
+  const remaining = target - value
+  if (!Number.isFinite(remaining)) return { status: "invalid", reason: "not-finite" }
   const kind = direction === "decrease" ? "limit" : "achievement"
+  const ratio = target > 0 ? value / target : null
+  const okRatio = ratio !== null && Number.isFinite(ratio) ? ratio : null
   return {
     status: "ready",
     kind,
-    ratio,
-    barValue: Math.min(100, Math.max(0, ratio * 100)),
+    ratio: okRatio,
+    barValue: okRatio === null ? null : Math.min(100, Math.max(0, okRatio * 100)),
     met: kind === "limit" ? value <= target : value >= target,
-    remaining: target - value,
+    remaining,
   }
 }
 

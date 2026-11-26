@@ -2,7 +2,7 @@
 
 何が変化したかを、公平な期間どうしで比べて示す。
 
-状態：初期実装（レビュー前） ・ 実装：[`registry/patterns/comparison.ts`](../../../registry/patterns/comparison.ts)（`compareValues`、`describeComparison`、`formatDifference`、`getTargetProgress`）、[`analysis-period.ts`](../../../registry/patterns/analysis-period.ts)（`comparisonRange`、`alignBuckets`）、`ComparisonValue`（[`metric.tsx`](../../../registry/patterns/metric.tsx)） ・ 全体：[Data Analysis](data-analysis.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/comparison.ts`](../../../registry/patterns/comparison.ts)（`compareValues`、`describeComparison`、`formatDifference`、`getTargetProgress`）、[`analysis-period.ts`](../../../registry/patterns/analysis-period.ts)（`comparisonRange`、`alignBuckets`）、`ComparisonValue`（[`metric.tsx`](../../../registry/patterns/metric.tsx)） ・ 全体：[Data Analysis](data-analysis.md)
 
 ## 目的
 
@@ -33,7 +33,7 @@
 | 比較期間の計算 | `comparisonRange({ period, mode, custom })` |
 | 比較値の計算 | `compareValues({ current, baseline, kind, incomparableReason })` |
 | 比較値の文字 | `describeComparison(result, options)`、`ComparisonValue` |
-| 位置をそろえた重ね合わせ | `alignBuckets(current, baseline)` |
+| 区間の対応付けと比較の可否 | `alignBuckets(current, baseline, { by, allowDifferentLength })` |
 | 比較のグラフの例 | プレビューの `MrrTrendChart`、`DiffBarChart`、`ComparisonTable`、Period Comparison のページの重ね合わせと並べた棒 |
 
 ## バリエーション
@@ -57,6 +57,36 @@
 - 期間の中で始まり終わった契約など、内訳に含めないものを説明する。
 
 ## 動作
+
+### 比較の方式（`comparisonRange` の `basis`）
+
+すべての指標に同じ方式を強制しない。製品が指標に合う方式を選ぶ（`comparisonRange({ period, mode, basis, context, businessCalendar })`）。省略すると、途中の期間は `elapsed-days`、確定した期間は `calendar`。
+
+| 方式 | 内容 | 合う指標 | 必要な値 |
+| --- | --- | --- | --- |
+| `calendar` | 暦の期間どうし（10 月の全体と 9 月の全体）。途中の期間に使うと、比較期間の全体と比べる（`fair: false`） | 確定した月次の実績 | |
+| `elapsed-days` | 同じ経過日数。比較先の開始日から同じ日数。比較先の単位が短い場合は単位の終わりで切り詰める（`truncated: true`、`fair: false`、`note`） | 期間の途中の累積（売上、新規の契約） | |
+| `elapsed-time` | 同じ経過時間。期間の始まりから集計済みの時刻までの時間を、比較先の始まりに加える（夏時間をまたぐと壁時計の時刻はずれる） | 当日の途中までの実績 | `context.asOf`、`context.timeZone` |
+| `weekday` | 曜日をそろえる（暦でずらした日数に最も近い 7 の倍数。前年同期は 364 日前） | 曜日で変動する指標（来店、問い合わせ） | |
+| `business-days` | 同じ営業日数。比較先の営業日が足りない場合は切り詰める | 営業日で動く指標（受注） | `businessCalendar.isBusinessDay` |
+| `point-in-time` | 時点の値。期間の最終日と、比較の日（暦でずらした日）の 1 日 | MRR、契約企業数 | |
+
+結果の値：
+
+| 値 | 内容 |
+| --- | --- |
+| `fair` | 公平な比較か。`false` の場合は `reason`（「途中の期間を、比較期間の全体と比べています」「比較先は 28 日間しかありません」「今日のデータは集計の途中のため…」）。増減を評価として示す前に確かめる。`false` の比較は、増減の代わりに理由を示す（`compareValues` の `incomparableReason` に `reason` を渡す） |
+| `truncated` | 比較期間が、求めた長さより短い。切り詰めた事実を `note` で示す |
+| `adjusted` | 存在しない日付（31 日、2/29）を月末に合わせた |
+| `instant` | `elapsed-time` の実際の時刻の半開区間 |
+
+- 月をずらすだけで同じ経過日数になるとは判断しない（3/1〜3/30 の 30 日に対し、2 月は 28 日まで）。
+- 当日のデータは、集計済みの時刻がわからない限り未確定として扱う（`getPeriodElapsed` の `completeDays`、`todayInProgress`）。この部品は現在の時刻を知らないため、当日の全データが確定しているとみなさない。時刻まで正確に比べる場合は、製品が集計済みの時刻（`asOf`）を渡す。
+- `comparisonRange` は、分析の対象の一部が未集計の場合、`elapsed-time` 以外の比較を `fair: false` にする（途中までの値と、比較期間の確定した値を比べることになるため）。`context.asOf` と `context.timeZone` がある場合は、対象の終わり（終了日の翌日の 0 時）が `asOf` より後なら未集計（昨日を含む期間でも同じ）。ない場合は、今日を含む期間を未集計とする（`context.today` がない場合は、期間の `inProgress` で判断する）。
+- 未知の比較の種類は `unknown-mode`、今日より後の日を含む任意の比較期間は `future`、営業日のない分析の対象の `business-days` は `no-business-days`（いずれも `invalid`）。今日の終わりまで集計済みの場合は、製品が `asOf` にその時刻を渡す。検証画面は、模擬のデータを 2026/11/25 の終わりまで集計済みとして、`asOf` に集計のタイムゾーンでの 2026/11/26 0 時を渡している。
+- 営業日のカレンダーと、実際の集計の基盤は製品の責務。
+- 検証画面では、累積の指標（売上、新規の契約、解約率）は `elapsed-days`、時点の指標（MRR、契約企業数）は `point-in-time` で比べている。比較の公平さ（`fair`）も、それぞれの指標の比較で判断する（長さの異なる任意の比較期間では、売上は「比較できません」、MRR は同じ時点の値と比べる）。
+- 再取得の間に前の結果を表示する場合、比較の見出し（「前月比」）と比較期間も、前の結果を集計したときの比較の条件で示す。新しい比較の見出しを前の値に付けない（検証画面は、取得の結果に比較の条件を含めている）。
 
 ### 比較の公平性
 
@@ -104,7 +134,8 @@ Analysis Filters と同じ時間の定義を使う（[analysis-filters.md](analy
 
 - 割合を示す指標どうしの差は、原則としてパーセントポイントを示す（`kind: "ratio"` の既定）。
 - 両方を示すのは、判断に役立つ場合だけ。
-- 計算は丸める前の値で行い、表示のときだけ丸める。丸めると 0 になるが実際は 0 でない差は「+0.1pt未満」と示す。
+- 計算は丸める前の値で行い、表示のときだけ丸める。丸めると 0 になるが実際は 0 でない差は、増加は「+0.1pt未満」、減少は「−0.1〜0pt」と示す（「−0.1pt未満」は −0.1pt より小さい値を意味するため使わない）。
+- `compareValues` の `tolerance`（変化なしとみなす差）は 0 以上の有限の数。それ以外は RangeError。
 - 割合の内部の値は 0〜1 に統一する。API で 0〜100 と混在させない。
 
 ### 比較できない場合
@@ -113,6 +144,8 @@ Analysis Filters と同じ時間の定義を使う（[analysis-filters.md](analy
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/comparison-availability-dark.svg">
   <img alt="比較値の算出可否を示す表。通常、基準値が 0、ともに 0、基準値が負、データなし、取得失敗、集計条件が異なる、の 7 つの状態ごとに、実数差、増減率、表示を示している。下部に、NaN や Infinity を表示せず、割合の差は pt で示す、という注記がある。" src="../../diagrams/comparison-availability-light.svg">
 </picture>
+
+計算の結果も有限かを確かめる。有限の値どうしでも、差（`Number.MAX_VALUE − (−Number.MAX_VALUE)`）が有限にならない場合は比較できない（`incomparable`）。基準値が正でも、増減率が有限にならない場合（1e308 ÷ 1e-10）は `rateUnavailable: "not-finite"` とし、「基準がマイナス」などの誤った理由を示さない。浮動小数点の誤差（0.1 + 0.2 と 0.3）は変化なしとし、意味のある小さい差は 0 にしない。指標の精度に合わせた許容範囲は製品が `tolerance` で渡す。指標の種類（`kind`）と表示形式（`format.style`）が一致しない場合は、誤った単位で示さない（「表示できません」）。
 
 | 状態 | `compareValues` | 表示（`describeComparison`） |
 | --- | --- | --- |
@@ -152,6 +185,15 @@ NaN、Infinity を表示しない（計算の結果に含めない）。
 
 - 実際の日付の順と、期間の中の位置をそろえた比較を使い分ける。
 - 経過日、週、曜日、営業日など、意味のある基準で位置をそろえる（`alignBuckets`）。
+- 区間を対応付けることと、数値として比べてよいことを区別する（`alignBuckets` の行の `comparable` と `reason`）。
+
+| 対応付けの方法（`by`） | 内容 |
+| --- | --- |
+| `position` | 区間の順番。同じ長さの区間が並ぶ場合（日別の同経過期間） |
+| `elapsed` | 期間の始まりからの経過。日は日数、時間別は実際の分、週は週の順番、月以上は単位の順番（月の長さの違いで対応がずれない）。区間の長さは、時刻がある場合は実際の時間（夏時間の日は 23・25 時間）で比べる |
+| `calendar` | 暦の位置。キーは最初の区間からの位置（月は月の数、日は月の数と日、週は週の数、Q と年は数、時間別は日の位置と時とその日の何回目か）。年をまたぐ期間や 13 か月の期間でもキーは重複しない。同じ側でキーが重複する場合は RangeError |
+
+比べない区間：片方の区間がない（区間の数が異なる、夏時間の終了日の 2 回目の 1 時）、区間の長さが異なる（週の途中から始まる期間の最初の週、夏時間の区間）、現在の区間が途中・未来・不明、比較期間の区間が確定していない。暦の月の全体どうし（31 日と 30 日）など、長さが違っても意味のある比較は `allowDifferentLength: true` で許す。比べない区間に増減率を求めない。欠損の値を 0 で埋めない。公平にそろえられない場合は、理由を示すか、実際の日付を横軸にしたグラフにする。
 - 異なる期間の値を重ねる場合は、Tooltip と数値の表で元の日付を確かめられるようにする（「25日目（今月 2026/11/25、前月 2026/10/25）」）。
 - 比べるグラフを並べる場合は、原則として軸の範囲と単位をそろえる。
 

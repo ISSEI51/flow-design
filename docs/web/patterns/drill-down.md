@@ -2,7 +2,7 @@
 
 利用者の疑問に沿って、全体から内訳、明細、個別の詳細へ進み、元の分析に戻る。
 
-状態：初期実装（レビュー前） ・ 実装：[`registry/patterns/drill-down.tsx`](../../../registry/patterns/drill-down.tsx)（`DrillDownLink`、`drillPeriodFor`、`groupOther`、`captureAnalysisPosition`、`useAnalysisPositionRestore`）、`scopeFilters`（[`analysis-query.ts`](../../../registry/patterns/analysis-query.ts)）、Data Browsing の `getRecordNeighbors`（[`list-detail.ts`](../../../registry/patterns/list-detail.ts)） ・ 全体：[Data Analysis](data-analysis.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/drill-down.tsx`](../../../registry/patterns/drill-down.tsx)（`DrillDownLink`、`drillPeriodFor`、`drillRangeFor`、`drillBucketPeriod`、`groupOther`、`captureAnalysisPosition`、`useAnalysisPositionRestore`）、`scopeFilters`（[`analysis-query.ts`](../../../registry/patterns/analysis-query.ts)）、Data Browsing の `getRecordNeighbors`（[`list-detail.ts`](../../../registry/patterns/list-detail.ts)） ・ 全体：[Data Analysis](data-analysis.md)
 
 ## 目的
 
@@ -54,10 +54,14 @@ List & Detail の設計方針（[list-and-detail.md](list-and-detail.md)）を�
 ### 条件の引き継ぎ
 
 - 元の分析の対象に、選んだ対象の条件を加えることを基本とする（`scopeFilters`）。
+- 入力された期間ではなく、実際に集計した期間を引き継ぐ（`drillPeriodFor`）。相対期間は固定の日付にする。未来の終了日を今日までに切り詰めた期間は、切り詰めた期間を使う。比較の系列から進む場合は、その系列の実際の期間を使う。
+- グラフの 1 つのデータ点（区間）から進む場合は、系列の全体ではなく、選んだ区間の実際の開始日・終了日と、時刻がある場合は開始・終了の時刻（半開区間）を引き継ぐ（`drillBucketPeriod`）。
+- 全体条件、個別条件、Cross-filtering のうち、その値の集計に実際に使った条件を引き継ぐ。画面に表示している条件を無条件にすべて引き継がない（検証画面では、Cross-filtering を適用していない指標から進む場合は、選択中のプランを引き継がない）。
 - 期間、絞り込み、比較に必要な条件を保つ。期間は固定の日付で渡す（相対期間を渡すと、開いた日と戻った日で期間が変わる）。関係のある分析のページへ移る場合（事業の状況 → 顧客維持の分析）も、全体の絞り込み（地域など）を引き継ぐ。
 - 詳細に適さないグラフの形式や集計単位などの表示の設定は、変えてよい。
 - 全体条件と異なる条件のグラフから進む場合は、そのグラフに実際に適用している条件を引き継ぐ。
 - 比較期間の側のデータ点から進む場合は、現在の期間と誤認させず、選んだ系列の期間を引き継ぐ（`drillPeriodFor("baseline", …)` は比較期間の固定の日付を返す）。
+- 同じ経過時間（`elapsed-time`）の比較では、比較の系列の日付だけでなく、集計した時刻までの半開区間も引き継ぐ（`drillRangeFor(series, …)` の `instant`。現在の系列は `null`）。
 - 条件が重なる場合は、無条件に上書きしない。全体条件と重ならない場合は、条件を外して表示せず、対象がないことと理由を示す（検証画面の `dterm` と全体の `term` の衝突）。
 - 検証画面では、Drill-down で加えた条件（`dplan`、`dterm`）と、全体条件（`plan`、`term`）を URL で別の名前にしている。
 
@@ -93,7 +97,8 @@ List & Detail の設計方針（[list-and-detail.md](list-and-detail.md)）を�
 | スクロールの位置、操作元へのフォーカス | `captureAnalysisPosition` の値を履歴の項目ごとに記録し、`useAnalysisPositionRestore` で復元 |
 
 - 元のデータを古い状態に戻す必要はない。最新のデータを取得し直し、表示が終わってから位置を復元する（`ready`）。
-- 操作元の要素がない場合は、操作元を含む領域の見出し、それもない場合は `fallbackFocus`（h1 など）にフォーカスする。
+- 操作元の要素がない・見えない・無効・inert の場合は、操作元を含む領域の見出し、それもできない場合は `fallbackFocus`（h1 など）にフォーカスする。実際にフォーカスが移ったこと（`document.activeElement`）を確かめ、移らなかった要素を復元の成功としない。見出しは、自動で付けた id（画面を作り直すと変わる）ではなく、領域の順番と見出しの文字で探す。
+- 横にスクロールする領域（`data-scroll-key` を付けた要素。中に Table がある場合はその横スクロールの領域）の位置も記録し、戻したときに復元する。
 - AppShellMain のスクロールとフォーカスの管理を考慮する。復元する間は `scrollOnNavigate={false}`、`focusOnNavigate={false}` を渡し、「先頭へ戻す」「h1 へフォーカス」を止める。
 - Breadcrumb の 1 つ上の階層へ戻る場合で、履歴に戻り先がある場合は、履歴を戻る（条件と位置を復元する）。
 - 実際のルーター、履歴、永続化との接続は製品の責務。
@@ -110,7 +115,10 @@ List & Detail の設計方針（[list-and-detail.md](list-and-detail.md)）を�
 - 企業の数と契約の数など、異なる単位を混同しない。
 - 割合、平均、一意の件数は、明細の単純な合計で再現できない場合がある。
 - 「その他」から進む場合は、表示の文字ではなく、実際に含まれる分類（`groupOther` の `members`）で絞り込む。
-- `groupOther` は「その他」の値を既定で合計する。割合、平均、一意の件数は合計できないため、`combine` に元のデータから求め直す関数を渡す（`null` を返すと値を示さない）。
+- `groupOther` の `aggregate` は必須。件数や金額など加算できる指標は `"sum"`、割合、平均、一意の件数など加算できない指標は、製品が元のデータから再集計する関数を渡す（Drill-down の資料のページでは、「その他」の地域の解約率を、含まれる地域の契約から再集計している）。再集計の結果が取得できない場合と、合計が有限にならない場合は値を `null` にする（0 にしない）。
+- 値が欠損・NaN・Infinity の分類は、まとめから除いて `skipped` で返す。`includeSkippedInOther: true` の場合は、欠損した分類も「その他」の `members` に含める（値の計算には含めない。「その他」から明細へ進むときに、欠損した分類の明細も対象にする場合）。`aggregate` に `"sum"` か関数以外を渡すと RangeError。分類の key の重複と、「その他」の key（`otherKey`、既定 `"__other"`）と同じ分類は RangeError（製品のデータの誤り）。`limit` が 0 以下ならすべてを「その他」に、件数以上なら「その他」を作らない。1 件だけを「その他」にしない。
+- 件数や集計の値からも、権限のない情報を推測できる場合がある。明細だけでなく、集計の結果や閲覧できない明細の件数を公開するかも製品が判断する（検証画面の「一覧の、閲覧できない明細の件数」：件数を示す／一覧では件数を示さない）。権限のない明細の件数を常に公開する仕様にしない。
+- 一覧で件数を隠しても、集計の指標（解約した企業数）を表示する場合は、指標と一覧の件数の差から件数を推測できる。件数を推測させてはいけない場合は、集計の指標の公開の範囲も製品が決める（検証画面は一覧の件数だけを隠し、そのことを操作の説明に書いている）。
 - 権限や集計の時点の違いで、集計の値と閲覧できる明細の件数が異なる場合は、理由を示す（「表示できるのは 100社。4社は閲覧の権限がない取引先です」。検証画面の過去12か月、担当者の権限）。
 
 ### データの状態と権限

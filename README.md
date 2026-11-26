@@ -193,7 +193,7 @@ Natural Motion
 | --- | --- |
 | 思想、原則、デザイントークン v0.1 | 完了 |
 | Components v0.1（39 種） | 完了 |
-| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：v0.1 確定候補、Data Analysis：初期実装） |
+| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：v0.1 確定候補、Data Analysis：v0.1 確定候補） |
 | Registry & Gallery、Agent Skills | 予定 |
 
 今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
@@ -207,7 +207,7 @@ Components が個々の UI の部品であるのに対し、Patterns はユー�
 | App Structure | App Shell、Navigation、Page Header、Page Layout、Section Layout（[app-structure.md](docs/web/patterns/app-structure.md)） | v0.1 確定 |
 | Data Browsing | Search & Filter、List & Detail、Bulk Actions、View Switching、Data States（[data-browsing.md](docs/web/patterns/data-browsing.md)） | v0.1 確定候補（最終レビュー前） |
 | Forms & Workflows | 登録・編集のフォーム、複数の手順の操作、未保存の変更の確認など | 未着手 |
-| Data Analysis | Metric Overview、Dashboard Layout、Analysis Filters、Period Comparison、Drill-down（[data-analysis.md](docs/web/patterns/data-analysis.md)） | 初期実装（レビュー前） |
+| Data Analysis | Metric Overview、Dashboard Layout、Analysis Filters、Period Comparison、Drill-down（[data-analysis.md](docs/web/patterns/data-analysis.md)） | v0.1 確定候補（最終レビュー前） |
 | System & Account | 認証、アカウント、製品の設定など | 未着手 |
 
 Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md)、一覧の検索と閲覧の Patterns は [Data Browsing](docs/web/patterns/data-browsing.md)、分析とダッシュボードの Patterns は [Data Analysis](docs/web/patterns/data-analysis.md) にまとめている。

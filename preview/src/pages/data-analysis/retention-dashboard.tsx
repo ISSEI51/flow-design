@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetBody, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDate, fromDateString, toDateString } from "@/lib/date"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { useAppShell } from "@/patterns/app-shell"
 import { AnalysisPeriodFilter, ComparisonSelect, GranularitySelect } from "@/patterns/analysis-controls"
 import { describeRange, type ComparisonRange, type DayRange } from "@/patterns/analysis-period"
@@ -34,10 +35,11 @@ import {
   churnTrend,
   churnedAccountList,
   retentionSummary,
+  withScope,
   type AccountDetail,
   type ChurnedListRow,
 } from "../../data/data-analysis/analysis-model"
-import { AnalysisRequestError, analysisServer, request } from "../../data/data-analysis/analysis-server"
+import { AnalysisRequestError, request } from "../../data/data-analysis/analysis-server"
 import {
   ANALYSIS_TODAY,
   DATA_START,
@@ -53,8 +55,9 @@ import {
   type Term,
 } from "../../data/data-analysis/subscriptions"
 import { BreakdownBars, ChartDetails, countFormat, fmt, ratioFormat, ready, yenFormat } from "./analysis-parts"
+import { describeDataKey, scopeOf, useAnalysisData, useSession } from "./analysis-session"
 import { APP, appHref, paramsFromQuery, queryFromParams, replaceHash, type Route } from "./analysis-route"
-import { RegionSelect, analysisContext, baselineShort, comparisonShort, loadable } from "./business-dashboard"
+import { RegionSelect, analysisContextFor, unfairReason, baselineShort, comparisonShort, loadable } from "./business-dashboard"
 
 // Analytical Dashboard（分析・原因の究明）の例：顧客維持の分析。
 // 考える順：解約の状況（指標）→ 推移 → プラン別・契約期間別の内訳（Cross-filtering）→ 解約した企業 → 企業の詳細 → 業務画面。
@@ -65,7 +68,8 @@ import { RegionSelect, analysisContext, baselineShort, comparisonShort, loadable
 //   Drill-down のリンクを押したときに記録し、戻る（ブラウザの戻る、Breadcrumb の 1 つ上）で復元する。データは取得し直す。
 
 type Snapshot = {
-  selection: CrossFilterSelection | null
+  /** Cross-filtering の選択と、そのときの resetKey（全体条件とスコープ）。同じ resetKey の場合だけ復元する */
+  cross: { selection: CrossFilterSelection | null; resetKey?: string } | null
   sort: "end" | "fee"
   page: number
   reason: string | null
@@ -93,12 +97,12 @@ function useHistoryKey() {
 }
 
 /** Drill-down のリンクを押したときに、記録を保存し、移動先の履歴の項目に戻り先を記録する */
-function useDrillCapture(key: string, snapshot: () => Omit<Snapshot, "position">) {
+function useDrillCapture(key: string, snapshot: () => Omit<Snapshot, "position">, rootRef: React.RefObject<HTMLElement | null>) {
   const { mainRef } = useAppShell()
   return (e: MouseEvent) => {
     const link = (e.target as Element).closest<HTMLAnchorElement>("a[data-drill-origin]")
     if (!link || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-    snapshots.set(key, { ...snapshot(), position: captureAnalysisPosition({ scrollElement: mainRef.current, origin: link }) })
+    snapshots.set(key, { ...snapshot(), position: captureAnalysisPosition({ scrollElement: mainRef.current, origin: link, root: rootRef.current }) })
     e.preventDefault()
     window.location.hash = link.getAttribute("href")!.replace(/^#/, "")
     window.history.replaceState({ fdParentKey: key }, "")
@@ -127,57 +131,65 @@ const pct = (v: number) => `${(v * 100).toFixed(1)}%`
 export function RetentionDashboard({ route }: { route: Route }) {
   const historyKey = useHistoryKey()
   const restore = snapshots.get(historyKey) ?? null
+  const { session } = useSession()
+  const scope = scopeOf(session)
+  const context = useMemo(() => analysisContextFor(session.timeZone), [session.timeZone])
   const initialQuery = useMemo(() => queryFromParams(route.params), []) // eslint-disable-line react-hooks/exhaustive-deps
   const a = useAnalysisQuery<AnalysisFilters>({
     defaultQuery: { period: { kind: "relative", id: "last-12-months" }, comparison: "previous-year", filters: defaultAnalysisFilters },
     initialQuery,
-    context: analysisContext,
+    context,
+    // 解約率は日単位の契約の状態から集計するため、時間の粒度を提供しない（製品が指標ごとに選ぶ）
+    allowedGranularities: ["day", "week", "month", "quarter", "year"],
     onQueryChange: (q) => replaceHash(`${APP}?${paramsFromQuery("retention", q).toString()}`),
   })
   const period = a.period
   const range = period.status === "ready" ? period.range : null
   const base = baseRange(a.comparison)
-  const filters = a.query.filters
-  const cross = useCrossFilter({ resetKey: JSON.stringify(filters), initialSelection: restore?.selection ?? null })
+  // ワークスペース（データのスコープ）の条件は、サーバーが加える（画面の絞り込みで外せない）
+  const filters = withScope(session.workspace, a.query.filters)
+  // 全体条件かスコープが変わったら、Cross-filtering の選択を解除する。戻ったときも、同じ条件とスコープの場合だけ復元する。
+  const cross = useCrossFilter({ resetKey: JSON.stringify([scope, a.key]), initialSelection: restore?.cross ?? null })
   const [sort, setSort] = useState<"end" | "fee">(restore?.sort ?? "end")
   const [page, setPage] = useState(restore?.page ?? 0)
   const [reason, setReason] = useState<string | null>(restore?.reason ?? null)
-  const role = analysisServer.role
+  const key = a.key
 
-  const summary = useBrowseData({
-    query: a.key,
-    fetcher: (_, { signal }) => request("retention", a.key, () => retentionSummary({ range: range!, base, filters }), { signal }),
-  })
-  const trendKey = `${a.key}:${a.query.granularity}`
-  const trend = useBrowseData({
-    query: trendKey,
-    fetcher: (_, { signal }) => request("trend", trendKey, () => churnTrend({ range: range!, granularity: a.query.granularity, filters }), { signal }),
-  })
-  const byPlan = useBrowseData({
-    query: a.key,
-    fetcher: (_, { signal }) => request("breakdown", a.key, () => churnByPlan({ range: range!, base, filters }), { signal }),
-  })
-  // Cross-filtering：プラン別の内訳で選んだプランを、契約期間別の内訳と企業の一覧に適用する（選択元のプラン別の内訳には適用しない）。
+  // 取得の結果に、集計に使った比較の条件を含める（再取得の間は、見出しと公平さを表示中の結果の条件で示す）
+  const summary = useAnalysisData("retention", key, () => ({ ...retentionSummary({ range: range!, base, filters }), cmp: a.comparison }), scope)
+  const trendKey = key === null ? null : `${key}:${a.granularity}`
+  const trend = useAnalysisData("trend", trendKey, () => churnTrend({ range: range!, granularity: a.granularity, filters, context }), scope)
+  const byPlan = useAnalysisData("breakdown", key, () => churnByPlan({ range: range!, base, filters }), scope)
+  // Cross-filtering：プラン別の内訳で選んだプランを、契約期間別の内訳と企業の一覧に適用する（選択元のプラン別の内訳と、指標には適用しない）。
+  // 適用する領域ごとに forRegion で選択を取り出す（targets に含めない領域には適用しない）
+  const scopeFor = (sel: CrossFilterSelection | null) => (sel ? scopeFilters(filters, { plans: [sel.value as Plan] }) : ({ status: "ready", filters, narrowed: [] } as const))
+  const noTargetText = "選んだプランは、ページ全体の条件と重ならないため、対象がありません。"
   const planSel = cross.forRegion("by-term")
-  const scoped = planSel ? scopeFilters(filters, { plans: [planSel.value as Plan] }) : ({ status: "ready", filters, narrowed: [] } as const)
-  const scopedKey = JSON.stringify([a.key, scoped.filters])
-  const byTerm = useBrowseData({
-    query: scopedKey,
-    fetcher: (_, { signal }) => request("breakdown", scopedKey, () => churnByTerm({ range: range!, base, filters: scoped.filters }), { signal }),
-  })
-  const listKey = JSON.stringify([scopedKey, reason, role])
-  const list = useBrowseData({
-    query: listKey,
-    fetcher: (_, { signal }) => request("accounts", listKey, () => churnedAccountList({ range: range!, filters: scoped.filters, role, reason }), { signal }),
-  })
+  const scoped = scopeFor(planSel)
+  // 全体条件と重ならない場合（conflict）は、対象がない。条件を外して全件を取得しない。
+  const scopedFilters = scoped.status === "ready" ? scoped.filters : null
+  const scopedKey = key !== null && scopedFilters ? JSON.stringify([key, scopedFilters]) : null
+  const byTerm = useAnalysisData("breakdown", scopedKey, () => churnByTerm({ range: range!, base, filters: scopedFilters! }), scope)
+  const listSel = cross.forRegion("accounts")
+  const listScoped = scopeFor(listSel)
+  const listFilters = listScoped.status === "ready" ? listScoped.filters : null
+  const listKey = key !== null && listFilters ? JSON.stringify([key, listFilters, reason, session.role, session.hiddenCountPolicy]) : null
+  const list = useAnalysisData(
+    "accounts",
+    listKey,
+    () => churnedAccountList({ range: range!, filters: listFilters!, role: session.role, reason, hiddenCountPolicy: session.hiddenCountPolicy }),
+    scope
+  )
+  const stale = (d: { status: string; dataKey: string | null }) => (d.status === "refreshing" ? describeDataKey(d.dataKey, key) : null)
+  const noTarget = scoped.status !== "ready" ? noTargetText : null
+  const listNoTarget = listScoped.status !== "ready" ? noTargetText : null
 
-  // 条件が変わったら一覧の 1 ページ目に戻す（復元した最初の描画は除く）。
-  const firstList = useRef(true)
+  // 条件が変わったら一覧の 1 ページ目に戻す。前回の条件と比べて判断する（復元した最初の描画と、StrictMode の effect の再実行では戻さない）。
+  const prevListCondition = useRef(JSON.stringify([listKey, sort]))
   useEffect(() => {
-    if (firstList.current) {
-      firstList.current = false
-      return
-    }
+    const next = JSON.stringify([listKey, sort])
+    if (prevListCondition.current === next) return
+    prevListCondition.current = next
     setPage(0)
   }, [listKey, sort])
 
@@ -192,7 +204,7 @@ export function RetentionDashboard({ route }: { route: Route }) {
     fallbackFocus: () => rootRef.current?.querySelector("h1") ?? null,
     onRestored: () => snapshots.delete(historyKey),
   })
-  const onClickCapture = useDrillCapture(historyKey, () => ({ selection: cross.selection, sort, page, reason }))
+  const onClickCapture = useDrillCapture(historyKey, () => ({ cross: cross.snapshot, sort, page, reason }), rootRef)
 
   // その他の条件（契約期間）：まとめて適用する。開くたびに適用中の条件から始め、閉じると破棄する。
   const draft = useFilterDraft({ value: { terms: filters.terms }, defaultValue: { terms: [] as Term[] }, onApply: (v) => a.setFilters({ terms: v.terms }) })
@@ -205,15 +217,16 @@ export function RetentionDashboard({ route }: { route: Route }) {
 
   const s = summary.data
   const st = summary.status
-  const cmpReady = a.comparison.status === "ready"
-  const cmpLabel = a.comparison.status === "ready" ? comparisonShort[a.comparison.mode] : ""
-  const baseLabel = baselineShort[a.query.comparison]
+  const shownCmp = s?.cmp ?? a.comparison
+  const cmpReady = shownCmp.status === "ready" && a.comparison.status === "ready"
+  const cmpLabel = shownCmp.status === "ready" ? comparisonShort[shownCmp.mode] : ""
+  const baseLabel = shownCmp.status === "ready" ? baselineShort[shownCmp.mode] : ""
   const cv = (pair: { current: number | null; baseline: number | null } | undefined, kind: "amount" | "ratio" = "amount") =>
     st === "error"
       ? compareValues({ current: { status: "unavailable" }, baseline: undefined })
       : !pair || st === "loading" || st === "idle"
         ? compareValues({ current: { status: "loading" }, baseline: undefined })
-        : compareValues({ current: ready(pair.current), baseline: cmpReady ? ready(pair.baseline) : undefined, kind })
+        : compareValues({ current: ready(pair.current), baseline: cmpReady ? ready(pair.baseline) : undefined, kind, incomparableReason: unfairReason(shownCmp) })
 
   // 内訳の 2 つのグラフは同じ軸（解約率の最大値）で描く
   const axisMax = Math.max(...(byPlan.data ?? []).map((r) => r.rate ?? 0), ...(byTerm.data ?? []).map((r) => r.rate ?? 0), 0)
@@ -254,7 +267,7 @@ export function RetentionDashboard({ route }: { route: Route }) {
               onValueChange={a.setPeriod}
               presets={["last-12-months", "this-fiscal-year", "last-fiscal-year", "last-90-days", "last-month"]}
               resolved={period}
-              context={analysisContext}
+              context={context}
               min={DATA_START}
             />
             <ComparisonSelect
@@ -265,6 +278,7 @@ export function RetentionDashboard({ route }: { route: Route }) {
               period={period}
               customRange={a.query.comparisonCustom}
               onCustomRangeChange={(r) => a.setComparison("custom", r)}
+              context={context}
               min={DATA_START}
             />
             <RegionSelect value={filters.regions} onChange={(regions) => a.setFilters({ regions })} />
@@ -314,7 +328,7 @@ export function RetentionDashboard({ route }: { route: Route }) {
           />
         )}
         <SectionStack spacing="section">
-          <AnalysisRegion title="解約の状況" status={st} error={st === "error" ? { title: "解約の状況を取得できませんでした", description: "ほかの領域は表示しています。", onRetry: summary.reload } : null} data-testid="retention-summary">
+          <AnalysisRegion title="解約の状況" status={st} staleLabel={stale(summary)} error={st === "error" ? { title: "解約の状況を取得できませんでした", description: "ほかの領域は表示しています。", onRetry: summary.reload } : null} data-testid="retention-summary">
             <MetricGroup>
               <Metric
                 label="解約率"
@@ -349,8 +363,9 @@ export function RetentionDashboard({ route }: { route: Route }) {
             title="解約率の推移"
             divider
             status={trend.status}
+            staleLabel={stale(trend)}
             error={trend.status === "error" ? { title: "解約率の推移を取得できませんでした", onRetry: trend.reload } : null}
-            actions={<GranularitySelect value={a.query.granularity} onValueChange={a.setGranularity} options={a.granularities.filter((g) => g !== "hour")} shown={["day", "week", "month", "quarter", "year"]} />}
+            actions={<GranularitySelect value={a.granularity} onValueChange={a.setGranularity} options={a.granularities} shown={["day", "week", "month", "quarter", "year"]} />}
             conditions={
               a.notice ? (
                 <p role="status" className="text-caption text-foreground" data-testid="granularity-notice">
@@ -383,6 +398,7 @@ export function RetentionDashboard({ route }: { route: Route }) {
                 title="プラン別の解約率"
                 level={3}
                 status={byPlan.status}
+                staleLabel={stale(byPlan)}
                 error={byPlan.status === "error" ? { title: "プラン別の内訳を取得できませんでした", onRetry: byPlan.reload } : null}
                 data-testid="retention-by-plan"
               >
@@ -392,8 +408,9 @@ export function RetentionDashboard({ route }: { route: Route }) {
                     items={byPlan.data.map((r) => ({ key: r.key, label: planLabels[r.key], value: r.rate, detail: `${fmt(r.churned, countFormat("社"))}が解約（期首 ${fmt(r.base, countFormat("社"))}）` }))}
                     format={ratioFormat}
                     max={axisMax}
-                    selected={cross.selection?.value ?? null}
-                    onSelect={(item) => cross.toggle({ source: "by-plan", field: "plan", value: item.key, label: item.label })}
+                    selected={cross.selection?.source === "by-plan" && cross.selection.field === "plan" ? cross.selection.value : null}
+                    // 適用する領域を選ぶ（契約期間別の内訳と企業の一覧）。主要な指標とプラン別の内訳（選択元）には適用しない
+                    onSelect={(item) => cross.toggle({ source: "by-plan", field: "plan", value: item.key, label: item.label, targets: ["by-term", "accounts"] })}
                     selectLabel={(item) => `${item.label}で絞り込む（解約率 ${fmt(item.value, ratioFormat)}）`}
                     drillHref={(item) => drillHref({ dplan: item.key })}
                     drillLabel={(item) => `${item.label}の内訳を見る`}
@@ -403,12 +420,15 @@ export function RetentionDashboard({ route }: { route: Route }) {
               <AnalysisRegion
                 title="契約期間別の解約率"
                 level={3}
-                status={byTerm.status}
+                status={noTarget ? "ready" : byTerm.status}
+                staleLabel={stale(byTerm)}
                 conditions={planSel ? <AnalysisScopeNote>プラン：{planSel.label}（プラン別の内訳で選択）</AnalysisScopeNote> : null}
                 error={byTerm.status === "error" ? { title: "契約期間別の内訳を取得できませんでした", onRetry: byTerm.reload } : null}
                 data-testid="retention-by-term"
               >
-                {byTerm.data && (
+                {noTarget ? (
+                  <p className="text-ui text-muted-foreground">{noTarget}</p>
+                ) : byTerm.data && (
                   <BreakdownBars
                     testId="by-term"
                     items={byTerm.data.map((r) => ({ key: r.key, label: termLabels[r.key], value: r.rate, detail: `${fmt(r.churned, countFormat("社"))}が解約（期首 ${fmt(r.base, countFormat("社"))}）` }))}
@@ -425,11 +445,12 @@ export function RetentionDashboard({ route }: { route: Route }) {
           <AnalysisRegion
             title="解約した企業"
             divider
-            status={list.status}
+            status={listNoTarget ? "ready" : list.status}
+            staleLabel={stale(list)}
             error={list.status === "error" ? { title: "解約した企業の一覧を取得できませんでした", onRetry: list.reload } : null}
             conditions={
               <>
-                {planSel && <AnalysisScopeNote>プラン：{planSel.label}（プラン別の内訳で選択）</AnalysisScopeNote>}
+                {listSel && <AnalysisScopeNote>プラン：{listSel.label}（プラン別の内訳で選択）</AnalysisScopeNote>}
                 {reason && <AnalysisScopeNote>解約の理由：{reason}（この一覧だけの条件）</AnalysisScopeNote>}
               </>
             }
@@ -441,14 +462,20 @@ export function RetentionDashboard({ route }: { route: Route }) {
             }
             data-testid="retention-accounts"
           >
-            {list.data && (list.data.outOfRange ? <OutOfRangeNote /> : <AccountList rows={rows} total={list.data.total ?? 0} hidden={list.data.hidden} page={page} onPage={setPage} />)}
+            {listNoTarget ? (
+              <p className="text-ui text-muted-foreground" data-testid="retention-no-target">
+                {listNoTarget}
+              </p>
+            ) : (
+              list.data && (list.data.outOfRange ? <OutOfRangeNote /> : <AccountList rows={rows} total={list.data.total} hidden={list.data.hidden} concealed={list.data.concealed} page={page} onPage={setPage} />)
+            )}
           </AnalysisRegion>
 
           <AnalysisRegion title="次にすること" divider data-testid="retention-actions">
             {range && (
               <DrillDownLink
                 origin="action-work"
-                href={appHref("work", { ...periodParams(range), ...(scoped.filters.plans.length ? { plan: scoped.filters.plans.join(",") } : {}), ...(filters.regions.length ? { region: filters.regions.join(",") } : {}), ...(filters.terms.length ? { term: filters.terms.join(",") } : {}), ...(reason ? { reason } : {}) })}
+                href={appHref("work", { ...periodParams(range), ...(listFilters?.plans.length ? { plan: listFilters.plans.join(",") } : {}), ...(filters.regions.length ? { region: filters.regions.join(",") } : {}), ...(filters.terms.length ? { term: filters.terms.join(",") } : {}), ...(reason ? { reason } : {}) })}
               >
                 この条件の解約した企業を、顧客の業務画面で開く
               </DrillDownLink>
@@ -495,14 +522,14 @@ function ListSelect({ label, value, items, onChange, testId }: { label: string; 
 type TrendPoint = ReturnType<typeof churnTrend>[number]
 
 function ChurnTrend({ rows, drill }: { rows: TrendPoint[]; drill: (row: TrendPoint, series: "current" | "baseline") => string }) {
-  // 途中の区間（今日を含む区間）は、確定した区間と同じ線で描かない（日数が少なく、値が低く見える）。
+  // 途中の区間（今日を含み、区間の単位が続いている区間）は、確定した区間と同じ線で描かない（日数が少なく、値が低く見える）。
   // 直前の確定した区間と途中の区間の 2 点を、点線の別の系列にする。
-  const progressIndex = rows.findIndex((r) => r.inProgress)
+  const progressIndex = rows.findIndex((r) => r.open)
   const data = rows.map((r, i) => {
     const pct = r.rate === null ? null : r.rate * 100
     return {
       ...r,
-      ratePct: r.inProgress ? null : pct,
+      ratePct: r.open ? null : pct,
       partialPct: progressIndex >= 0 && (i === progressIndex || i === progressIndex - 1) ? pct : null,
       previousYearPct: r.previousYear === null ? null : r.previousYear * 100,
     }
@@ -546,7 +573,7 @@ function ChurnTrend({ rows, drill }: { rows: TrendPoint[]; drill: (row: TrendPoi
                 <TableRow key={r.key}>
                   <TableCell>
                     {r.fullLabel}
-                    {r.inProgress ? <span className="text-caption text-muted-foreground">（途中の区間）</span> : r.partial && <span className="text-caption text-muted-foreground">（期間の一部）</span>}
+                    {r.open ? <span className="text-caption text-muted-foreground">（途中の区間）</span> : r.partial && <span className="text-caption text-muted-foreground">（期間の一部）</span>}
                   </TableCell>
                   <TableCell align="right" className="tabular-nums">
                     {r.rate === null ? "—" : pct(r.rate)}
@@ -577,7 +604,45 @@ function ChurnTrend({ rows, drill }: { rows: TrendPoint[]; drill: (row: TrendPoi
 }
 
 // ---------------------------------------------------------------- 企業の一覧と、詳細の Sheet
-function AccountList({ rows, total, hidden, page, onPage }: { rows: ChurnedListRow[]; total: number; hidden: number; page: number; onPage: (p: number) => void }) {
+function CountLine({ total, shown, hidden, concealed, testId }: { total: number | null; shown: number; hidden: number | null; concealed: boolean; testId: string }) {
+  // 閲覧できない明細の件数を公開しない設定（concealed）では、件数を示さず、表示できる明細だけであることを示す。
+  if (concealed) {
+    return (
+      <p className="text-ui tabular-nums" data-testid={testId}>
+        表示できる {shown}社
+        <span className="text-muted-foreground" data-testid="retention-concealed">
+          （閲覧の権限がある取引先だけを表示しています。集計の件数と一致しない場合があります）
+        </span>
+      </p>
+    )
+  }
+  return (
+    <p className="text-ui tabular-nums" data-testid={testId}>
+      {total}社
+      {hidden !== null && hidden > 0 && (
+        <span className="text-muted-foreground" data-testid="retention-hidden">
+          （表示できるのは {shown}社。{hidden}社は閲覧の権限がない取引先です）
+        </span>
+      )}
+    </p>
+  )
+}
+
+function AccountList({
+  rows,
+  total,
+  hidden,
+  concealed,
+  page,
+  onPage,
+}: {
+  rows: ChurnedListRow[]
+  total: number | null
+  hidden: number | null
+  concealed: boolean
+  page: number
+  onPage: (p: number) => void
+}) {
   const [activeId, setActiveId] = useState<string | null>(null)
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const current = Math.min(page, pages - 1)
@@ -590,18 +655,11 @@ function AccountList({ rows, total, hidden, page, onPage }: { rows: ChurnedListR
       if (i >= 0 && Math.floor(i / PAGE_SIZE) !== current) onPage(Math.floor(i / PAGE_SIZE))
     }
   }
-  if (total === 0) return <p className="text-ui text-muted-foreground">この条件で解約した企業はありません。</p>
+  if (total === 0 || (concealed && rows.length === 0)) return <p className="text-ui text-muted-foreground">この条件で表示できる解約した企業はありません。</p>
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <p className="text-ui tabular-nums" data-testid="retention-list-count">
-        {total}社
-        {hidden > 0 && (
-          <span className="text-muted-foreground" data-testid="retention-hidden">
-            （表示できるのは {rows.length}社。{hidden}社は閲覧の権限がない取引先です）
-          </span>
-        )}
-      </p>
-      <div className="max-w-full overflow-x-auto" data-testid="retention-table">
+      <CountLine total={total} shown={rows.length} hidden={hidden} concealed={concealed} testId="retention-list-count" />
+      <TableScrollArea className="max-w-full" data-testid="retention-table" data-scroll-key="retention-table">
         <Table>
           <TableCaption className="sr-only">解約した企業</TableCaption>
           <TableHeader>
@@ -641,7 +699,7 @@ function AccountList({ rows, total, hidden, page, onPage }: { rows: ChurnedListR
             ))}
           </TableBody>
         </Table>
-      </div>
+      </TableScrollArea>
       {pages > 1 && (
         <nav aria-label="一覧のページ" className="flex flex-wrap items-center gap-3 text-ui">
           <Button variant="outline" size="sm" disabled={current === 0} onClick={() => onPage(current - 1)}>
@@ -661,12 +719,15 @@ function AccountList({ rows, total, hidden, page, onPage }: { rows: ChurnedListR
 }
 
 function useAccount(id: string | null) {
+  const { session } = useSession()
+  const scope = scopeOf(session)
   return useBrowseData({
     query: id ?? "",
     enabled: id !== null,
+    scopeKey: scope,
     // 別の企業に切り替えたら、前の企業の詳細を残さない（現在の企業の情報として表示しない）
     keepPreviousData: false,
-    fetcher: (key, { signal }) => request("account", key, () => accountDetail(key, analysisServer.role), { signal }),
+    fetcher: (key, { signal }) => request("account", key, () => accountDetail(key, session.role, session.workspace), { signal, scope }),
   })
 }
 
@@ -762,14 +823,14 @@ type DrillContext = {
   scoped: ReturnType<typeof scopeFilters<AnalysisFilters>>
 }
 
-function drillContext(route: Route): DrillContext {
+function drillContext(route: Route, workspace = "hq"): DrillContext {
   const q = queryFromParams(route.params)
   const plan = route.params.get("dplan")
   const term = route.params.get("dterm")
   const period = q.period
   const from = period?.kind === "absolute" ? fromDateString(period.from) : null
   const to = period?.kind === "absolute" ? fromDateString(period.to) : null
-  const global = { ...defaultAnalysisFilters, ...q.filters }
+  const global = withScope(workspace, { ...defaultAnalysisFilters, ...q.filters })
   const p = plan && (plans as string[]).includes(plan) ? (plan as Plan) : null
   const t = term && (terms as string[]).includes(term) ? (term as Term) : null
   return {
@@ -836,21 +897,15 @@ export function drillCrumbs(route: Route, last?: string) {
 export function RetentionAccountsPage({ route }: { route: Route }) {
   const historyKey = useHistoryKey()
   const restore = snapshots.get(historyKey) ?? null
-  const c = drillContext(route)
-  const role = analysisServer.role
-  const filters = c.scoped.filters
-  const conflict = c.scoped.status === "conflict"
-  const key = JSON.stringify([c.range?.from.getTime(), c.range?.to.getTime(), filters, role])
-  const list = useBrowseData({
-    query: key,
-    enabled: c.range !== null && !conflict,
-    fetcher: (_, { signal }) => request("accounts", key, () => churnedAccountList({ range: c.range!, filters, role }), { signal }),
-  })
-  const byTerm = useBrowseData({
-    query: key,
-    enabled: c.range !== null && !conflict && c.plan !== null && c.term === null,
-    fetcher: (_, { signal }) => request("breakdown", key, () => churnByTerm({ range: c.range!, base: null, filters }), { signal }),
-  })
+  const { session } = useSession()
+  const scope = scopeOf(session)
+  const c = drillContext(route, session.workspace)
+  // 全体条件と Drill-down の条件が重ならない（conflict）、未知の条件（invalid）の場合は取得しない（全件を取得しない）
+  const filters = c.scoped.status === "ready" ? c.scoped.filters : null
+  const conflict = c.scoped.status !== "ready"
+  const key = c.range && filters ? JSON.stringify([toKey(c.range.from), toKey(c.range.to), filters, session.role, session.hiddenCountPolicy]) : null
+  const list = useAnalysisData("accounts", key, () => churnedAccountList({ range: c.range!, filters: filters!, role: session.role, hiddenCountPolicy: session.hiddenCountPolicy }), scope)
+  const byTerm = useAnalysisData("breakdown", key !== null && c.plan !== null && c.term === null ? key : null, () => churnByTerm({ range: c.range!, base: null, filters: filters! }), scope)
   const [page, setPage] = useState(restore?.page ?? 0)
   const rootRef = useRef<HTMLDivElement>(null)
   const { mainRef } = useAppShell()
@@ -862,7 +917,7 @@ export function RetentionAccountsPage({ route }: { route: Route }) {
     fallbackFocus: () => rootRef.current?.querySelector("h1") ?? null,
     onRestored: () => snapshots.delete(historyKey),
   })
-  const onClickCapture = useDrillCapture(historyKey, () => ({ selection: null, sort: "end", page, reason: null }))
+  const onClickCapture = useDrillCapture(historyKey, () => ({ cross: null, sort: "end", page, reason: null }), rootRef)
   const title = [c.plan && planLabels[c.plan], c.term && termLabels[c.term]].filter(Boolean).join("・")
   const nextParams = (extra: Record<string, string>) => Object.fromEntries([...new URLSearchParams(route.params).entries(), ...Object.entries(extra)].filter(([k]) => k !== "page"))
 
@@ -908,7 +963,7 @@ export function RetentionAccountsPage({ route }: { route: Route }) {
               </AnalysisRegion>
             )}
             <AnalysisRegion title="解約した企業" divider={Boolean(c.plan && !c.term)} status={list.status} error={list.status === "error" ? { title: "企業の一覧を取得できませんでした", onRetry: list.reload } : null} data-testid="drill-accounts">
-              {list.data && (list.data.outOfRange ? <OutOfRangeNote /> : <DrillAccountTable rows={list.data.rows} total={list.data.total ?? 0} hidden={list.data.hidden} page={page} onPage={setPage} route={route} />)}
+              {list.data && (list.data.outOfRange ? <OutOfRangeNote /> : <DrillAccountTable rows={list.data.rows} total={list.data.total} hidden={list.data.hidden} concealed={list.data.concealed} page={page} onPage={setPage} route={route} />)}
             </AnalysisRegion>
           </SectionStack>
         )}
@@ -917,18 +972,32 @@ export function RetentionAccountsPage({ route }: { route: Route }) {
   )
 }
 
-function DrillAccountTable({ rows, total, hidden, page, onPage, route }: { rows: ChurnedListRow[]; total: number; hidden: number; page: number; onPage: (p: number) => void; route: Route }) {
+function DrillAccountTable({
+  rows,
+  total,
+  hidden,
+  concealed,
+  page,
+  onPage,
+  route,
+}: {
+  rows: ChurnedListRow[]
+  total: number | null
+  hidden: number | null
+  concealed: boolean
+  page: number
+  onPage: (p: number) => void
+  route: Route
+}) {
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const current = Math.min(page, pages - 1)
   const shown = rows.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE)
-  if (total === 0) return <p className="text-ui text-muted-foreground">この条件で解約した企業はありません。</p>
+  if (total === 0 || (concealed && rows.length === 0)) return <p className="text-ui text-muted-foreground">この条件で表示できる解約した企業はありません。</p>
   const ctx = Object.fromEntries([...route.params.entries()].filter(([k]) => k !== "page"))
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <p className="text-ui tabular-nums" data-testid="drill-count">
-        {total}社{hidden > 0 && <span className="text-muted-foreground">（表示できるのは {rows.length}社。{hidden}社は閲覧の権限がない取引先です）</span>}
-      </p>
-      <div className="max-w-full overflow-x-auto">
+      <CountLine total={total} shown={rows.length} hidden={hidden} concealed={concealed} testId="drill-count" />
+      <TableScrollArea className="max-w-full" data-scroll-key="drill-table">
         <Table>
           <TableCaption className="sr-only">解約した企業</TableCaption>
           <TableHeader>
@@ -958,7 +1027,7 @@ function DrillAccountTable({ rows, total, hidden, page, onPage, route }: { rows:
             ))}
           </TableBody>
         </Table>
-      </div>
+      </TableScrollArea>
       {pages > 1 && (
         <nav aria-label="一覧のページ" className="flex flex-wrap items-center gap-3 text-ui">
           <Button variant="outline" size="sm" disabled={current === 0} onClick={() => onPage(current - 1)}>

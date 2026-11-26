@@ -2,7 +2,7 @@
 
 利用者が、現在の状況を知り、変化とその理由を確かめ、具体的な問題を見つけて次の行動に移るまでを扱う Patterns のグループ。Metric Overview、Dashboard Layout、Analysis Filters、Period Comparison、Drill-down の 5 種類からなる。
 
-状態：初期実装（レビュー前。v0.1 確定ではない）
+状態：v0.1 確定候補（最終調整の後、最終レビュー前。v0.1 承認済みではない）
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/data-analysis-dark.svg">
@@ -39,9 +39,9 @@ Chart（Recharts）、Table、Progress、Date Picker（`DateRangePicker`）、Ca
 | --- | --- | --- | --- |
 | Metric Overview | 現在の状況を指標で伝える | [metric-overview.md](metric-overview.md) | `metric.tsx`：`MetricGroup`、`Metric`、`MetricValue`、`ComparisonValue`、`MetricTarget`、`Sparkline`、`MetricDefinition`<br>`metric-format.ts`：`formatMetricValue` |
 | Dashboard Layout | 考える順に並べる | [dashboard-layout.md](dashboard-layout.md) | `analysis-region.tsx`：`AnalysisRegion`、`AnalysisScopeNote` |
-| Analysis Filters | 対象、期間、集計単位と適用範囲を決める | [analysis-filters.md](analysis-filters.md) | `analysis-query.ts`：`useAnalysisQuery`、`scopeFilters`、`useCrossFilter`<br>`analysis-period.ts`：`resolvePeriod`、`availableGranularities`、`reconcileGranularity`、`buildBuckets`、`toInstantRange` ほか<br>`analysis-controls.tsx`：`AnalysisPeriodFilter`、`GranularitySelect`、`ComparisonSelect` |
-| Period Comparison | 公平な期間どうしで比べる | [period-comparison.md](period-comparison.md) | `comparison.ts`：`compareValues`、`describeComparison`、`formatDifference`、`getTargetProgress`<br>`analysis-period.ts`：`comparisonRange`、`alignBuckets`、`getPeriodElapsed` |
-| Drill-down | 内訳、明細、詳細へ進み、戻る | [drill-down.md](drill-down.md) | `drill-down.tsx`：`DrillDownLink`、`drillPeriodFor`、`groupOther`、`captureAnalysisPosition`、`useAnalysisPositionRestore` |
+| Analysis Filters | 対象、期間、集計単位と適用範囲を決める | [analysis-filters.md](analysis-filters.md) | `analysis-query.ts`：`useAnalysisQuery`、`scopeFilters`、`useCrossFilter`<br>`analysis-period.ts`：`resolvePeriod`、`availableGranularities`、`reconcileGranularity`、`buildBuckets`、`toInstantRange` ほか<br>`analysis-time.ts`：`zonedStartOfDay`、`hourSlotsOf`、`hoursInDay`、`isValidTimeZone`<br>`analysis-controls.tsx`：`AnalysisPeriodFilter`、`GranularitySelect`、`ComparisonSelect` |
+| Period Comparison | 公平な期間どうしで比べる | [period-comparison.md](period-comparison.md) | `comparison.ts`：`compareValues`、`describeComparison`、`formatDifference`、`getTargetProgress`<br>`analysis-period.ts`：`comparisonRange`（比較の方式 `basis`）、`alignBuckets`、`getPeriodElapsed` |
+| Drill-down | 内訳、明細、詳細へ進み、戻る | [drill-down.md](drill-down.md) | `drill-down.tsx`：`DrillDownLink`、`drillPeriodFor`、`drillBucketPeriod`、`groupOther`、`captureAnalysisPosition`、`useAnalysisPositionRestore` |
 
 ### コードと資料の区分
 
@@ -53,6 +53,47 @@ Chart（Recharts）、Table、Progress、Date Picker（`DateRangePicker`）、Ca
 | 製品の責務 | 指標の定義と集計、評価の方向と目標、API、会計期間とタイムゾーンの設定、認証と認可、ルーター、URL と保存、予測のモデル、リアルタイムの通信 | 製品の業務と基盤に依存する |
 
 Period Comparison と Metric Overview は、増減の計算と表示を同じ `comparison.ts` と `ComparisonValue` で行い、重複して実装しない。
+
+## v0.1 の最終調整で確定した仕様
+
+| 項目 | 確定した仕様 |
+| --- | --- |
+| 期間の指定 | 期間の指定は「この期間で集計」で適用する。プリセットはすぐに適用する |
+| 選択肢 | Select の選択肢を固定し、使えない選択肢を無効にする |
+| 上限の目標 | 割合の割合ではなく、実数の差か pt で示す |
+| Cross-filtering | 選択元の領域には適用しない。適用する領域は製品が選ぶ（`targets`）。主要な指標も連動させる場合は、絞り込んだ値であることを示す。選択は `source`、`field`、`value` の組で区別する。全体条件やスコープが変わった後に、前の選択を復元しない |
+| 比較期間の重なり | 標準では許可しない（`overlap`） |
+| 未来の日 | 実績の分析では、終了日を今日までに切り詰める |
+| 欠損 | 0 として扱わない。期間の一部がデータの範囲の外の場合は値を null にする（部分的なデータを示す製品は、実際に集計した期間、欠損の範囲、比較の可否を示す） |
+| Drill-down の期間 | 実際に集計した期間を、固定の日付で引き継ぐ |
+| 新しいアラート | 閲覧の位置とフォーカスを動かさない |
+| Waterfall Chart | 新しく実装しない（使用の判断だけを資料に書く） |
+| 自動の変更 | 集計単位は期間に合わせて自動で変えてよい（知らせる）。比較の対象は分析の意味を変えるため、利用者の選択を維持し、使えなくなった場合は理由と変更の方法を示す |
+| 再取得中の表示 | 内容を薄くしない。200ms 後から「更新中」と表示中の結果の条件を示す。比較の見出しと比較期間も、表示中の結果の条件で示す |
+| 今日のデータ | Registry は今日が確定しているとみなさない。分析の対象に今日を含み、集計済みの時刻（`asOf`）が今日の終わりより前か不明なら、比較を `fair: false` にする。製品は `asOf` を渡す |
+| 公平でない比較 | `fair: false` の比較は、増減の代わりに理由を示す（期間の合計の指標は期間の比較、時点の指標は時点の比較の `fair` で判断する） |
+| 集計単位 | 製品が提供する単位を `allowedGranularities` で選ぶ。復元した単位を使えない場合は知らせる |
+
+## Registry の API の変更（初期実装 f5769d5 からの変更）
+
+| ファイル | 変更 |
+| --- | --- |
+| `analysis-time.ts`（新規） | タイムゾーンの処理を分けた。`zonedStartOfDay`（存在しない日は RangeError）、`nextDayStart`、`hourSlotsOf`、`hoursInDay`、`localTimeAt`、`isoWithOffset`、`offsetLabel`、`isValidTimeZone`、`assertTimeZone` |
+| `analysis-period.ts` | `PeriodContext` に `timeZone` と `asOf` を追加。`Bucket` に `start`、`end`、`offsetMinutes`、`days`、`durationMinutes`、`status`（complete、in-progress、future、unknown）を追加。時間別の区間はタイムゾーンでの実際の区間。`comparisonRange` に `basis`（6 種類）、`context`、`businessCalendar` を追加し、結果に `basis`、`truncated`、`fair`、`reason`、`instant` を追加。無効の理由に `as-of-required`、`business-calendar-required` を追加。`alignBuckets` に `by`、`allowDifferentLength` を追加し、行に `key`、`comparable`、`reason`（`index` は廃止）。`getPeriodElapsed` に `todayComplete` と、結果に `completeDays`、`todayInProgress` を追加。`defaultBasis`、`countBuckets`、`comparisonBasisLabels` を公開 |
+| `analysis-query.ts` | `useAnalysisQuery` に `comparisonBasis`、`aggregationKey` を追加し、`status`、`invalidReason`、`granularity`（実際に使う単位）、`comparisonBasis` を返す。`key` は不正な条件で `null`、タイムゾーンなどを含む。比較の対象を自動で変えない。`setComparison` は不正な期間で `false`。`scopeFilters` の結果は `ready`／`conflict`（`filters` を持たない）／`invalid`（未知の条件）、`equals` を追加。`useCrossFilter` の選択に `targets`、`isSelected(source, field, value)`、`snapshot`、`initialSelection` は `{ selection, resetKey }` |
+| `comparison.ts` | `compareValues` に `tolerance`。差が有限でない場合は `incomparable`、増減率が有限でない場合は `rateUnavailable: "not-finite"`。`describeComparison` は指標の種類と表示形式の不一致を示す。`getTargetProgress` は目標値が 0・負でも `ready`（`ratio`、`barValue` は null、`met` で判定）、無効の理由は `value-missing`、`target-missing`、`not-finite` |
+| `metric-format.ts` | `parts` に `sign`、`signBeforePrefix`。不正な書式は RangeError。`exactText` は有効数字 15 桁。−0 は 0 |
+| `metric.tsx` | `MetricTarget` は目標値が 0・負の場合に達成・未達と差を示す。`elapsed.todayInProgress`。`MetricDefinition` に `exact` |
+| `analysis-region.tsx` | 再取得中に内容を薄くしない。`staleLabel` を追加 |
+| `analysis-controls.tsx` | `ComparisonSelect` に `period`（重なる比較を無効にする）、`customRange`、`onCustomRangeChange`、`min`。比較できない理由と変更の方法を示す |
+| `drill-down.tsx`（最終調整の 2 回目のレビューの後） | `drillRangeFor`（比較の系列の `instant` も返す）、`groupOther` の `includeSkippedInOther` と `aggregate` の実行時の検証 |
+| `analysis-period.ts`（同） | `alignBuckets` の暦の位置のキーを最初の区間からの位置にし（年をまたいでも重複しない）、同じ側の重複を RangeError にした。経過の対応付けを、時間別は実際の分、週・月以上は順番にした。区間の長さは実際の時間で比べる。同じ曜日の比較で重なる場合は、さらに 7 日ずらす。今日を含む比較を、`asOf` が今日の終わりより前か不明なら `fair: false` にする。不正なタイムゾーンの理由 `invalid-time-zone` |
+| `analysis-query.ts`（同） | `allowedGranularities`。復元した集計単位を使えない場合の `notice`。不正なタイムゾーンを `invalid` にする |
+| `comparison.ts`、`metric-format.ts`、`metric.tsx`（同） | 丸めると 0 になる負の値・差を「−0.1〜0%」「−0.1〜0pt」と示す。`tolerance`、`currency` も `unit` もない通貨、`minimumFractionDigits` > `maximumFractionDigits` を RangeError。`MetricTarget` の小さな差 |
+| `analysis-period.ts`（確認のレビューの後） | `Bucket` に `granularity`、`unitStart`。`ResolvedPeriod` の無効の理由に `unknown-period`、`ComparisonRange` に `future`、`unknown-mode`、`no-business-days`。今日が未確定の判定を、集計済みの時刻と期間の終わりで行い、`context` がない場合は期間の `inProgress` で判断する |
+| `drill-down.tsx`（同） | `drillRangeFor` に `context`（現在の系列の時刻の範囲） |
+| `analysis-controls.tsx`（同） | `ComparisonSelect` に `basis`、`context`。比較の方式と、公平でない理由（`comparison-unfair`）を示す。不正なタイムゾーンの理由と変更の方法 |
+| `drill-down.tsx` | `drillPeriodFor` は実際に集計した期間を返す。`drillBucketPeriod` を追加。`groupOther` の `aggregate` を必須にし、検証を追加（`combine` は廃止）。`AnalysisPosition` に `scrollLeft`、`section`（`sectionTitleId` は廃止）。`captureAnalysisPosition` に `root`。フォーカスの復元は実際に移ったことを確かめる |
 
 ## 使い方の流れ
 
@@ -106,6 +147,8 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 検証画面の URL の引数：`page`、`period`（相対期間の id）または `from`・`to`（固定の期間）、`cmp`（比較）、`g`（手動で選んだ集計単位）、`region`、`plan`、`term`（全体の絞り込み）、`dplan`、`dterm`（Drill-down で加えた条件）、`id`（企業）。
 
+売上の日割り（月額 × 12 ÷ 365）、原価率、地域の固定費、目標の設定は、検証のための例の業務の規則であり、Registry の標準の計算ではない。この模擬データは 1 社 1 契約のため、解約した企業の数と解約した契約の数は一致する（複数の契約を持つ製品では区別する）。
+
 すべての数値は、架空の契約の記録（`preview/src/data/data-analysis/subscriptions.ts`、乱数の種から決まった手順で作る 986 社の契約）から集計する。指標、比較値、増減率、グラフ、明細を、それぞれ固定の値として持たない。画面には「架空のデータ」と示している。基準日は 2026 年 11 月 25 日、会計年度は 4 月始まり。模擬のサーバー（`analysis-server.ts`、`window.__fdAnalysisServer`）と運用の監視のデータ（`operations.ts`、`window.__fdOpsTicker`）も `preview/src/data/data-analysis/` にあり、Registry には含めない。
 
 検証画面は Data Analysis の検証のためのものであり、正式な Pages の実装ではない。App Structure の `StructureSidebar`、`ProductMark`、`structureNav`、`PlaceholderScreen` を読み込んで使う（複製も変更もしない）。
@@ -133,6 +176,20 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 ## 並行している作業との関係
 
+### Forms & Workflows との統合
+
+最終調整の開始の時点（origin/main aa7e664）で、Forms & Workflows（`feat/forms-and-workflows-patterns`）は main に統合されていない。Forms & Workflows の Patterns を再実装していない。後続の Patterns の横断の検品で、次を確かめる。
+
+| 項目 | 状況 | 接続に必要なこと |
+| --- | --- | --- |
+| 分析から業務画面への移動 | 検証画面の `page=work` は、引き継いだ条件を示すだけ | Forms & Workflows の一覧・編集の画面の URL と、受け取る条件の形 |
+| 実際に適用していた条件の引き継ぎ | 期間（固定の日付）、プラン（Cross-filtering）、地域、契約期間、解約の理由を URL で渡す | 業務画面が条件を初期の絞り込みにだけ使い、権限と対象をバックエンドで確かめる |
+| 対象のレコードの確認、閲覧・編集の権限 | 未確認 | 業務画面の権限の確認と、対象がない・権限がない場合の表示 |
+| 未保存の変更 | 未確認 | Forms & Workflows の未保存の変更の確認（分析の画面へ戻る操作を含む） |
+| 編集の後の再取得 | 未確認 | 戻ったときに分析のデータを取得し直す（`useBrowseData` は戻ると取得し直す） |
+| 元の分析の画面への復帰、フォーカスとスクロール | 分析の画面どうし（Drill-down）では確かめている | 業務画面から戻るときの履歴の記録（`fdParentKey`）の受け渡し |
+
+
 - Forms & Workflows は、この作業の開始の時点（origin/main 1882f2a）で main に統合されていない。検証画面の業務画面への移動（`page=work`）は、引き継いだ条件を示すだけの画面にし、Forms & Workflows の Patterns を再実装していない。統合の後に、登録・編集の流れとの接続を確かめる。
 - Data Browsing は、作業中に v0.1 確定候補（5dcd39a、aa7e664）が main に統合された。統合の候補で取り込み、検品した。`useBrowseData` の変更（`canOperate` の追加、取得しない間のスコープの変更、アンマウントの後の応答の破棄、`setData` の `guard`）は追加と修正だけで、Data Analysis の利用箇所（`status`、`data`、`isCurrent`、`reload`、`error`）の動作は変わらない。Data Analysis の画面には、データに依存する変更の操作（一括操作、削除）がないため、`canOperate` は使っていない。Data Browsing の部品は変更していない。
 - 共有のファイル（`catalog.ts`、`package.json`、`build.sh`、`README.md`）は、統合の時に双方の変更を残す。
@@ -154,20 +211,23 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 | 比較期間の重なり | すべての比較で、分析の対象と重なる比較期間を不正とし、その比較を選べなくする | 3 か月の期間を前月と比べると、55 日を両方で数えていた（独立したレビューの指摘） |
 | データの範囲の外 | 期間の一部でもデータの範囲（2023/01/01〜今日）の外を含む場合は、値を null（データなし）にし、明細も示さない | 範囲の外を 0 として合計し、「前年同期 0円」と比べていた（独立したレビューの指摘） |
 | 売上の日割り | 月額 × 12 ÷ 365（模擬データ） | 月の日数で割ると、同経過期間の比較が暦の日数で偏る（独立したレビューの指摘） |
-| 集計単位の初期値と使える単位 | 期間の日数による初期値と、区間の数（2〜400、時間別は 7 日以内）による利用可否 | 指示書の目安を、期間の長さだけで決まる規則にした。固定ではなく製品が変えられる |
+| 集計単位の初期値と使える単位 | 期間の日数による初期値と、実際の区間の数（2〜400。時間別はタイムゾーンがあり 7 日以内）による利用可否 | 指示書の目安を、期間の長さだけで決まる規則にした。固定ではなく製品が変えられる |
 | 選択肢の固定 | 集計単位と比較の Select は、選択肢を入れ替えず、使えない選択肢を無効にする | Base UI の Select が、選択肢の一覧の変更の時点で値を最初の値に戻す（検証の途中で確認した事象） |
 | 個別条件の衝突 | 全体条件と重ならない個別条件・Drill-down の条件は `conflict` とし、表示できる対象がないと示す | 黙って上書きすると適用範囲を誤認し、外すと全件を誤って示す |
 | Drill-down の期間 | 相対期間を固定の日付にして引き継ぐ | 開いた日と戻った日で期間が変わらないようにする |
 | Drill-down の URL | Drill-down で加えた条件を `dplan`、`dterm` とし、全体条件（`plan`、`term`）と分ける | 同じ名前だと全体条件を上書きしてしまう |
 | Cross-filtering の範囲 | プラン別の内訳の選択を、契約期間別の内訳と企業の一覧に適用し、指標とプラン別の内訳（選択元）には適用しない。適用する領域を文で示す | 指標は全体の状況を示す領域であり、選択で変わると現在の状況を誤認する |
 | Cross-filtering の要素 | グラフの棒を直接押す方式ではなく、HTML の横棒の行をボタンにした | キーボードとタッチで確実に選べ、Drill-down のリンクと別の要素にできる |
-| 再取得中の表示 | 前の結果を 200ms 後から薄く（opacity 50%）表示し、「更新中」を示す | Data States の 200ms の規則。短い再取得（リアルタイムの更新）でちらつかない |
+| 再取得中の表示 | 前の結果を薄くせずに残し、200ms 後から見出しの右に「更新中」と表示中の結果の条件を示す（v0.1 の最終調整で変更） | 数値と文字のコントラストを保つ。どの条件の結果かを誤認させない |
 | 主要な指標の取得 | MRR、売上、契約企業数、解約率などを 1 回の要求で取得する | 比べる指標の集計の時点をそろえる |
 | MRR の増減の内訳 | Waterfall Chart の代わりに、増減差のグラフと期首・期末の文、数値の表で示す | Waterfall Chart の汎用の部品化は対象外。使用の判断は Period Comparison の資料に書いた |
 | 予測の色 | 予測は `chart-3` の破線と範囲、途中経過は `chart-1` の点線 | 実績と同じ色の破線だけでは、途中経過と予測を区別できない |
 | 新しいアラート | 自動で一覧に加えず「新しいアラートを表示（n件）」のボタンで加える | 読んでいる位置とフォーカスを動かさない |
 | 監視の指標 | 全体のエラー率と最も遅い応答時間をやめ、「エラー率が上限を超えたサービス」の数と名前にした | サービスごとに上限が異なり、全体の値では異常を示さない（独立したレビューの指摘） |
-| 比較の自動の変更 | 期間の種類が変わり、選んでいた比較を使えなくなった場合は、使える最初の比較にし、`role="status"` で知らせる | 集計単位の自動の変更と同じ扱いにする |
+| 比較の自動の変更 | 変えない（v0.1 の最終調整で変更）。比較の対象を維持し、比較できない理由と変更の方法を示す | 比較の対象は分析の意味を変える |
+| 時間別の区間 | ローカル時刻の時と時差で区切る（壁時計の時で区切る）。15 分ごとにローカル時刻を調べる | 1 時間ずつ足すと、30 分の夏時間の後の区間が 30 分ずれる |
+| 区間の状態 | 集計済みの時刻がない場合、今日の時間別の区間は「不明」、今日を含む日以上の区間は「途中」 | 現在の時刻を知らない部品が、当日のデータを確定とみなさない |
+| 同経過期間の上限 | 比較先の単位（月、四半期、年度）の終わりで切り詰め、公平な比較としない | 3/1〜3/30 と 2 月の比較で、3 月の日を比較先に含めない |
 | 権限のない明細 | 模擬のサーバーが除き、件数だけを返す。企業の詳細は `forbidden` を返し、画面は再試行を置かない | 指示書の「権限のない明細をクライアント側へ渡して非表示にする方式に依存しない」 |
 | 検証画面 | App Structure と Data Browsing の検証画面を変更せず、別の画面 `analysis-app` として作った | 並行している作業との共有のファイルの変更を避けた |
 | Node.js の単体の検品 | `preview/playwright.config.ts` に `tsconfig` を指定した | registry のファイルの `@/` の別名を Node.js で解決するため |
@@ -178,7 +238,7 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 | 対象 | 検品（`preview/tests/`） |
 | --- | --- |
-| 計算（Node.js） | `data-analysis-logic.spec.ts`：数値の表記（省略、約、ロケール、通貨、桁、マイナス、NaN）、比較値（実数差、増減率、pt、基準値 0、ともに 0、基準値が負、符号の転換、データなし、取得失敗、比較できない、評価の方向）、目標（100% 超、上限、0、負、欠損）、期間（相対・固定、週の始まり、会計年度、同経過期間、月の全体、月末、うるう年、年をまたぐ、重なり）、半開区間とタイムゾーンと夏時間、集計単位（初期値、利用可否、手動の維持と調整、合計が変わらない）、区間（期間の一部、途中）、条件の継承と衝突、比較期間の系列の期間、「その他」、模擬データの整合性 |
+| 計算（Node.js） | `data-analysis-logic.spec.ts`：数値の表記（省略、約、ロケール、通貨と符号の位置、−0、負の小数の丸め、省略前の精度、極端な値、不正な書式）、比較値（実数差、増減率、pt、基準値 0、ともに 0、基準値が負、両方向の符号の転換、計算の結果の有限性、浮動小数点の誤差と意味のある小さい差、許容範囲、指標の種類と表示形式の不一致）、目標（100% 超、上限、目標値 0・負での達成の判定、欠損）、期間（相対・固定、未来の切り詰め、単位の判定、週の始まり、会計年度、四半期と年度の途中、月末、うるう年、年をまたぐ、重なり）、比較の方式（暦、同じ経過日数と切り詰め、同じ経過時間と夏時間、同じ曜日、同じ営業日数と不足、同じ時点）、期間の経過と当日の未確定、時間別の区間（Asia/Tokyo、UTC、America/New_York と Europe/Berlin の夏時間の開始・終了、30 分・45 分の時差、30 分の夏時間、年末年始、集計済みの時刻の有無、不正なタイムゾーン、存在しない日、実行環境のタイムゾーンへの非依存）、区間の位置合わせと比較の可否、`useAnalysisQuery`（不正な復元・既定値・制御された値・集計単位、描画の時点の集計単位、取得の条件のキー、比較の維持）、`scopeFilters`（値の組み合わせ、衝突、未知の条件、比較の方法）、Drill-down（実際の期間、区間の時刻、「その他」の検証）、模擬データの整合性（MRR の内訳、指標と明細、プラン別と全体、絞り込み、範囲の外、比較期間の一部の欠損、企業と契約、割合の再集計、ワークスペース、権限と件数の公開、固定の値） |
 | 資料のページ（5） | `data-analysis.spec.ts`：h1 が 1 つ、操作の名前、横スクロールなし、数値の NaN・Infinity なし、320px と 2560px |
 | Metric Overview | 数値の表記とロケール、増減と良否と色、目標、データの状態と高さの維持、Sparkline の欠損と点の不足、定義の Popover、動きを減らす設定、ブランドカラー |
 | Dashboard Layout | 独立した領域の失敗と再試行 |
@@ -186,6 +246,8 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 | Period Comparison | 比較期間（月の途中、月末、うるう日、年をまたぐ）、比較値の算出の可否、重ね合わせの元の日付と未来の欠損、凡例と線の種類、実績・途中経過・予測、予測がない場合 |
 | Drill-down | 条件の引き継ぎと衝突、比較期間の系列の期間、「その他」の分類 |
 | 検証画面（Strategic） | 共通のデータとの一致、比較の対象の明示、全体条件と期間の変更、URL の保持と再読み込み、部分的な失敗とその領域だけの再試行、再取得中の表示、予測なし、表だけの比較、マイナスからプラスへの転換 |
+| スコープの境界と古い応答 | ワークスペースの A→B→A（中止を無視する API の遅い応答）、取得しない間のスコープの変更、権限の変更と件数の公開、集計単位・タイムゾーン・Cross-filtering の変更の間の古い応答、横スクロールの位置の復元、見えない操作元の代わりのフォーカス |
+| 資料のページの追加の例 | 夏時間の日の 23・25 区間と 30 分の区間、比較の方式の公平さ、区間の位置合わせの比較の可否 |
 | 検証画面（Analytical） | 指標・一覧・内訳の一致、一覧だけの条件、Cross-filtering（選択元の維持、適用範囲、解除、キーボード）、まとめて適用とキャンセルと Chip、集計単位の調整、Drill-down と復帰（条件、選択、スクロール、フォーカス）、階層と Breadcrumb、比較期間の系列から進む、Sheet の前後の移動と素早い切り替え、明細の権限、権限のない詳細と存在しない詳細、条件の衝突、業務画面への条件の引き継ぎ |
 | 検証画面（Operational） | リアルタイムの更新でフォーカスとスクロールを保つ、新しいアラートの保留、異常の文字の表示、対応済みの後のフォーカス、部分的な失敗と再試行、自動の更新の停止 |
 | モバイル、WebKit | 1 列への再配置と横スクロールなし、詳細の全画面の Sheet、WebKit での描画と Cross-filtering |
@@ -246,6 +308,52 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 | 低：比較の条件が知らせなく変わる | `role="status"` の文で知らせる |
 | 検品の弱点：上の高の不具合でも検品が通る。期間の指定の途中の適用を見ていない。整合性の検品が同じ関数どうしを比べている | 単位、未来、範囲の外、重なりの検品と、画面の目標・上限の表示の検品を追加した。期間の指定の適用の検品を書き直した。生成した記録から一度求めた固定の値（過去 12 か月の解約 104 社、986 社）の検品を追加した |
 
+### 独立したレビュー（v0.1 の最終調整）
+
+最終調整の実装の後に、別のエージェント（Opus）が、実装の結論を渡さずに、指示書、差分、資料、テスト、スクリーンショットを確かめた。指摘は高 5 件、中 6 件、低 11 件と、検品の弱点。
+
+| 指摘 | 対処 |
+| --- | --- |
+| 高：`alignBuckets` の暦の位置のキーが、年をまたぐ期間や 13 か月の期間で重複し、別の月どうしを対応付ける | キーを最初の区間からの位置（月の数、日、週の数など）にした。同じ側でキーが重複する場合は RangeError。年末年始とうるう年の 2 月をまたぐ 4 か月、13 か月の検品を追加した |
+| 高：経過でそろえる対応付けが、月の長さの違いで別の区間を対応付ける | 時間別は実際の分、週は週の順番、月以上は単位の順番で対応付ける |
+| 高：検証画面が、比較の `fair: false` を無視して増減を示す | 期間の合計の指標と表は期間の比較、時点の指標は時点の比較の `fair` で判断し、公平でない場合は増減の代わりに理由を示す。長さの異なる任意の比較期間の検品を追加した |
+| 高：再取得の間に、前の結果の値に新しい比較の見出しを付ける | 取得の結果に、集計に使った比較の条件を含め、見出しと比較期間をその条件で示す。検品を追加した |
+| 高：解約率の推移が時間別を選べる（日単位の契約の状態から集計する指標）。集計のタイムゾーンを推移に渡していない | `useAnalysisQuery` に `allowedGranularities` を追加し、検証画面は時間別を提供しない。URL の `g=hour` は使わず、知らせる。推移に集計の文脈（タイムゾーン、集計済みの時刻）を渡す |
+| 中：区間の長さを日数で比べ、夏時間の日の 23・25 時間を同じ長さとみなす | 時刻がある場合は実際の時間で比べる |
+| 中：今日の途中までの値と、比較期間の確定した値を、公平な比較として示す | 分析の対象に今日を含み、`asOf` が今日の終わりより前か不明な場合は `fair: false`。検証画面は、模擬のデータを 2026/11/25 の終わりまで集計済みとして `asOf` を渡す。集計済みの範囲と、区間の単位が続いている区間（「途中の区間」）を分けた |
+| 中：不正なタイムゾーンで、比較の理由が「集計済みの時刻が必要」になる | 理由 `invalid-time-zone` と、変更の方法を示す。`useAnalysisQuery` は不正なタイムゾーンを `invalid` にする |
+| 中：一覧で件数を隠す設定でも、指標と一覧の件数の差から件数がわかる | 一覧の件数だけを隠す設定であることを操作の名前と説明に書き、集計の指標の公開の範囲は製品が決めることを資料に書いた（模擬のサーバーでは扱わない） |
+| 中：StrictMode で effect が 2 回実行されると、復元した一覧のページが 1 ページ目に戻る | 前回の条件と比べて、条件が変わった場合だけ 1 ページ目に戻す。並び順、ページ、理由の絞り込みの復元の検品を追加した |
+| 中：同じ曜日の前年同期が、分析の対象と重なる場合がある | 重なる場合は、さらに 7 日ずらす |
+| 低：`ComparisonSelect` が、製品の比較の方式と文脈を使わずに選択肢の可否を判断する | `basis` と `context` を渡せるようにし、比較の方式の名前と、公平でない理由を示す |
+| 低：丸めると 0 になる負の値を「−0.1%未満」と示す（−0.1% より小さい意味になる） | 「−0.1〜0%」「−0.1〜0pt」と示す。目標との差も「0.0pt」と示さない |
+| 低：`currency` も `unit` もない通貨、`minimumFractionDigits` > `maximumFractionDigits`、不正な `tolerance` を受け付ける | RangeError にした |
+| 低：同じ経過時間の比較から Drill-down するとき、時刻の範囲を引き継げない | `drillRangeFor` を追加した |
+| 低：`groupOther` で、欠損した分類の明細へ「その他」から進めない。`aggregate` の実行時の検証がない | `includeSkippedInOther` と、`aggregate` の検証を追加した |
+| 低：MRR の Sparkline が、過去の期間でも今日で終わる | 期間の最終日で終わるようにし、最後の点が主要な値と一致する検品を追加した |
+| 低：任意の比較期間が URL に残らない | `cfrom`、`cto` で残す。不正な値は使わない |
+| 低：320px で、表の続きがあることがわからない | 検証画面と資料のページの表を `TableScrollArea` で囲み、続きがある方向の端に影を示す |
+| 低：目標の Progress の読み上げ | `aria-valuetext` が、表示の範囲に収める前の実際の値の文（「月の上限 1.5% まで、あと 0.9pt」）であることを確かめた。変更していない |
+| 低：再取得中の条件の文が、狭い画面で省略される | 1 行に収め、省略した場合は `title` で全文を示す。タッチの操作では全文を確かめにくいため、未検証の事項に記録した |
+| 検品の弱点：複数の月の位置合わせ、一覧の状態の復元、資料の例、固定の期待値が不足 | 上の検品を追加し、期待値を固定の値にした。period-comparison.md の位置合わせの説明を更新した |
+
+### 確認のレビュー（上の指摘への対処の後）
+
+別のエージェント（Opus）が、上の対処の後の差分を、指示書と照らして、実行と読解で確かめた。指摘は高 1 件、中 4 件、低 5 件。
+
+| 指摘 | 対処 |
+| --- | --- |
+| 高：顧客維持の分析が、比較の `fair: false` を無視して増減を示す（過去 12 か月と 31 日間の任意の比較期間で「+1,385.7%」）。見出しが表示中のデータの条件でない | 事業の状況と同じく、公平でない比較は理由を示し、見出しを取得の結果の比較の条件で示す。検品を追加した |
+| 中：「期間の比較」の表で、再取得中に新しい比較期間の見出しが前の値に付く | 取得の結果に比較の条件を含め、見出しと公平さをその条件で示す。表示中の結果の比較期間を `staleLabel` で示す。検品を追加した |
+| 中：`alignBuckets` の暦の位置のキーが、週の始まりが月曜以外の週、期の途中から始まる四半期と会計年度で重複し、RangeError になる | `Bucket` に `granularity` と `unitStart`（区間の単位の本来の開始日）を追加し、キーを単位の開始日の位置で求める（表示の名前から単位を推測しない）。検品を追加した |
+| 中：未知の相対期間の id で `resolvePeriod` が例外になる。未知の比較の種類を ready として扱う | `resolvePeriod` は `unknown-period`、`comparisonRange` は `unknown-mode` を返す。`useAnalysisQuery` は、復元した値は既定に戻して知らせ、制御された値は `invalid`（`key: null`）にする。検品を追加した |
+| 中：集計済みの時刻より後の日を含む期間（昨日の途中までの集計）と、`context` を省略した場合に、公平な比較とする | `asOf` とタイムゾーンがある場合は、対象の終わり（終了日の翌日の 0 時）が `asOf` より後なら `fair: false`。ない場合は、今日を含む期間（`context.today` がなければ期間の `inProgress`）を `fair: false` にする。資料のページの比較にも文脈を渡した。検品を追加した |
+| 低：今日より後の日を含む任意の比較期間を受け付ける | `context.today` がある場合は `future` にする |
+| 低：同じ経過時間の比較で、現在の系列の時刻の範囲を引き継げない | `drillRangeFor` に `context` を渡すと、現在の系列は期間の始まりから `asOf` までの半開区間を返す |
+| 低：分析の対象に営業日がない場合に、営業日の 1 日と比べる | `no-business-days` にする |
+| 低：重ね合わせのグラフの累計で、欠損を 0 として加える | 欠損の日以降の累計を求めない |
+| 低：Cross-filtering の `targets` から企業の一覧を外しても、一覧に適用される | 一覧は `forRegion("accounts")` で選択を取り出し、`targets` に従う |
+
 ### 未検証の事項
 
 | 項目 | 状況 |
@@ -255,5 +363,6 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 | Next.js での導入 | 未検証。`"use client"` の境界は規則で確かめている |
 | 実際の API、分析用のデータベース | 模擬のサーバーだけで確かめている |
 | Forms & Workflows との接続 | main に統合された後に確かめる |
-| 時間別の区間と夏時間 | 時間別の区間は常に 24 区間で、23 時間・25 時間の日を区別していない。今日の未来の時刻の区間も途中の区間として扱う（時刻を扱わないため） |
-| 長さの異なる区間の位置合わせ | `alignBuckets` は区間を番号の順にそろえる。週の途中から始まる週別の区間では、日数の異なる区間が同じ位置に並ぶ |
+| 1970 年より前と、時差が 15 分の倍数でないタイムゾーン | 保証しない（現在の IANA のタイムゾーンは対象の中） |
+| 再取得中の条件の文（狭い画面） | 1 行に収めて省略し、`title` で全文を示す。タッチの操作で全文を確かめる方法は未検証 |
+| 集計の指標から推測できる件数 | 一覧の件数を隠しても、集計の指標との差からわかる。集計値の公開の範囲は製品の判断（模擬のサーバーでは扱わない） |

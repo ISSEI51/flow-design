@@ -1,4 +1,4 @@
-import { fromDateString } from "@/lib/date"
+import { fromDateString, type DateString } from "@/lib/date"
 import { relativePeriods, type AnalysisPeriod, type ComparisonMode, type Granularity, type RelativePeriodId } from "@/patterns/analysis-period"
 import type { AnalysisQuery } from "@/patterns/analysis-query"
 
@@ -43,6 +43,10 @@ export function queryFromParams(p: URLSearchParams): Partial<AnalysisQuery<Analy
   if (period) out.period = period
   const cmp = p.get("cmp")
   if (cmp && (comparisonModes as string[]).includes(cmp)) out.comparison = cmp as ComparisonMode
+  // 任意の比較期間。値の検証（日付として正しいか、期間と重ならないか）は useAnalysisQuery が行う
+  const cfrom = p.get("cfrom")
+  const cto = p.get("cto")
+  if (out.comparison === "custom" && cfrom && cto) out.comparisonCustom = { from: cfrom as DateString, to: cto as DateString }
   const g = p.get("g")
   if (g && (granularities as string[]).includes(g)) {
     out.granularity = g as Granularity
@@ -62,6 +66,10 @@ export function paramsFromQuery(page: string, q: AnalysisQuery<AnalysisFilters>,
     p.set("to", q.period.to)
   }
   p.set("cmp", q.comparison)
+  if (q.comparison === "custom" && q.comparisonCustom) {
+    p.set("cfrom", q.comparisonCustom.from)
+    p.set("cto", q.comparisonCustom.to)
+  }
   if (q.granularityMode === "manual") p.set("g", q.granularity)
   if (q.filters.regions.length) p.set("region", q.filters.regions.join(","))
   if (q.filters.plans.length) p.set("plan", q.filters.plans.join(","))

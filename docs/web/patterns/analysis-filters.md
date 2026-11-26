@@ -2,7 +2,7 @@
 
 分析の対象と期間を決め、全体条件と個別条件の適用範囲を明確にする。
 
-状態：初期実装（レビュー前） ・ 実装：[`registry/patterns/analysis-query.ts`](../../../registry/patterns/analysis-query.ts)（`useAnalysisQuery`、`scopeFilters`、`useCrossFilter`）、[`analysis-period.ts`](../../../registry/patterns/analysis-period.ts)、[`analysis-controls.tsx`](../../../registry/patterns/analysis-controls.tsx) ・ 全体：[Data Analysis](data-analysis.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/analysis-query.ts`](../../../registry/patterns/analysis-query.ts)（`useAnalysisQuery`、`scopeFilters`、`useCrossFilter`）、[`analysis-period.ts`](../../../registry/patterns/analysis-period.ts)、[`analysis-controls.tsx`](../../../registry/patterns/analysis-controls.tsx) ・ 全体：[Data Analysis](data-analysis.md)
 
 ## 目的
 
@@ -91,7 +91,33 @@
 | 93〜366 日 | 月別 | 週別、月別、四半期別 |
 | それより長い | 月別 | 月別、四半期別、年別 |
 
-使える単位は、区間の数が 2 以上 400 以下のもの（時間別は 7 日以内）。固定の規則ではなく、製品は `maxBuckets` で変えられる。
+使える単位は、実際の区間の数が 2 以上 400 以下のもの。時間別は、有効なタイムゾーン（`context.timeZone`）があり、7 日以内の期間に限る（夏時間の日は 23 区間や 25 区間として数える）。固定の規則ではなく、製品は `maxBuckets` で変えられる。
+
+日付が変わって相対期間の範囲が変わった場合や、タイムゾーンを変えた場合も、`useAnalysisQuery` は描画の時点で集計単位を確かめ直し、使えない単位なら初期値を使う（`granularity` と `notice`。保存した値は変えない）。
+
+### 時間別の区間とタイムゾーン（`analysis-time.ts`、`buildBuckets`）
+
+<!-- 実装：registry/patterns/analysis-time.ts -->
+
+- タイムゾーンは製品が IANA の名前で明示的に渡す（`context.timeZone`）。実行環境のタイムゾーン（`process.env.TZ`、ブラウザの設定）には依存しない（実行環境のタイムゾーンを変えて同じ結果になることを検品している）。
+- 区間は、実際の開始と終了の時刻（`start`、`end`。エポックからのミリ秒の半開区間）と、表示用のローカル時刻（`hour`、`label`、`offsetMinutes`）を分けて持つ。区間のキーは開始の時刻（時差付きの ISO 8601。「2026-11-01T01:00:00-04:00」）。
+- 時間別の区間は、ローカル時刻の「時」と UTC からの時差が変わるところで区切る。
+
+| 日 | 区間 |
+| --- | --- |
+| America/New_York の 2026/03/08（夏時間の開始） | 23 区間。存在しない 2 時の区間を作らない |
+| America/New_York の 2026/11/01（夏時間の終了） | 25 区間。1 時の区間が 2 つあり、「1時（GMT-4）」「1時（GMT-5）」と時差で区別する |
+| Europe/Berlin の 2026/03/29、2026/10/25 | 23 区間、25 区間（2 時が 2 つ） |
+| Asia/Kolkata（+5:30）、Asia/Kathmandu（+5:45）、Australia/Eucla（+8:45） | 24 区間。ローカル時刻の 0 分で区切る |
+| Australia/Lord_Howe の 2026/10/04（30 分の夏時間） | 23.5 時間。2 時の区間は 30 分（`durationMinutes: 30`、`partial: true`） |
+| 年末年始（2026/12/31〜2027/01/01） | 48 区間。年をまたいでも区間は連続する |
+
+- 区間の状態（`status`）：確定（complete）、途中（in-progress）、未来（future）、不明（unknown）。この部品は現在の時刻を知らないため、集計済みの時刻（`context.asOf`）がない場合、今日の時間別の区間は「不明」とし、確定とみなさない。日以上の区間は、今日を含む区間を「途中」とする。
+- 不正なタイムゾーンは RangeError にする（`buildBuckets` の時間別、`toInstantRange`）。時間別の集計単位は使えない単位になる。
+
+#### 対応する範囲
+
+1970 年以降で、UTC からの時差と切り替えの時刻が 15 分の倍数のタイムゾーン（現在の IANA のタイムゾーンはすべて該当する）。1970 年より前の地方平均時（+9:18:59 など）は保証しない。日付そのものが存在しない日（Pacific/Apia の 2011/12/30。日付変更線の移動で飛ばした）は、誤った時刻に変換せず RangeError にする。前の日の長さは、次に存在する日の始まりまでで求める。
 
 - 手動で選んだ集計単位は、期間を変えても使える限り維持する。
 - 使えなくなった場合だけ初期値に変え、`notice`（`role="status"`）で知らせる（「期間に合わせて、集計単位を「週別」から「時間別」に変えました」）。
@@ -115,6 +141,9 @@
 - 分析に意味がある場合だけ提供する。
 - 選んだ要素（`aria-pressed`）、影響を受ける領域（「契約期間別の内訳と、解約した企業の一覧に適用しています」）、現在の条件（Chip）、解除の方法（Chip のボタン、同じ要素をもう一度選ぶ）を示す。
 - 選択元の領域には適用しない（`forRegion(id)` は選択元に `null` を返す）。選択元のグラフが自身の絞り込みで消えない。
+- 適用する領域は製品が選ぶ（`targets`。省略すると選択元以外のすべて）。検証画面では、契約期間別の内訳と企業の一覧に適用し、主要な指標には適用しない。主要な指標も連動させる場合は、全体の値ではなく絞り込んだ値であることを指標に示す。
+- 選択は `source`、`field`、`value` の組で区別する（同じ領域の同じ値でも、項目が異なれば別の選択）。
+- 戻ったときの復元（`initialSelection`）は、記録した `resetKey`（全体条件とスコープ）が現在と同じ場合だけ行う。全体条件やスコープが変わった後に、前の選択を復元しない。
 - ホバーだけで選ばない。キーボード（Enter、Space）とタッチで選べるボタンにする。グラフの要素を直接押す場合も、同じ選択を一覧のボタンからできるようにする。
 - `resetKey`（全体条件、ワークスペース）が変わったら解除する。
 - Drill-down と区別する（[drill-down.md](drill-down.md)）。
@@ -181,6 +210,43 @@ toInstantRange(同じ期間, "America/Los_Angeles")
 | 選択元のグラフも Cross-filtering で絞り込む | 選んだ要素以外が消え、選び直せない | 選択元には適用しない |
 | ホバーで Cross-filtering を実行する | 意図せず条件が変わる | 押して選ぶ |
 | 1 日を 24 時間として期間を計算する | 夏時間の日に 1 時間ずれる | 暦の日付と半開区間 |
+
+## 取得の条件のキーと妥当性
+
+`useAnalysisQuery` の `key` は、集計の結果の意味が変わる条件を含める。表示の設定（グラフの形式、表の並び順）は含めない。
+
+| 含める | 理由 |
+| --- | --- |
+| 解決した期間（相対期間は日付） | 日付が変われば同じ「今月」でも別の結果 |
+| 比較期間と比較の方式（`comparisonBasis`） | 同経過期間と暦の期間では比較期間が異なる |
+| 実際に使う集計単位 | |
+| 絞り込み | |
+| タイムゾーン、週の始まり、会計年度の開始月 | 区間の境界が変わる |
+| 集計済みの時刻（`asOf`） | 確定した範囲が変わる |
+| 製品の集計の方式（`aggregationKey`） | 計上の規則の版など |
+
+アカウント、ワークスペース、権限の境界は、`key` に混ぜず、Data Browsing の `useBrowseData` の `scopeKey` で扱う（変わった時点で前のデータを返さず、初回の読み込みに戻る）。検証画面は、別の取得と競合の管理の仕組みを作らず、`useBrowseData` を使う（`useAnalysisData`）。
+
+条件の妥当性：
+
+| 場合 | 扱い |
+| --- | --- |
+| URL などから復元した期間が不正 | 既定の期間に戻し、`notice`（「指定された期間が不正なため、既定の期間で表示しています」） |
+| `defaultQuery` が不正、制御された `query` が不正、集計単位が不正な文字 | `status: "invalid"`、`key: null`（取得しない。不正な条件で全件を取得しない） |
+| 利用できない集計単位を直接指定した | 描画の時点で初期値を使い、`notice` で知らせる |
+| URL などから復元した集計単位が使えない（期間に合わない、製品が提供しない） | 使える単位にし、`notice`（「指定された集計単位「時間別」は使えないため、「日別」で表示しています」） |
+| 製品が提供しない集計単位 | `allowedGranularities` で提供する単位を渡す。`granularities` と初期値は、その中から選ぶ（検証画面の解約率の推移は、日単位の契約の状態から集計するため時間別を提供しない） |
+| 不正な期間を指定する比較 | `setComparison` が `false` を返し、適用しない |
+| 比較の対象が期間の変更で使えなくなった | 比較の対象は利用者の選択のまま。`comparison` が `invalid`（`overlap` など）になり、`ComparisonSelect` が理由と変更の方法を示す。前年同期を前月比に変えるなど、意味の異なる比較に黙って切り替えない |
+
+### 絞り込みの値の契約（`scopeFilters`）
+
+- 配列（複数選択）：空の配列は「制限なし（すべて）」。1 つ以上の値は「そのいずれか」。
+- 1 つの値：`null`、`undefined`、`""` は「制限なし」。それ以外は「その値だけ」。
+- 「対象なし」は値で表さない。全体条件と個別条件が重ならない場合は `conflict` を返し、`filters` を返さない（型で、通常の条件として使えないようにしている）。製品は取得せず、対象がないことを示す。
+- 配列どうしは共通の部分、配列と 1 つの値は含まれるか、1 つの値どうしは一致で判定する。
+- 全体条件にない項目（未知の条件）は `invalid`（`unknown` に項目の名前）。
+- 値の比較は `equals`（既定は JSON の文字列の一致）。日付や大文字と小文字を区別しない値などは、製品が比較の方法を渡す。
 
 ## 状態管理
 
@@ -262,7 +328,9 @@ const a = useAnalysisQuery<Filters>({
 // Cross-filtering と個別条件
 const cross = useCrossFilter({ resetKey: JSON.stringify(a.query.filters) })
 const sel = cross.forRegion("by-term")
-const scoped = sel ? scopeFilters(a.query.filters, { plans: [sel.value] }) : { status: "ready", filters: a.query.filters }
+const scoped = sel ? scopeFilters(a.query.filters, { plans: [sel.value] }) : { status: "ready", filters: a.query.filters, narrowed: [] }
+// conflict・invalid のときは取得しない（key を null にする）
+const scopedKey = a.key && scoped.status === "ready" ? JSON.stringify([a.key, scoped.filters]) : null
 ```
 
 プレビュー：`#/analysis-filters`、`#/analysis-app?page=retention`。

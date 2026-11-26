@@ -55,7 +55,7 @@ export function DataAnalysisSsrFixture() {
             <Metric label="粗利率" value={ready(Number.NaN)} format={{ style: "ratio" }} />
           </MetricGroup>
         </AnalysisRegion>
-        <button type="button" aria-pressed={cross.isSelected("plan", "standard")} onClick={() => cross.toggle({ source: "plan", field: "plan", value: "standard", label: "スタンダード" })} data-testid="ssr-cross">
+        <button type="button" aria-pressed={cross.isSelected("plan", "plan", "standard")} onClick={() => cross.toggle({ source: "plan", field: "plan", value: "standard", label: "スタンダード" })} data-testid="ssr-cross">
           スタンダードで絞り込む
         </button>
         <p data-testid="ssr-cross-state">{cross.forRegion("term")?.label ?? "選択なし"}</p>

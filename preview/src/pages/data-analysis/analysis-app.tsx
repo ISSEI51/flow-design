@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { BarChart3 } from "lucide-react"
 
 import { SidebarTrigger } from "@/components/ui/sidebar"
@@ -9,7 +9,9 @@ import { structureLabels, structureNav, structureSettingsItem, structureUser } f
 import { PlaceholderScreen } from "../app-structure/structure-screens"
 import { ProductMark, StructureSidebar } from "../app-structure/structure-sidebar"
 import { AccountDetailPage } from "./account-detail"
+import { analysisServer } from "../../data/data-analysis/analysis-server"
 import { AnalysisControls } from "./analysis-controls-panel"
+import { SessionProvider, defaultSession, type AnalysisSession } from "./analysis-session"
 import { appHref, readRoute } from "./analysis-route"
 import { BusinessDashboard } from "./business-dashboard"
 import { OperationsDashboard } from "./operations-dashboard"
@@ -53,6 +55,23 @@ export function AnalysisApp() {
   const [route, setRoute] = useState(readRoute)
   const [open, setOpen] = useState(true)
   const [reloadToken, setReloadToken] = useState(0)
+  // 製品側の状態（ワークスペース、権限、タイムゾーン、明細の件数の公開）。変わっても画面を作り直さず、
+  // 各領域の useBrowseData の scopeKey と取得の条件のキーで、前のデータを破棄・取得し直す。
+  const [session, setSessionState] = useState<AnalysisSession>(defaultSession)
+  const sessionValue = useMemo(
+    () => ({
+      session,
+      setSession: (patch: Partial<AnalysisSession>) =>
+        setSessionState((s) => {
+          const next = { ...s, ...patch }
+          analysisServer.role = next.role
+          analysisServer.hiddenCountPolicy = next.hiddenCountPolicy
+          analysisServer.timeZone = next.timeZone
+          return next
+        }),
+    }),
+    [session]
+  )
 
   useEffect(() => {
     const onHash = () => setRoute(readRoute())
@@ -81,6 +100,7 @@ export function AnalysisApp() {
   else body = <PlaceholderScreen title={labels[route.page] ?? "ページ"} />
 
   return (
+    <SessionProvider value={sessionValue}>
     <AppShell sidebarOpen={open} onSidebarOpenChange={setOpen}>
       <StructureSidebar
         groups={navFor(structureNav(false))}
@@ -113,5 +133,6 @@ export function AnalysisApp() {
         </AppShellMain>
       </AppShellBody>
     </AppShell>
+    </SessionProvider>
   )
 }

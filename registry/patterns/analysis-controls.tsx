@@ -9,6 +9,7 @@ import { addDays } from "date-fns"
 
 import { fromDateString, isBeforeDate, isValidDate, toDateString, type DateRange, type DateString } from "@/lib/date"
 import {
+  comparisonBasisLabels,
   comparisonLabels,
   comparisonRange,
   describeRange,
@@ -16,6 +17,7 @@ import {
   granularityOrder,
   relativePeriods,
   type AnalysisPeriod,
+  type ComparisonBasis,
   type ComparisonMode,
   type ComparisonRange,
   type Granularity,
@@ -189,6 +191,8 @@ function ComparisonSelect({
   disabledOptions = [],
   comparison,
   period,
+  basis,
+  context,
   customRange,
   onCustomRangeChange,
   label = "比較",
@@ -205,6 +209,9 @@ function ComparisonSelect({
   comparison: ComparisonRange
   /** 分析の対象の期間。渡すと、比較期間が重なる比較の条件を無効にする */
   period?: ResolvedPeriod
+  /** 比較の方式と、その判定に必要な値（useAnalysisQuery の comparisonBasis と context）。無効にする選択肢の判定に使う */
+  basis?: ComparisonBasis | null
+  context?: PeriodContext
   /** 期間を指定する比較（custom）の期間 */
   customRange?: { from: DateString; to: DateString } | null
   /** custom の期間を適用する。渡すと、options の custom で期間を入力できる */
@@ -219,7 +226,7 @@ function ComparisonSelect({
   const disabled = new Set(disabledOptions)
   // 分析の対象と重なる比較期間は、同じ日を両方で数えるため選べない（3 か月の期間の前月など）。
   if (period?.status === "ready") {
-    for (const m of options) if (m !== "custom" && m !== "none" && comparisonRange({ period, mode: m }).status === "invalid") disabled.add(m)
+    for (const m of options) if (m !== "custom" && m !== "none" && comparisonRange({ period, mode: m, basis: basis ?? undefined, context }).status === "invalid") disabled.add(m)
   }
   const items = options.map((o) => ({ value: o, label: comparisonLabels[o] }))
   const initialDraft = (): DateRange => ({ from: fromDateString(customRange?.from), to: fromDateString(customRange?.to) })
@@ -271,17 +278,27 @@ function ComparisonSelect({
         {comparison.status === "ready" ? (
           <>
             {describeRange(comparison.range, locale)}
-            {comparison.alignment === "same-elapsed" && "（同じ経過日数）"}
+            {/* 期間を指定した比較は、比較の方式でそろえた期間ではないため、方式の名前を示さない（長さが異なる場合は理由を示す） */}
+            {comparison.mode !== "custom" && comparison.basis !== "calendar" && `（${comparisonBasisLabels[comparison.basis]}）`}
+            {!comparison.fair && comparison.reason && <span className="block text-foreground" data-slot="comparison-unfair">{comparison.reason}</span>}
             {comparison.note && <span className="block">{comparison.note}</span>}
           </>
         ) : comparison.status === "invalid" ? (
-          comparison.reason === "overlap" ? (
-            "比較期間が分析の対象の期間と重なるため、比較できません"
-          ) : comparison.reason === "end-before-start" ? (
-            "比較の終了日が開始日より前です"
-          ) : (
-            "比較期間を指定してください"
-          )
+          <span className="text-foreground" data-slot="comparison-unavailable">
+            {
+              {
+                overlap: "比較期間が分析の対象の期間と重なるため、比較できません。比較の対象か期間を変えてください",
+                "end-before-start": "比較の終了日が開始日より前です。比較期間を指定し直してください",
+                missing: "比較期間を指定してください",
+                future: "比較期間に今日より後の日が含まれます。比較期間を指定し直してください",
+                "unknown-mode": "比較の対象が不正です。比較の対象を選び直してください",
+                "no-business-days": "分析の対象に営業日がないため、同じ営業日数で比べられません。比較の方式か期間を変えてください",
+                "as-of-required": "同じ経過時間で比べるには、集計済みの時刻が必要です。比較の方式を変えてください",
+                "invalid-time-zone": "集計のタイムゾーンが不正なため、比較できません",
+                "business-calendar-required": "同じ営業日数で比べるには、営業日のカレンダーが必要です。比較の方式を変えてください",
+              }[comparison.reason]
+            }
+          </span>
         ) : (
           "比較しません"
         )}

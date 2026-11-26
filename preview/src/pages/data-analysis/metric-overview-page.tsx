@@ -1,6 +1,7 @@
 import { useState } from "react"
 
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { compareValues, describeComparison } from "@/patterns/comparison"
 import type { Loadable } from "@/patterns/data-states"
 import { ComparisonValue, Metric, MetricDefinition, MetricGroup, MetricTarget, Sparkline } from "@/patterns/metric"
@@ -13,13 +14,13 @@ import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
 import { AppLink, DemoControls, DemoFrame, Mock, Radio, Rules } from "../data-browsing/doc-parts"
-import { analysisContext } from "./business-dashboard"
+import { analysisContext, analysisContextFor } from "./business-dashboard"
 import { countFormat, fmt, ratioFormat, ready, yenFormat } from "./analysis-parts"
 
 // Patterns / Data Analysis / Metric Overview の資料のページ。数値はすべて架空の記録（data-analysis/subscriptions.ts）から集計する。
 
 const period = resolvePeriod({ kind: "relative", id: "this-month" }, analysisContext) as Extract<ReturnType<typeof resolvePeriod>, { status: "ready" }>
-const comparison = comparisonRange({ period, mode: "previous-month" })
+const comparison = comparisonRange({ period, mode: "previous-month", context: analysisContextFor("Asia/Tokyo") })
 const full = fullPeriodOf(period, analysisContext)!
 const o = overviewData({ period, full, comparison, filters: defaultAnalysisFilters })
 
@@ -86,7 +87,8 @@ function FormatDemo() {
             </Radio>
           </DemoControls>
         </div>
-        <div className="max-w-full overflow-x-auto">
+        <div className="min-w-0 max-w-full">
+          <TableScrollArea>
           <Table>
             <TableCaption className="sr-only">数値の表記の例</TableCaption>
             <TableHeader>
@@ -114,7 +116,7 @@ function FormatDemo() {
                 )
               })}
             </TableBody>
-          </Table>
+          </Table></TableScrollArea>
         </div>
         <p className="text-caption text-muted-foreground">en-US の例は表記の確認のため、同じ数値をドルとして示している（為替の換算はしていない）。</p>
       </div>
@@ -159,8 +161,9 @@ function TargetDemo() {
         <Metric size="compact" label="売上（目標を超過）" value={ready(108_700_000)} format={yenFormat} target={<MetricTarget value={108_700_000} target={97_100_000} format={yenFormat} label="今月の目標" />} />
         <Metric size="compact" label="解約率（上限の目標）" value={ready(0.018)} format={ratioFormat} target={<MetricTarget value={0.018} target={0.015} direction="decrease" format={ratioFormat} label="月の上限" />} />
         <Metric size="compact" label="解約率（上限の内）" value={ready(0.006)} format={ratioFormat} target={<MetricTarget value={0.006} target={0.015} direction="decrease" format={ratioFormat} label="月の上限" elapsed={getPeriodElapsed(full, ANALYSIS_TODAY)} />} />
-        <Metric size="compact" label="目標が 0" value={ready(3)} format={countFormat("件")} target={<MetricTarget value={3} target={0} format={countFormat("件")} />} />
-        <Metric size="compact" label="目標がマイナス" value={ready(-120_000)} format={yenFormat} target={<MetricTarget value={-120_000} target={-500_000} format={yenFormat} />} />
+        <Metric size="compact" label="重大な障害（上限 0 件）" value={ready(3)} format={countFormat("件")} target={<MetricTarget value={3} target={0} direction="decrease" format={countFormat("件")} label="上限" />} />
+        <Metric size="compact" label="営業利益（損益 0 円の目標）" value={ready(120_000)} format={yenFormat} target={<MetricTarget value={120_000} target={0} format={yenFormat} />} />
+        <Metric size="compact" label="赤字の削減（−50万円まで）" value={ready(-1_200_000)} format={yenFormat} target={<MetricTarget value={-1_200_000} target={-500_000} format={yenFormat} />} />
         <Metric size="compact" label="目標が未設定" value={ready(52)} format={countFormat("件")} target={<MetricTarget value={52} target={null} format={countFormat("件")} />} />
       </MetricGroup>
     </DemoFrame>

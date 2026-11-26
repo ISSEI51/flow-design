@@ -2,18 +2,19 @@ import { useState } from "react"
 
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { comparisonRange, describeRange, resolvePeriod, type AnalysisPeriod } from "@/patterns/analysis-period"
 import { scopeFilters } from "@/patterns/analysis-query"
 import { drillPeriodFor, groupOther } from "@/patterns/drill-down"
 
 import { churnByRegion } from "../../data/data-analysis/analysis-model"
-import { defaultAnalysisFilters, planLabels, regionLabels, termLabels, type AnalysisFilters, type Plan, type Term } from "../../data/data-analysis/subscriptions"
+import { churnRateIn, defaultAnalysisFilters, planLabels, regionLabels, termLabels, type AnalysisFilters, type Plan, type Region, type Term } from "../../data/data-analysis/subscriptions"
 import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
 import { AppLink, DemoControls, DemoFrame, Mock, Radio, Rules } from "../data-browsing/doc-parts"
-import { countFormat, fmt } from "./analysis-parts"
-import { analysisContext } from "./business-dashboard"
+import { countFormat, fmt, ratioFormat } from "./analysis-parts"
+import { analysisContext, analysisContextFor } from "./business-dashboard"
 
 // Patterns / Data Analysis / Drill-down の資料のページ。
 
@@ -67,7 +68,7 @@ function HierarchyDemo() {
           </BreadcrumbList>
         </Breadcrumb>
         <p className="text-ui" data-testid="dd-conditions">
-          {scoped.status === "conflict" ? (
+          {scoped.status !== "ready" ? (
             <span className="text-destructive">選んだ対象が全体の条件（契約期間：{termLabels[globalTerm!]}）に含まれません。条件を上書きせず、対象がないことを示す。</span>
           ) : (
             <>
@@ -88,7 +89,7 @@ function SeriesDemo() {
   const [series, setSeries] = useState<"current" | "baseline">("current")
   const period: AnalysisPeriod = { kind: "relative", id: "this-month" }
   const current = resolvePeriod(period, analysisContext)
-  const comparison = current.status === "ready" ? comparisonRange({ period: current, mode: "previous-year" }) : ({ status: "none" } as const)
+  const comparison = current.status === "ready" ? comparisonRange({ period: current, mode: "previous-year", context: analysisContextFor("Asia/Tokyo") }) : ({ status: "none" } as const)
   const next = drillPeriodFor(series, { period, comparison, current })
   return (
     <DemoFrame testId="dd-series">
@@ -114,15 +115,22 @@ function SeriesDemo() {
 function OtherDemo() {
   const range = { from: new Date(2025, 10, 1), to: new Date(2026, 9, 31) }
   const rows = churnByRegion({ range, filters: defaultAnalysisFilters })
-  const { groups } = groupOther(rows, { limit: 3, key: (r) => r.key, label: (r) => regionLabels[r.key], value: (r) => r.churned })
+  // 件数は加算できる（sum）。解約率は加算できないため、「その他」の地域の契約から再集計する（解約した件数 ÷ 期首の件数）
+  const byCount = groupOther(rows, { limit: 3, key: (r) => r.key, label: (r) => regionLabels[r.key], value: (r) => r.churned, aggregate: "sum" })
+  const otherRegions = (byCount.groups.find((g) => g.kind === "other") as { members: string[] } | undefined)?.members ?? []
+  const otherRate = otherRegions.length ? churnRateIn(range, { ...defaultAnalysisFilters, regions: otherRegions as Region[] }) : null
+  const rateOf = (g: (typeof byCount.groups)[number]) => (g.kind === "other" ? otherRate : (g.item.rate ?? null))
+  const groups = byCount.groups
   return (
-    <div className="max-w-full overflow-x-auto" data-testid="dd-other">
+    <div className="min-w-0 max-w-full" data-testid="dd-other">
+      <TableScrollArea>
       <Table>
-        <TableCaption>地域別の解約した企業（{describeRange(range)}）。上位 3 地域と「その他」</TableCaption>
+        <TableCaption>地域別の解約した企業（{describeRange(range)}）。上位 3 地域と「その他」。「その他」の件数は合計、解約率は含まれる地域の契約から再集計した値（地域の解約率の合計ではない）</TableCaption>
         <TableHeader>
           <TableRow>
             <TableHead>地域</TableHead>
             <TableHead align="right">解約した企業</TableHead>
+            <TableHead align="right">解約率</TableHead>
             <TableHead>詳細に引き継ぐ条件</TableHead>
           </TableRow>
         </TableHeader>
@@ -133,13 +141,16 @@ function OtherDemo() {
               <TableCell align="right" className="tabular-nums">
                 {fmt(g.value, countFormat("社"))}
               </TableCell>
+              <TableCell align="right" className="tabular-nums" data-testid={g.kind === "other" ? "dd-other-rate" : undefined}>
+                {fmt(rateOf(g), ratioFormat)}
+              </TableCell>
               <TableCell className="text-muted-foreground" data-testid={g.kind === "other" ? "dd-other-members" : undefined}>
                 地域：{g.kind === "other" ? g.members.map((m) => regionLabels[m as keyof typeof regionLabels]).join("、") : g.label}
               </TableCell>
             </TableRow>
           ))}
         </TableBody>
-      </Table>
+      </Table></TableScrollArea>
     </div>
   )
 }

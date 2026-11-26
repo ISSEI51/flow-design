@@ -40,8 +40,11 @@ type FormattedValue = {
   exactText: string
   /** 省略や丸めで、表示した値が実際の値と異なる */
   approximate: boolean
-  /** 表示の部品。数値と単位の大きさを変えて描画するときに使う */
-  parts: { approximate: string; prefix: string; number: string; suffix: string }
+  /**
+   * 表示の部品。数値と単位の大きさを変えて描画するときに使う。
+   * sign はマイナスの符号（−）。signBeforePrefix が true なら prefix（通貨記号）の前に置く（−$1.2M）
+   */
+  parts: { approximate: string; sign: string; signBeforePrefix: boolean; prefix: string; number: string; suffix: string }
 }
 
 const MINUS = "−" // 表示用のマイナス記号（−）。ハイフン（-）と区別する
@@ -54,18 +57,22 @@ function defaultApproximateLabel(locale: string) {
   return locale.toLowerCase().startsWith("ja") ? "約" : "~"
 }
 
-type Parts = { prefix: string; number: string; suffix: string }
+type Parts = { sign: string; signBeforePrefix: boolean; prefix: string; number: string; suffix: string }
 
 // Intl.NumberFormat の部品を、前（通貨記号）、数値（符号、整数、小数、省略の単位）、後ろ（%、単位）に分ける。
 function split(nf: Intl.NumberFormat, value: number, compactInNumber: boolean): Parts {
   let prefix = ""
   let number = ""
   let suffix = ""
+  let sign = ""
+  let signBeforePrefix = false
   let seenNumber = false
   for (const p of nf.formatToParts(value)) {
     switch (p.type) {
       case "minusSign":
-        number += MINUS
+        // 符号の位置はロケールに従う（en-US の通貨は −$1.2M、de-DE は −1,2 Mio. €）
+        sign = MINUS
+        signBeforePrefix = prefix === ""
         break
       case "plusSign":
       case "integer":
@@ -96,7 +103,22 @@ function split(nf: Intl.NumberFormat, value: number, compactInNumber: boolean): 
         else prefix += p.value
     }
   }
-  return { prefix, number, suffix }
+  return { sign, signBeforePrefix, prefix, number, suffix }
+}
+
+const joinParts = (p: Parts, unit = "") => `${p.signBeforePrefix ? p.sign : ""}${p.prefix}${p.signBeforePrefix ? "" : p.sign}${p.number}${p.suffix}${unit}`
+
+function assertFormat(format: MetricFormat) {
+  const digits = (v: number | undefined, min: number, max: number, name: string) => {
+    if (v !== undefined && (!Number.isInteger(v) || v < min || v > max)) throw new RangeError(`formatMetricValue: ${name} は ${min}〜${max} の整数にしてください（${v}）`)
+  }
+  digits(format.maximumFractionDigits, 0, 20, "maximumFractionDigits")
+  digits(format.minimumFractionDigits, 0, 20, "minimumFractionDigits")
+  digits(format.significantDigits, 1, 21, "significantDigits")
+  if (format.compactFrom !== undefined && !(Number.isFinite(format.compactFrom) && format.compactFrom >= 0)) throw new RangeError(`formatMetricValue: compactFrom は 0 以上の数にしてください（${format.compactFrom}）`)
+  if (format.minimumFractionDigits !== undefined && format.maximumFractionDigits !== undefined && format.minimumFractionDigits > format.maximumFractionDigits)
+    throw new RangeError("formatMetricValue: minimumFractionDigits が maximumFractionDigits より大きくなっています")
+  if (format.style === "currency" && !format.unit && !format.currency) throw new RangeError("formatMetricValue: 通貨（style: \"currency\"）には currency か unit を指定してください")
 }
 
 /**
@@ -105,6 +127,9 @@ function split(nf: Intl.NumberFormat, value: number, compactInNumber: boolean): 
  */
 function formatMetricValue(value: number | null | undefined, format: MetricFormat = {}): FormattedValue | null {
   if (!isFiniteNumber(value)) return null
+  // 不正な書式の設定は、誤った表示にせず RangeError にする（製品の設定の誤り）
+  assertFormat(format)
+  if (Object.is(value, -0)) value = 0
   const locale = format.locale ?? "ja-JP"
   const style = format.style ?? "number"
   const useCurrency = style === "currency" && !format.unit && Boolean(format.currency)
@@ -119,25 +144,37 @@ function formatMetricValue(value: number | null | undefined, format: MetricForma
     // "always"：省略表記でも 3 桁ごとに区切る（3,680万）。TypeScript の ES2022 の型は boolean だけを持つ
     useGrouping: "always" as unknown as boolean,
   }
-  const exactFormat = new Intl.NumberFormat(locale, { ...common, maximumFractionDigits, minimumFractionDigits })
+  let exactFormat: Intl.NumberFormat
+  try {
+    exactFormat = new Intl.NumberFormat(locale, { ...common, maximumFractionDigits, minimumFractionDigits })
+  } catch (e) {
+    throw new RangeError(`formatMetricValue: 書式の設定が不正です（${(e as Error).message}）`)
+  }
   const unit = format.unit ?? ""
   const exactParts = split(exactFormat, value, true)
-  const exactText = `${exactParts.prefix}${exactParts.number}${exactParts.suffix}${unit}`
+  const exactText = joinParts(exactParts, unit)
+  // 省略前の正確な値。有効数字 15 桁まで（浮動小数点の誤差を示さず、小数も失わない）
+  const full = new Intl.NumberFormat(locale, { ...common, maximumSignificantDigits: 15 })
+  const fullText = joinParts(split(full, value, true), unit)
 
   if (!compact) {
-    // 丸めによって値が変わる場合は approximate にし、正確な値（有効数字 15 桁。浮動小数点の誤差を表示しない）を示せるようにする。
-    const full = new Intl.NumberFormat(locale, { ...common, maximumSignificantDigits: 15 })
-    const fullParts = split(full, value, true)
-    const fullText = `${fullParts.prefix}${fullParts.number}${fullParts.suffix}${unit}`
-    const scale = 10 ** (maximumFractionDigits + (style === "ratio" ? 2 : 0))
+    // 丸めによって値が変わる場合は approximate にし、正確な値（fullText）を示せるようにする。
+    const fractionDigits = maximumFractionDigits + (style === "ratio" ? 2 : 0)
+    const scale = 10 ** fractionDigits
     const rounded = Math.round(value * scale) / scale
-    const approximate = Math.abs(rounded - value) > Math.abs(value) * 1e-12
-    // 0 ではない値が、丸めて 0 になる場合は「0.1%未満」のように示し、実際の 0 と区別する。
+    // number 型の精度（約 15〜17 桁）を超える桁数では、丸めの有無を判定できないため approximate にしない
+    const approximate = fractionDigits <= 15 && Number.isFinite(rounded) && Math.abs(rounded - value) > Math.abs(value) * 1e-12
+    // 0 ではない値が、丸めて 0 になる場合は、実際の 0 と区別する。正の値は「0.1%未満」、負の値は「−0.1〜0%」と示す
+    // （「−0.1%未満」は文字どおりには −0.1% より小さい値を意味するため、負の値には使わない）。
     if (value !== 0 && rounded === 0) {
       const minUnit = 1 / scale
-      const minParts = split(exactFormat, value < 0 ? -minUnit : minUnit, true)
-      const text = `${minParts.prefix}${minParts.number}${minParts.suffix}${unit}未満`
-      return { text, exactText: fullText, approximate: true, parts: { approximate: "", prefix: minParts.prefix, number: minParts.number, suffix: `${minParts.suffix}${unit}未満` } }
+      const minParts = split(exactFormat, minUnit, true)
+      if (value > 0) {
+        const text = `${joinParts(minParts, unit)}未満`
+        return { text, exactText: fullText, approximate: true, parts: { approximate: "", ...minParts, suffix: `${minParts.suffix}${unit}未満` } }
+      }
+      const text = `${MINUS}${minParts.prefix}${minParts.number}〜0${minParts.suffix}${unit}`
+      return { text, exactText: fullText, approximate: true, parts: { approximate: "", sign: MINUS, signBeforePrefix: true, prefix: minParts.prefix, number: `${minParts.number}〜0`, suffix: `${minParts.suffix}${unit}` } }
     }
     return {
       text: exactText,
@@ -149,17 +186,17 @@ function formatMetricValue(value: number | null | undefined, format: MetricForma
 
   const digits = format.significantDigits ?? 3
   const short = new Intl.NumberFormat(locale, { ...common, notation: "compact", maximumSignificantDigits: digits })
-  const precise = new Intl.NumberFormat(locale, { ...common, notation: "compact", maximumSignificantDigits: 21 })
+  const precise = new Intl.NumberFormat(locale, { ...common, notation: "compact", maximumSignificantDigits: 15 })
   const shortParts = split(short, value, false)
   const preciseParts = split(precise, value, false)
   const approximate = shortParts.number !== preciseParts.number || shortParts.suffix !== preciseParts.suffix
   const approx = approximate ? (format.approximateLabel ?? defaultApproximateLabel(locale)) : ""
   const suffix = `${shortParts.suffix}${unit}`
   return {
-    text: `${approx}${shortParts.prefix}${shortParts.number}${suffix}`,
-    exactText: `${exactParts.prefix}${exactParts.number}${exactParts.suffix}${unit}`,
+    text: `${approx}${joinParts(shortParts)}${unit}`,
+    exactText: approximate ? fullText : exactText,
     approximate,
-    parts: { approximate: approx, prefix: shortParts.prefix, number: shortParts.number, suffix },
+    parts: { approximate: approx, ...shortParts, suffix },
   }
 }
 

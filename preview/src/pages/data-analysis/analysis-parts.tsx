@@ -13,6 +13,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { compareValues, formatDifference, type EvaluationDirection } from "@/patterns/comparison"
 import { formatMetricValue, type MetricFormat } from "@/patterns/metric-format"
 import { ComparisonValue } from "@/patterns/metric"
@@ -192,7 +193,7 @@ export function ComparisonTable({
     return { ...r.format, notation: notation === "compact" || big ? "compact" : "standard" }
   }
   return (
-    <div className="max-w-full overflow-x-auto" data-testid={testId}>
+    <TableScrollArea className="max-w-full" data-testid={testId}>
       <Table>
         <TableCaption className="sr-only">{caption}</TableCaption>
         <TableHeader>
@@ -232,7 +233,7 @@ export function ComparisonTable({
           ))}
         </TableBody>
       </Table>
-    </div>
+    </TableScrollArea>
   )
 }
 

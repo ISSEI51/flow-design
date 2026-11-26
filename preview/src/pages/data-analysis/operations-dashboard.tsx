@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { AnalysisRegion } from "@/patterns/analysis-region"
 import { useBrowseData } from "@/patterns/browse-data"
 import { Metric, MetricGroup } from "@/patterns/metric"
@@ -187,7 +188,7 @@ export function OperationsDashboard() {
         </AnalysisRegion>
 
         <AnalysisRegion title="サービスごとの状態" divider status="ready" data-testid="ops-services">
-          <div className="max-w-full overflow-x-auto">
+          <TableScrollArea className="max-w-full">
             <Table>
               <TableCaption className="sr-only">サービスごとの状態</TableCaption>
               <TableHeader>
@@ -227,7 +228,7 @@ export function OperationsDashboard() {
                 })}
               </TableBody>
             </Table>
-          </div>
+          </TableScrollArea>
         </AnalysisRegion>
 
         <AnalysisRegion

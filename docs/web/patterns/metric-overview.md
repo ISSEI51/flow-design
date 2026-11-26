@@ -2,7 +2,7 @@
 
 現在の状況を、判断に必要な指標の名前と値から伝える。
 
-状態：初期実装（レビュー前） ・ 実装：[`registry/patterns/metric.tsx`](../../../registry/patterns/metric.tsx)、[`metric-format.ts`](../../../registry/patterns/metric-format.ts)、[`comparison.ts`](../../../registry/patterns/comparison.ts) ・ 全体：[Data Analysis](data-analysis.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/metric.tsx`](../../../registry/patterns/metric.tsx)、[`metric-format.ts`](../../../registry/patterns/metric-format.ts)、[`comparison.ts`](../../../registry/patterns/comparison.ts) ・ 全体：[Data Analysis](data-analysis.md)
 
 ## 目的
 
@@ -77,7 +77,15 @@
 - 省略で値が変わる場合だけ「約」（`approximateLabel`、ja 以外は「~」）を付ける。
 - 割合（`style: "ratio"`）の値は、常に 0〜1 で受け取る。0〜100 の値を渡さない。
 - マイナスは表示用のマイナス記号（−、U+2212）にする。
-- 0 でない値が丸めて 0 になる場合は「0.1%未満」のように示し、実際の 0 と区別する。正確な値（`exactText`）は有効数字 15 桁までにし、浮動小数点の誤差（30.000000000000004%）を示さない。
+- 0 でない値が丸めて 0 になる場合は、正の値は「0.1%未満」、負の値は「−0.1〜0%」と示し、実際の 0 と区別する。−0 は 0 と示す。
+- 不正な書式は RangeError：小数の桁（0〜20）、有効数字（1〜21）、`minimumFractionDigits` が `maximumFractionDigits` より大きい、負の `compactFrom`、不正なロケール、`currency` も `unit` もない通貨（`style: "currency"`）。
+- マイナスの符号の位置はロケールに従う（en-US の通貨は「−$1.23M」、de-DE は「−1,23 Mio. €」）。`parts.sign` と `parts.signBeforePrefix` で、通貨記号との順序を保って描く。
+- 不正な書式の設定（小数の桁が 0〜20 の外、不正なロケール、負の `compactFrom`）は RangeError にする（誤った表示にしない）。
+- 割合（`style: "ratio"`）は 1 を 100% とする尺度で受け取る。値を 0〜1 に制限する仕様とは区別する（成長率などはマイナスや 100% 超になる）。値の範囲の検証（解約率は 0〜1 など）は、製品の指標の定義に従う。
+
+#### 数値の精度
+
+値は JavaScript の number（倍精度の浮動小数点）で扱う。整数は ±9,007,199,254,740,991（`Number.MAX_SAFE_INTEGER`）まで正確で、それを超える整数は最も近い表せる値になる（9,007,199,254,740,993 は 9,007,199,254,740,992）。小数は約 15〜17 桁の精度。`exactText` は有効数字 15 桁までを示し、浮動小数点の誤差（30.000000000000004%）を示さない。厳密な金融の計算（小数の通貨の端数処理、任意の精度）は製品の責務とし、この部品の値を会計の正本にしない。正確な値（`exactText`）は有効数字 15 桁までにし、浮動小数点の誤差（30.000000000000004%）を示さない。
 - NaN、Infinity、null、undefined は `null` を返す。`MetricValue` は「算出できません」「データなし」などの文字にする。
 - ロケール、通貨、単位、桁数、省略の閾値は製品が指定する。
 - 同じ表の同じ列では、省略表記と通常の表記を混在させない（プレビューの `ComparisonTable` の `notation`）。
@@ -92,7 +100,7 @@
 - 増減の向き（`change`）と、業務上の評価（`evaluation`）を分ける。評価の方向（`direction`：`increase`、`decrease`、`neutral`）は製品が指標ごとに定義する。
 - 向きは矢印（↗ ↘ →）と符号、評価は色（`success`、`destructive`、`muted-foreground`）で示す。色だけで伝えない。
 - 減少が望ましい指標は、向きと評価が逆になるため、評価の文字（「改善」「悪化」）も表示する（`evaluationLabel="auto"`）。読み上げには常に向きと評価を含める（「+7.0%（増加、改善）」）。
-- 変化がない場合は「変化なし」と示す。丸めると 0 になるが実際は 0 でない差は「+0.1pt未満」と示す。
+- 変化がない場合は「変化なし」と示す。丸めると 0 になるが実際は 0 でない差は「+0.1pt未満」「−0.1〜0pt」と示す。目標との差（`MetricTarget`）も、丸めると 0 になる差を「0.0pt」と示さない（「あと 0.1pt未満」）。
 - 比較値は Period Comparison と同じ関数で計算し、表示する（[period-comparison.md](period-comparison.md)）。
 
 ### 目標（`getTargetProgress`、`MetricTarget`）
@@ -104,7 +112,7 @@
 - 減少が望ましい指標（`direction: "decrease"`）は上限の目標として示す。割合の割合（「上限 1.5% に対して 42.6%」）を示さず、現在値と上限を同じ単位の差で示す（「月の上限 1.5%まで あと 0.9pt」「月の上限 1.5%を 0.3pt 超過」）。
 - 途中の期間の値を期間の全体の目標と比べる場合（今月の解約率と月の上限など）は、期間の経過を必ず併記する。月の初めほど、目標から遠く、上限の内に見えるため。
 - 目標と期間の経過は、期間が暦の単位（月、四半期、年度）と一致する場合だけ示す。9/1〜11/25 のように単位と一致しない期間では、どの目標と比べるかが決まらないため示さない（`fullPeriodOf` が `null`）。
-- 目標値が 0、マイナス、欠損の場合は割合を算出せず、理由を示す。
+- 達成率を算出できることと、目標を達成したかを判定できることを分ける（`getTargetProgress` の `ratio` と `met`）。目標値が 0 や負の場合（エラー 0 件の上限、損益 0 円の目標、赤字を −50 万円まで減らす目標）は、割合を算出せず（`ratio: null`、バーを描かない）、達成・未達と実数の差（「3件 超過」「あと 700,000円」）を示す。目標値が欠損の場合は「目標が設定されていません」。
 
 ### Sparkline
 
@@ -133,7 +141,7 @@
 | 実際の 0 | `{ status: "ready", value: 0 }` | 0円 |
 | 欠損 | `{ status: "ready", value: null }` | データなし（`emptyLabel`） |
 | 初回の読み込み | `{ status: "loading" }` | 数値と同じ高さの Skeleton、`aria-busy` |
-| 再取得中 | 前の値 | 領域（`AnalysisRegion`）を薄くし「更新中」 |
+| 再取得中 | 前の値 | 領域（`AnalysisRegion`）の見出しの右に「更新中」と表示中の結果の条件（値は薄くしない） |
 | 取得失敗 | `{ status: "unavailable" }` | 取得できません |
 | 古いデータ | 前の値と `status={{ kind: "stale", text: "14:32 の時点の値" }}` | 値と時刻 |
 | 未確定 | 値と `status={{ kind: "provisional", text: "途中経過" }}` | 値と「途中経過」 |
