@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 
-import type { BulkSummary } from "@/patterns/bulk-selection"
+import type { BulkIntegrity, BulkSummary } from "@/patterns/bulk-selection"
 
 // Flow Design Bulk Actions（Patterns / Data Browsing）
 // 一括操作の実行中の表示と、結果の表示。選択と実行の状態は bulk-selection.ts（useBulkSelection、useBulkAction）。
@@ -54,6 +54,39 @@ function BulkRunStatus({
 // - 完了、失敗、結果が不明の件数を分けて示す。
 // - 失敗した行は、名前と理由を示し、失敗した行だけを再試行できる（再試行できない失敗は対象から除く）。
 // - 結果が不明な行は、再試行のボタンを置かない。最新の状態の確認を促す（重複して実行しないため）。
+// 結果と対象の照合で見つかった不足と矛盾。件数に含めなかった結果と、その理由を示す。
+function IntegrityNote({ integrity, advice, label }: { integrity: BulkIntegrity; advice: boolean; label: (id: string) => string }) {
+  const lines: string[] = []
+  // 結果が返らなかった行は、結果が不明な行の説明（BulkResultAlert）に含める。ここでは繰り返さない。
+  if (integrity.countChanged && integrity.expectedCount !== null && integrity.confirmedCount !== null)
+    lines.push(`選択したときは ${n(integrity.expectedCount)}でしたが、実行の時点では ${n(integrity.confirmedCount)}が対象になりました`)
+  if (integrity.unreported !== null && integrity.unreported > 0 && integrity.confirmedCount !== null)
+    lines.push(`対象の ${n(integrity.confirmedCount)}のうち、${n(integrity.unreported)}は結果が返されませんでした`)
+  if (integrity.confirmedCount === null && integrity.unreported === null)
+    lines.push("サーバーが処理の対象の件数を返さなかったため、すべての行が処理されたかを確認できません")
+  if (integrity.overReported > 0) lines.push(`対象の件数より ${n(integrity.overReported)}多い結果を受け取りました`)
+  if (integrity.duplicates > 0) lines.push(`同じ行の結果を重ねて ${n(integrity.duplicates)}受け取りました（件数に含めていません）`)
+  if (integrity.unexpected > 0) {
+    const names = integrity.unexpectedIds.slice(0, 3).map(label).join("、")
+    const more = integrity.unexpectedIds.length > 3 ? ` ほか ${n(integrity.unexpectedIds.length - 3)}` : ""
+    lines.push(
+      `対象ではない行の結果を ${n(integrity.unexpected)}受け取りました（${names}${more}）。件数には含めていませんが、これらの行が変更された可能性があります`
+    )
+  }
+  if (integrity.invalid > 0) lines.push(`形式が正しくない結果を ${n(integrity.invalid)}受け取りました（件数に含めていません）`)
+  if (lines.length === 0) return advice ? <p data-slot="bulk-result-integrity">最新の状態を確認してから、必要な行だけをもう一度操作してください。</p> : null
+  return (
+    <div data-slot="bulk-result-integrity" className="flex flex-col gap-1">
+      <ul className="flex list-disc flex-col gap-1 ps-5">
+        {lines.map((l) => (
+          <li key={l}>{l}</li>
+        ))}
+      </ul>
+      {advice && <p>最新の状態を確認してから、必要な行だけをもう一度操作してください。</p>}
+    </div>
+  )
+}
+
 function BulkResultAlert({
   summary,
   getItemLabel,
@@ -76,7 +109,7 @@ function BulkResultAlert({
   maxItems?: number
   className?: string
 }) {
-  const { action, succeeded, failed, unknown, requestError } = summary
+  const { action, succeeded, failed, unknown, requestError, integrity } = summary
   const label = (id: string) => getItemLabel?.(id) ?? id
   const retryable = failed.filter((i) => i.retryable !== false)
   const total = succeeded.length + failed.length + unknown.length
@@ -89,8 +122,12 @@ function BulkResultAlert({
       requestError.outcome === "unknown"
         ? `${action}の結果を確認できませんでした`
         : `${action}を実行できませんでした`
-  } else if (failed.length === 0 && unknown.length === 0) {
+  } else if (failed.length === 0 && unknown.length === 0 && integrity.complete) {
     title = `${n(succeeded.length)}の${action}が完了しました`
+  } else if (failed.length === 0 && unknown.length === 0) {
+    // 完了の結果だけが返ったが、結果が対象と一致しない（件数が確かめられない、重複、対象外、形式の誤り）。
+    variant = "warning"
+    title = `${n(succeeded.length)}の${action}の完了を受け取りました。結果を確認できない部分があります`
   } else if (succeeded.length === 0 && unknown.length === 0) {
     variant = "destructive"
     title = `${n(failed.length)}の${action}がすべて失敗しました`
@@ -153,9 +190,12 @@ function BulkResultAlert({
             {failed.length <= maxItems && <p>失敗した行は選択したままにしています。</p>}
           </div>
         )}
+        {/* 結果が不明な行の説明（下）と、同じ案内を重ねない */}
+        {integrity.reconciled && !integrity.complete && <IntegrityNote integrity={integrity} label={label} advice={unknown.length === 0} />}
         {unknown.length > 0 && (
           <p data-slot="bulk-result-unknown">
-            {n(unknown.length)}は、処理されたかを確認できませんでした。重複して実行しないよう、選択を解除しています。最新の状態を確認してから、必要な行だけをもう一度操作してください。
+            {n(unknown.length)}は、処理されたかを確認できませんでした
+            {integrity.missing > 0 && `（うち ${n(integrity.missing)}は、結果が返されませんでした）`}。重複して実行しないよう、選択を解除しています。最新の状態を確認してから、必要な行だけをもう一度操作してください。
           </p>
         )}
       </AlertDescription>
@@ -171,7 +211,7 @@ function BulkResultAlert({
             もう一度実行
           </Button>
         )}
-        {onCheckLatest && (unknown.length > 0 || requestError?.outcome === "unknown") && (
+        {onCheckLatest && (unknown.length > 0 || requestError?.outcome === "unknown" || (integrity.reconciled && !integrity.complete)) && (
           <Button variant="secondary" size="sm" onClick={onCheckLatest}>
             最新の状態を確認
           </Button>

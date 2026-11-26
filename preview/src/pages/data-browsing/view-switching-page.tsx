@@ -5,7 +5,7 @@ import { CalendarDays, Kanban, LayoutGrid, List, Table2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DataTable, DataTablePagination, DataTableSearch, dataTableDefaults, dataTableFeatures } from "@/components/ui/data-table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { TableScrollArea } from "@/patterns/table-scroll-area"
+import { HorizontalScrollArea, TableScrollArea } from "@/patterns/table-scroll-area"
 import { ViewSwitcher, ViewSwitcherMenu, useViewScopedState, type ViewOption } from "@/patterns/view-switcher"
 
 import { customers, formatDate, statusLabel, statusOptions, type ContractStatus } from "../../data/data-display/customers"
@@ -125,7 +125,8 @@ function FiveViewsDemo() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex gap-4 overflow-x-auto pb-2">
+              <HorizontalScrollArea contentClassName="pb-2">
+              <div className="flex w-max gap-4">
                 {groups.map((g) => (
                   <div key={g.key} className="flex w-56 shrink-0 flex-col gap-2 rounded-md bg-muted p-3">
                     <h3 className="text-ui font-semibold">
@@ -147,6 +148,7 @@ function FiveViewsDemo() {
                   </div>
                 ))}
               </div>
+              </HorizontalScrollArea>
             </div>
           )}
           {view === "calendar" && (

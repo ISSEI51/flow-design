@@ -2,7 +2,7 @@
 
 データの読み込み、再取得、未登録、検索結果 0件、取得失敗、部分的な失敗を区別して伝える。
 
-状態：初期実装 ・ 実装：[`registry/patterns/browse-data.ts`](../../../registry/patterns/browse-data.ts)、[`registry/patterns/data-states.tsx`](../../../registry/patterns/data-states.tsx) ・ 全体：[Data Browsing](data-browsing.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/browse-data.ts`](../../../registry/patterns/browse-data.ts)、[`registry/patterns/data-states.tsx`](../../../registry/patterns/data-states.tsx) ・ 全体：[Data Browsing](data-browsing.md)
 
 ## 目的
 
@@ -113,12 +113,28 @@
 | --- | --- |
 | `status` | `idle`（`enabled: false`）、`loading`、`refreshing`、`ready`、`error` |
 | `data`、`dataKey` | 表示するデータと、そのデータの条件のキー |
-| `isCurrent` | `data` が現在の条件の結果として確定している |
-| `refreshFailed`、`error` | 同じ条件の再取得の失敗と、最新の要求の失敗 |
+| `isCurrent` | `data` が現在の条件の結果として表示できる。同じ条件の再取得に失敗した場合も `true` |
+| `canOperate` | `data` に依存する変更の操作を受け付けてよい。現在の条件の結果で、かつ最新の取得に成功している（再取得中、取得失敗、同じ条件の再取得の失敗では `false`） |
+| `refreshFailed`、`error` | 同じ条件の再取得の失敗と、最新の要求の失敗（現在のスコープのもの） |
 | `fetchedAt` | 取得した時刻（`Date.now()`）。サーバーで描画した値には含まれない |
 | `reload()`、`setData()` | 同じ条件での再取得、保存の結果の反映 |
 | `keepPreviousData` | 条件が変わったときに前のデータを残すか。一覧は `true`（既定）、詳細の別のレコードは `false` |
 | `initialData` | サーバーで描画したデータや、一覧に戻ったときに製品が保持していたデータ |
+
+表示と操作を分ける。
+
+- 表示には `data` と `status`、確定した件数と読み上げには `isCurrent` を使う。
+- 一括操作、行の削除、編集の開始など、表示中のデータに依存する変更の操作には `canOperate` を使う。`isCurrent` や `status === "ready"` だけで操作を許さない（同じ条件の再取得に失敗した場合、どちらも成り立つ）。Data Table には `locked={!data.canOperate}` を渡す。
+- 異なる条件のデータ（再取得中の前の条件のデータ）を、現在の条件の確定した結果として表示しない（件数を薄い色にする、読み上げない）。操作の対象にも使わない。
+
+競合と境界：
+
+- 古い要求の応答は、成功・失敗のどちらも反映しない（要求ごとの番号）。`AbortSignal` を無視する取得の処理でも同じ。
+- 条件を変えて新しい要求を送る前の描画でも、前の条件の状態を返さない（最後に送った要求のキー `requestKey`）。
+- スコープ（`scopeKey`）が変わったら、取得しない間（`enabled: false`）も含めて、同じ描画から前のスコープのデータを返さない。ワークスペースを A → B → A と素早く切り替えた場合も、最後の A の要求の結果だけを反映する。
+- アンマウントの後に届いた応答は反映しない。`AbortSignal` はクライアントの待機の中止であり、サーバーでの処理の取り消しを保証しない。
+
+ページ番号は Data Browsing の確定した仕様に従う（[data-browsing.md](data-browsing.md#ページ番号)）。同じ条件の再取得（`reload`）では、現在のページを維持する。
 
 `getBrowseViewState({ status, count, filtered })` は、Table 以外の表示形式で、表示する内容（`loading`、`refreshing`、`ready`、`empty`、`no-results`、`error`）を決める。
 
@@ -162,7 +178,8 @@ const data = useBrowseData({
 )}
 <DataRefreshIndicator active={data.status === "refreshing"} />
 <LoadingReveal loading={data.status === "loading"}>
-  <DataTable table={table} status={data.status === "idle" ? "loading" : data.status} loadingRowCount={pageSize} … />
+  {/* 行の選択と行の操作は、最新の取得に成功している間だけ受け付ける */}
+  <DataTable table={table} status={data.status === "idle" ? "loading" : data.status} locked={!data.canOperate} loadingRowCount={pageSize} … />
 </LoadingReveal>
 ```
 

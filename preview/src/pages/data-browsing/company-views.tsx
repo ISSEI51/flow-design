@@ -8,6 +8,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import { getBrowseViewState, useBrowseData } from "@/patterns/browse-data"
 import { DataRefreshIndicator, DataRegionError, LoadingReveal } from "@/patterns/data-states"
+import { HorizontalScrollArea } from "@/patterns/table-scroll-area"
 
 import { formatDate, formatYen, statusLabel, type Customer } from "../../data/data-display/customers"
 import { listBoard, listRenewals, type CompanyQuery } from "../../data/data-browsing/company-server"
@@ -82,7 +83,9 @@ export function BoardView({ workspace, query, filtered, activeId, onOpen, onClea
         <ViewMessage state={state} onClearAll={onClearAll} />
       ) : (
         <LoadingReveal loading={data.status === "loading"}>
-          <div className="-mx-1 flex gap-4 overflow-x-auto overscroll-x-contain px-1 pb-2">
+          {/* 列が領域に収まらない場合だけ、スクロールできる方向の端に影を表示する */}
+          <HorizontalScrollArea data-testid={`${testId}-scroll`} contentClassName="pb-2">
+          <div className="flex w-max gap-4">
             {(data.data ?? (["trial", "active", "paused", "cancelled"] as const).map((status) => ({ status, total: 0, rows: [] as Customer[] }))).map((col) => (
               <div key={col.status} className="flex w-64 shrink-0 flex-col gap-3 rounded-md bg-muted p-3" data-testid={`${testId}-${col.status}`}>
                 <h3 className="flex items-baseline justify-between gap-2 text-ui font-semibold">
@@ -121,6 +124,7 @@ export function BoardView({ workspace, query, filtered, activeId, onOpen, onClea
               </div>
             ))}
           </div>
+          </HorizontalScrollArea>
         </LoadingReveal>
       )}
     </section>

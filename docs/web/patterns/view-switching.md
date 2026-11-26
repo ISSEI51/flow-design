@@ -2,7 +2,7 @@
 
 同じデータを、作業の目的に合う表示形式で見る。
 
-状態：初期実装 ・ 実装：[`registry/patterns/view-switcher.tsx`](../../../registry/patterns/view-switcher.tsx) ・ 全体：[Data Browsing](data-browsing.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/view-switcher.tsx`](../../../registry/patterns/view-switcher.tsx) ・ 全体：[Data Browsing](data-browsing.md)
 
 ## 目的
 
@@ -96,7 +96,7 @@
 
 - 件数の行は折り返す。切り替えの部品は `shrink-0` で、狭い画面ではアイコンだけにしてよい。
 - 指で操作する端末では、セグメントの高さを 48px にする（`pointer-coarse:h-12`）。
-- Kanban の列は、領域の中で横にスクロールする。
+- Kanban の列は、領域の中で横にスクロールする（ページ全体はスクロールさせない）。`HorizontalScrollArea`（`registry/patterns/table-scroll-area.tsx`）で囲み、列が領域に収まらない場合だけ、スクロールできる方向の端に薄い影を表示する。端に着いたら、その方向の影を消す。影は `pointer-events: none` の装飾で、カードを押す操作、文字の選択、フォーカスを妨げない。ネイティブのスクロールバーは隠さない。`TableScrollArea` と同じ測り方（`useScrollEdges`）を使い、Table の DOM（`data-slot="table-container"`）には依存しない。
 
 ## アクセシビリティ
 
