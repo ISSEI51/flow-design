@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
+import type { HeldFilter } from "../src/data/data-browsing/company-server"
 import { customers } from "../src/data/data-display/customers"
 import { settledBox } from "./helpers"
 import { collectPageErrors } from "./page-errors"
@@ -18,6 +19,20 @@ type Server = NonNullable<Window["__fdBrowseServer"]>
 const server = <T,>(page: Page, fn: (s: Server) => T) =>
   page.evaluate((src) => new Function("s", `return (${src})(s)`)(window.__fdBrowseServer), fn.toString()) as Promise<T>
 const requests = (page: Page, kind: string) => server(page, (s) => s.requests).then((r) => r.filter((x) => x.kind === kind))
+// 応答の保留と解放。順序が結果を決める検品は、応答の時間や操作の速さを前提にせず、テストの側で順序を決める。
+// hold の間に受け付けた要求は、release まで応答しない（AbortSignal も無視する）。release は、応答を受け取った処理と描画が終わってから戻る。
+type HoldKind = "list" | "detail" | "bulk"
+const hold = (page: Page, kind: HoldKind, on = true) =>
+  page.evaluate(([k, v]) => void (window.__fdBrowseServer!.hold[k] = v), [kind, on] as const)
+const heldCount = (page: Page, filter: HeldFilter = {}) =>
+  page.evaluate(
+    (f) =>
+      window.__fdBrowseServer!.held.filter(
+        (h) => (f.kind === undefined || h.kind === f.kind) && (f.workspace === undefined || h.workspace === f.workspace) && (f.key === undefined || h.key === f.key)
+      ).length,
+    filter
+  )
+const release = (page: Page, filter: HeldFilter = {}) => page.evaluate((f) => window.__fdBrowseServer!.release(f), filter)
 
 const list = (page: Page) => page.getByTestId("app-list")
 const rows = (page: Page) => list(page).locator("tbody tr[data-row-id]")
@@ -192,12 +207,15 @@ test.describe("Search & Filter", () => {
     await expect(count(page)).toHaveText(`${fmt(customers.length)}件`)
     await server(page, (s) => {
       s.countMode = "unknown"
-      s.latency.list = 1200
+      s.hold.list = true
     })
     await selectStatus(page, "契約中")
-    // 再取得中の件数は、新しい条件の結果と区別する
+    // 再取得中の件数は、新しい条件の結果と区別する（応答を保留している間に確かめる）
     await expect(count(page)).toHaveAttribute("data-stale", "true")
     await expect(page.getByTestId("app-list-announce")).toHaveText("")
+    await expect.poll(() => heldCount(page, { kind: "list" })).toBeGreaterThan(0)
+    await hold(page, "list", false)
+    await release(page, { kind: "list" })
     await expect(count(page)).toHaveText("1〜20件目を表示中")
     await expect(count(page)).not.toHaveAttribute("data-stale")
     await expect(pager(page)).not.toContainText("/")
@@ -280,15 +298,19 @@ test.describe("List & Detail", () => {
   test("non-modal sheet: switch rows directly; a slow earlier detail never replaces the current one", async ({ page, isMobile }) => {
     test.skip(isMobile, "モバイルの Sheet は画面の幅で一覧を覆う")
     await openApp(page)
-    await server(page, (s) => {
-      s.detailLatency[`C-00001`] = 1500
-      s.detailLatency[`C-00002`] = 80
-    })
+    // 先に開いた C-00001 の詳細の応答を、後で開いた C-00002 の応答より後に返す（順序はテストの側で決める）
+    await hold(page, "detail")
     await rows(page).nth(0).getByRole("button", { name: customers[0].company, exact: true }).click()
+    await expect.poll(() => heldCount(page, { kind: "detail", key: "C-00001" })).toBeGreaterThan(0)
     await rows(page).nth(1).getByRole("button", { name: customers[1].company, exact: true }).click()
     await expect(page.getByTestId("company-detail-title")).toHaveText(customers[1].company)
+    await expect.poll(() => heldCount(page, { kind: "detail", key: "C-00002" })).toBeGreaterThan(0)
+    expect(await release(page, { kind: "detail", key: "C-00002" })).toBeGreaterThan(0)
     await expect(page.getByTestId("company-detail-body")).toHaveAttribute("data-detail-id", "C-00002")
-    await page.waitForTimeout(1700)
+    // 古い C-00001 の応答が後から届いても、表示中の C-00002 を置き換えない
+    await hold(page, "detail", false)
+    expect(await release(page, { kind: "detail", key: "C-00001" })).toBeGreaterThan(0)
+    await expect(page.getByTestId("company-detail-title")).toHaveText(customers[1].company)
     await expect(page.getByTestId("company-detail-body")).toHaveAttribute("data-detail-id", "C-00002")
     // 背景は暗くしない（非モーダル）
     await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(0)
@@ -482,14 +504,17 @@ test.describe("Bulk Actions", () => {
 
   test("all succeeded: selection cleared, result kept, undo offered; no double execution", async ({ page }) => {
     await openApp(page)
-    await server(page, (s) => (s.latency.bulk = 800))
+    await hold(page, "bulk")
     await rowCheckbox(page, 0).click()
     await rowCheckbox(page, 1).click()
     await runOwnerChange(page)
-    // 実行中は操作のボタンを置かない（二重実行を防ぐ）
+    // 実行中は操作のボタンを置かない（二重実行を防ぐ）。最後の応答を保留している間に確かめる
     await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
     await expect(page.getByTestId("app-list-bulk-owner")).toHaveCount(0)
     await expect(list(page).getByRole("progressbar")).toBeVisible()
+    await expect.poll(() => heldCount(page, { kind: "bulk" })).toBe(1)
+    await hold(page, "bulk", false)
+    expect(await release(page, { kind: "bulk" })).toBe(1)
     // すべて完了：選択を解除し、Toast で知らせる（結果の Alert は出さない）。押したボタンが消えても、フォーカスは <body> に落ちない
     const toast = page.locator("[data-slot=toast]").filter({ hasText: "2件の担当者の変更が完了しました" })
     await expect(toast).toBeVisible()
@@ -507,11 +532,15 @@ test.describe("Bulk Actions", () => {
 
   test("the target is fixed when the run starts, even if selection and conditions change", async ({ page }) => {
     await openApp(page)
-    await server(page, (s) => (s.latency.bulk = 1200))
+    await hold(page, "bulk")
     for (const i of [0, 1, 2]) await rowCheckbox(page, i).click()
     await runOwnerChange(page)
+    await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
+    // 実行中（応答を保留している間）に、選択と条件を変える
     await list(page).getByRole("button", { name: "選択を解除" }).click()
     await search(page).fill("株式会社")
+    await expect.poll(() => heldCount(page, { kind: "bulk" })).toBe(1)
+    expect(await release(page, { kind: "bulk" })).toBe(1)
     await expect(page.locator("[data-slot=toast]").filter({ hasText: "3件の担当者の変更が完了しました" })).toBeVisible()
     expect(await server(page, (s) => s.processed)).toEqual(["C-00001", "C-00002", "C-00003"])
   })
@@ -587,7 +616,8 @@ test.describe("Bulk Actions", () => {
     expect((await box(bar)).y + (await box(bar)).height).toBeLessThanOrEqual(vh + 1)
     expect(await page.evaluate(() => document.documentElement.style.getPropertyValue("--toast-offset-bottom"))).toMatch(/px$/)
     await main(page).evaluate((el) => el.scrollTo({ top: el.scrollHeight }))
-    await page.waitForTimeout(200)
+    // 固定の待機ではなく、末尾まで移動したことを確かめてから測る
+    await expect.poll(() => main(page).evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop <= 1)).toBe(true)
     const p = await box(pager(page))
     expect(p.y + p.height).toBeLessThanOrEqual((await box(bar)).y + 1)
     // 状態の行には件数を残す
@@ -705,7 +735,7 @@ test.describe("View Switching", () => {
 test.describe("Data States", () => {
   test("first load: skeleton rows match the page size, appear only after 200ms, aria-busy", async ({ page }) => {
     await page.goto("/#/browsing-app?page=customers")
-    await server(page, (s) => (s.latency.list = 2000))
+    await server(page, (s) => (s.hold.list = true))
     await page.getByTestId("browsing-controls").getByRole("button", { name: "一覧を作り直す" }).click()
     const reveal = list(page).locator("[data-slot=loading-reveal]")
     await expect(reveal).toHaveAttribute("data-loading", "true")
@@ -714,7 +744,9 @@ test.describe("Data States", () => {
     await expect(reveal).toHaveAttribute("data-revealed", "true")
     expect(await list(page).locator("[data-slot=data-table-loading-row] [data-slot=skeleton]").first().evaluate((el) => getComputedStyle(el).visibility)).toBe("visible")
     const loadingHeight = (await box(reveal)).height
-    await expect(rows(page).first()).toBeVisible({ timeout: 4000 })
+    await hold(page, "list", false)
+    expect(await release(page, { kind: "list" })).toBeGreaterThan(0)
+    await expect(rows(page).first()).toBeVisible()
     const loadedHeight = (await box(reveal)).height
     // レイアウトシフト：読み込みの前後で領域の高さを大きく変えない
     expect(Math.abs(loadedHeight - loadingHeight) / loadedHeight).toBeLessThan(0.25)
@@ -740,15 +772,18 @@ test.describe("Data States", () => {
   test("refreshing keeps rows, locks dependent operations immediately; announce only the settled count", async ({ page }) => {
     await openApp(page)
     await rowCheckbox(page, 0).click()
-    await server(page, (s) => (s.latency.list = 1500))
+    await hold(page, "list")
     await selectStatus(page, "契約中")
+    // 再取得の応答を保留している間に確かめる
     await expect(rows(page).first()).toBeVisible()
     await expect(list(page).locator("table")).toHaveAttribute("aria-busy", "true")
     await expect(rowCheckbox(page, 1)).toBeDisabled()
     await expect(list(page).locator("[data-slot=data-table-selection-disabled]")).toBeVisible()
     await expect(list(page).locator("[data-slot=data-refresh-indicator]")).toHaveAttribute("data-visible", "true")
     await expect(page.getByTestId("app-list-announce")).toHaveText("")
-    await expect(rowCheckbox(page, 1)).toBeEnabled({ timeout: 3000 })
+    await hold(page, "list", false)
+    expect(await release(page, { kind: "list" })).toBeGreaterThan(0)
+    await expect(rowCheckbox(page, 1)).toBeEnabled()
     await expect(list(page).locator("[data-slot=data-refresh-indicator]")).not.toHaveAttribute("data-visible")
   })
 
@@ -821,30 +856,44 @@ test.describe("Data States", () => {
 
     await openApp(page)
     await rowCheckbox(page, 0).click()
-    await server(page, (s) => (s.latency.list = 1500))
+    await hold(page, "list")
     await page.getByTestId("browsing-workspace").click()
     await page.getByRole("option", { name: "九州支店" }).click()
+    // 九州支店の応答を保留している間に、前のワークスペースの行と選択が残らないことを確かめる
+    await expect.poll(() => heldCount(page, { kind: "list", workspace: "kyushu" })).toBeGreaterThan(0)
     await expect(rows(page)).toHaveCount(0)
     await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toHaveCount(0)
-    await expect(rows(page).first()).toHaveAttribute("data-row-id", /^K-/, { timeout: 4000 })
+    await hold(page, "list", false)
+    await release(page, { kind: "list" })
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", /^K-/)
   })
 
   test("reduced motion: skeleton and refresh spinner do not animate", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" })
+    // 資料のページの見本は、固定の時間（最初の取得 600ms、「長い」3 秒）で応答する。最初の取得が終わる前に「長い」を選ぶと
+    // 最初の読み込み（Skeleton）になり、終わった後では再取得（前のデータを残す）になる。操作の速さに依存しないよう、時計を止めて進める。
+    const t0 = new Date("2026-11-02T09:00:00+09:00").getTime()
+    await page.clock.install({ time: t0 })
+    await page.clock.pauseAt(t0 + 1000)
     await page.goto("/#/data-states")
     const missing = page.getByTestId("ds-missing")
     const sk = missing.locator("[data-slot=skeleton]")
     expect(await sk.evaluate((el) => getComputedStyle(el).animationName)).toBe("none")
     await page.getByTestId("ds-states").getByRole("radio", { name: "長い（3 秒）" }).check()
+    // 読み込みの表示は 200ms の後に出る。3 秒の応答の前まで進める
+    await page.clock.runFor(400)
     const loadingSkeleton = page.getByTestId("ds-states").locator("[data-slot=data-table-loading-row] [data-slot=skeleton]").first()
     expect(await loadingSkeleton.evaluate((el) => getComputedStyle(el).animationName)).toBe("none")
+    await page.clock.resume()
     // 再取得中の Spinner（DataRefreshIndicator）も回転しない
     await openApp(page)
-    await server(page, (s) => (s.latency.list = 1500))
+    await hold(page, "list")
     await search(page).fill("株式会社")
     const spinner = list(page).locator("[data-slot=data-refresh-indicator] svg")
     await expect(list(page).locator("[data-slot=data-refresh-indicator]")).toHaveAttribute("data-visible", "true")
     expect(await spinner.evaluate((el) => getComputedStyle(el).animationName)).toBe("none")
+    await hold(page, "list", false)
+    await release(page, { kind: "list" })
   })
 })
 
@@ -853,17 +902,19 @@ test.describe("Review follow-ups", () => {
   test("switching the workspace during a run discards the run and its result; no selection is carried over", async ({ page }) => {
     await openApp(page)
     await server(page, (s) => {
-      s.latency.bulk = 1500
+      s.hold.bulk = true
       s.bulkMode = "partial"
     })
     for (let i = 0; i < 6; i++) await rowCheckbox(page, i).click()
     await page.getByTestId("app-list-bulk-owner").click()
     await page.getByRole("menuitem", { name: "田中 翔" }).click()
     await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
+    await expect.poll(() => heldCount(page, { kind: "bulk", workspace: "hq" })).toBe(1)
     await page.getByTestId("browsing-workspace").click()
     await page.getByRole("option", { name: "九州支店" }).click()
     await expect(rows(page).first()).toHaveAttribute("data-row-id", /^K-/)
-    await page.waitForTimeout(1800)
+    // 本社営業部の実行の応答（部分的な失敗）を、切り替えの後で返す
+    expect(await release(page, { kind: "bulk" })).toBe(1)
     await expect(list(page).locator("[data-slot=bulk-result]")).toHaveCount(0)
     await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toHaveCount(0)
   })
@@ -941,13 +992,17 @@ async function switchWorkspace(page: Page, name: string) {
 test.describe("v0.1: scope boundaries and races", () => {
   test("A → B → A quickly: rows of the other workspace never appear, and the latest scope wins", async ({ page }) => {
     await openApp(page)
-    await server(page, (s) => (s.latency.list = 700))
+    await hold(page, "list")
     await switchWorkspace(page, "九州支店")
+    await expect.poll(() => heldCount(page, { kind: "list", workspace: "kyushu" })).toBe(1)
     await expect(rows(page)).toHaveCount(0)
     await watchRowPrefixes(page)
     await switchWorkspace(page, "本社営業部")
-    await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001", { timeout: 4000 })
-    await page.waitForTimeout(900)
+    // 本社営業部の応答を先に返し、九州支店の要求の応答（AbortSignal を無視したもの）を後から返す
+    await release(page, { kind: "list", workspace: "hq" })
+    await hold(page, "list", false)
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001")
+    expect(await release(page, { kind: "list", workspace: "kyushu" })).toBe(1)
     // 九州支店の要求の応答が後から届いても、本社営業部の一覧を上書きしない
     expect((await seenRows(page)).filter((id) => id.startsWith("K-"))).toEqual([])
     await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001")
@@ -966,32 +1021,50 @@ test.describe("v0.1: scope boundaries and races", () => {
   })
 
   test("a run started in A and finished after A → B → A does not change state or show a toast", async ({ page }) => {
+    // 順序はテストの側で決める（応答の時間や操作の速さを前提にしない）：
+    // 1. A で一括操作を開始 2. 要求の開始を確認 3. 応答を保留 4. B へ切り替え 5. A へ戻る 6. 最初の A の応答を解放 7. 現在の状態が変わらないことを確認
     await openApp(page)
-    await server(page, (s) => (s.latency.bulk = 1600))
+    await hold(page, "bulk")
     await rowCheckbox(page, 0).click()
     await page.getByTestId("app-list-bulk-owner").click()
     await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    await expect.poll(() => heldCount(page, { kind: "bulk", workspace: "hq" })).toBe(1)
+    expect((await requests(page, "bulk")).map((r) => r.workspace)).toEqual(["hq"])
     await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
     await switchWorkspace(page, "九州支店")
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", /^K-/)
     await switchWorkspace(page, "本社営業部")
     await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001")
-    await page.waitForTimeout(2000)
+    await expect(list(page).locator("[data-slot=bulk-run-status]")).toHaveCount(0)
+    // 最初の A の応答は、AbortSignal を無視して成功の結果を返す（サーバーでは処理が終わっている）
+    expect(await release(page, { kind: "bulk" })).toBe(1)
+    expect(await server(page, (s) => s.processed)).toEqual(["C-00001"])
     await expect(page.locator("[data-slot=toast]").filter({ hasText: "完了しました" })).toHaveCount(0)
     await expect(list(page).locator("[data-slot=bulk-result]")).toHaveCount(0)
     await expect(list(page).locator("[data-slot=bulk-run-status]")).toHaveCount(0)
     await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toHaveCount(0)
+    // 対照：現在の A で始めた実行の応答は、同じ保留と解放で反映される（古い応答だけが無視されたことを示す）
+    await rowCheckbox(page, 1).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    await expect.poll(() => heldCount(page, { kind: "bulk", workspace: "hq" })).toBe(1)
+    expect(await release(page, { kind: "bulk" })).toBe(1)
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "1件の担当者の変更が完了しました" })).toBeVisible()
   })
 
   test("unmounting the list during a run: the late result does not show a toast or a result", async ({ page }) => {
     await openApp(page)
-    await server(page, (s) => (s.latency.bulk = 1500))
+    await hold(page, "bulk")
     await rowCheckbox(page, 0).click()
     await page.getByTestId("app-list-bulk-owner").click()
     await page.getByRole("menuitem", { name: "田中 翔" }).click()
     await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
+    await expect.poll(() => heldCount(page, { kind: "bulk" })).toBe(1)
     await page.evaluate(() => (window.location.hash = "#/browsing-app?page=deals"))
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("商談")
-    await page.waitForTimeout(1900)
+    // 一覧を外した後で、実行の応答（成功）を返す
+    expect(await release(page, { kind: "bulk" })).toBe(1)
+    expect(await server(page, (s) => s.processed)).toEqual(["C-00001"])
     await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
   })
 
@@ -1048,15 +1121,19 @@ test.describe("v0.1: bulk result integrity and fixed targets", () => {
     await openApp(page)
     await server(page, (s) => {
       s.bulkMode = "partial"
-      s.latency.bulk = 1200
+      s.hold.bulk = true
     })
     for (const i of [2, 3]) await rowCheckbox(page, i).click()
     await page.getByTestId("app-list-bulk-owner").click()
     await page.getByRole("menuitem", { name: "田中 翔" }).click()
     await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
-    // 実行中に選択を変える
+    // 実行中（応答を保留している間）に選択を変える
     await list(page).getByRole("button", { name: "選択を解除" }).click()
     await rowCheckbox(page, 7).click()
+    await expect(rowCheckbox(page, 7)).toBeChecked()
+    await expect.poll(() => heldCount(page, { kind: "bulk" })).toBe(1)
+    await hold(page, "bulk", false)
+    expect(await release(page, { kind: "bulk" })).toBe(1)
     await expect(list(page).locator("[data-slot=bulk-result]")).toContainText("2件のうち、1件の担当者の変更が完了しました")
     // 失敗した C-00003 を新しい選択に戻さない。利用者が選んだ C-00008 だけが選択中
     await expect(rowCheckbox(page, 2)).not.toBeChecked()
@@ -1072,13 +1149,17 @@ test.describe("v0.1: bulk result integrity and fixed targets", () => {
 
   test("the query of an all-matching run is fixed when it starts", async ({ page }) => {
     await openApp(page)
-    await server(page, (s) => (s.latency.bulk = 1200))
     await selectStatus(page, "休止中")
     await list(page).getByRole("checkbox", { name: "このページの行をすべて選択" }).click()
     await list(page).locator("[data-slot=data-table-selection-bar]").getByRole("button", { name: /をすべて選択$/ }).click()
+    await hold(page, "bulk")
     await page.getByTestId("app-list-bulk-owner").click()
     await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
+    // 実行中（応答を保留している間）に条件を変える
     await selectStatus(page, "契約中")
+    await expect.poll(() => heldCount(page, { kind: "bulk" })).toBe(1)
+    expect(await release(page, { kind: "bulk" })).toBe(1)
     await expect(page.locator("[data-slot=toast]").filter({ hasText: "の担当者の変更が完了しました" })).toBeVisible()
     const target = JSON.parse((await requests(page, "bulk")).at(-1)!.key)
     expect(target.kind).toBe("query")
