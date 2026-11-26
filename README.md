@@ -193,13 +193,25 @@ Natural Motion
 | --- | --- |
 | 思想、原則、デザイントークン v0.1 | 完了 |
 | Components v0.1（39 種） | 完了 |
-| Patterns（複数のコンポーネントを組み合わせた画面の型） | 次の段階 |
+| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：初期実装） |
 | Registry & Gallery、Agent Skills | 予定 |
 
 今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
 
-Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md) にまとめている。
+### Patterns
 
-図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py`（Advanced Components の図は `gen_advanced.py`）で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
+Components が個々の UI の部品であるのに対し、Patterns はユーザーの目的を達成するための部品の組み合わせと、その判断基準である。再利用できるコードは `registry/patterns/`、資料は `docs/web/patterns/` に置く。
+
+| グループ | 内容 | 状態 |
+| --- | --- | --- |
+| App Structure | App Shell、Navigation、Page Header、Page Layout、Section Layout（[app-structure.md](docs/web/patterns/app-structure.md)） | 初期実装（レビュー前） |
+| Data Browsing | 検索付きの一覧、詳細の確認など | 未着手 |
+| Forms & Workflows | 登録・編集のフォーム、複数の手順の操作、未保存の変更の確認など | 未着手 |
+| Data Analysis | ダッシュボード、レポートなど | 未着手 |
+| System & Account | 認証、アカウント、製品の設定など | 未着手 |
+
+Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md) にまとめている。
+
+図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py`（Advanced Components の図は `gen_advanced.py`、Data Display の図は `gen_data_display.py`、App Structure の図は `gen_app_structure.py`）で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
 
 ライセンスは未定。

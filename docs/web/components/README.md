@@ -115,7 +115,8 @@ npm install
 npm run preview:dev        # http://localhost:5173/
 npm run test:components    # Playwright（初回は npx playwright install chromium）
 npm run typecheck
-npm run test:ssr           # SSR と Hydration（Navigation & Layout、Forms・Feedback・Overlays、Advanced、Data Display。ファイル名に ssr を含むテスト）
+npm run test:ssr           # SSR と Hydration（Navigation & Layout、Forms・Feedback・Overlays、Advanced、Data Display、App Structure。ファイル名に ssr を含むテスト）
+npm run test:patterns      # Patterns（App Structure）の検品だけ。test:components にも含まれる
 ```
 
 ### ブラウザ
@@ -131,7 +132,7 @@ WebKit の project は、Playwright の WebKit による基本的な互換性の
 
 ポートは `PREVIEW_PORT`（開発サーバー）と `PREVIEW_TEST_PORT`（検品、既定 5174）で変えられる。検品のスクリーンショットは `preview/screenshots/` に保存される（Git の管理外）。
 
-コンポーネントを追加するときは、`preview/src/pages/` にページを作り、`preview/src/catalog.ts` に 1 行追加する。`fullscreen: true` を付けたページ（業務アプリの例）は、プレビューの見出しを付けずに画面全体で表示する。
+コンポーネントを追加するときは、`preview/src/pages/` にページを作り、`preview/src/catalog.ts` に 1 行追加する。Patterns のページは `category`（`app-structure` など）を付け、プレビューの上部で Components と分けて表示する。`fullscreen: true` を付けたページ（業務アプリの例）は、プレビューの見出しを付けずに画面全体で表示する。
 
 WebKit は既定の設定では Tab でリンクへ移動しないため、検品ではリンクへの移動に Option + Tab を使う。
 

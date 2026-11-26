@@ -167,7 +167,7 @@ Ctrl / ⌘ + B で開閉する。`SidebarProvider` の `keyboardShortcut` でキ
 
 ### 子の項目を持つ項目
 
-Sidebar の本体はナビゲーションの構造を持たない。子の項目を持つ項目は、Sidebar と [Dropdown Menu](dropdown-menu.md) を組み合わせた Pattern（[`sidebar-nav-parent.tsx`](../../../preview/src/pages/navigation/sidebar-nav-parent.tsx)）で作る。
+Sidebar の本体はナビゲーションの構造を持たない。子の項目を持つ項目は、Sidebar と [Dropdown Menu](dropdown-menu.md) を組み合わせた Pattern（[`registry/patterns/sidebar-nav.tsx`](../../../registry/patterns/sidebar-nav.tsx) の `SidebarNavParent`。判断基準は [Navigation](../patterns/navigation.md)）で作る。App Structure の段階で、プレビューの `sidebar-nav-parent.tsx` から Registry の Patterns へ移した。
 
 | 状態 | 親が自身のページを持つ（例：契約） | 親が自身のページを持たない（例：レポート） |
 | --- | --- | --- |

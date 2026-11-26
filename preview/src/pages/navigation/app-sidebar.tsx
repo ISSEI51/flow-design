@@ -15,24 +15,21 @@ import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar"
-
-import { SidebarNavParent, type NavChild } from "./sidebar-nav-parent"
+import { SidebarNav, type NavGroup as RegistryNavGroup } from "@/patterns/sidebar-nav"
 
 // 顧客管理・契約管理の BtoB SaaS のナビゲーション。プレビュー（製品）側のコード。
 // 項目、現在位置、ユーザー情報は、コンポーネントではなくこの画面が持つ。
 // 項目は業務の順序（顧客 → 商談 → 契約 → 請求 → 入金）と意味でグループに分け、階層は 2 つまでにする。
-// 子の項目を持つ親は SidebarNavParent（sidebar-nav-parent.tsx）で描画する。折りたたみ時は Dropdown Menu で子の項目を開く。
+// 描画は Registry の SidebarNav（registry/patterns/sidebar-nav.tsx）が行う。折りたたみ時は Dropdown Menu で子の項目を開く。
+
+export type NavChild = { id: string; label: string }
 
 export type NavItem = {
   id: string
@@ -99,6 +96,19 @@ export const pageLabels: Record<string, string> = Object.fromEntries(
 
 export type User = { name: string; email: string }
 
+// 画面が持つ項目（id）に、製品のルーティングで決まるリンク先（href）を付ける。
+// 子の項目を持つ親は、pageLabel がある場合だけ自身のページ（href）を持つ。
+function toRegistryGroups(groups: NavGroup[], hrefFor: (id: string) => string): RegistryNavGroup[] {
+  return groups.map((g) => ({
+    label: g.label,
+    items: g.items.map((i) => ({
+      ...i,
+      href: !i.children || i.pageLabel ? hrefFor(i.id) : undefined,
+      children: i.children?.map((c) => ({ ...c, href: hrefFor(c.id) })),
+    })),
+  }))
+}
+
 export function AppSidebar({
   current,
   onNavigate,
@@ -147,44 +157,14 @@ export function AppSidebar({
         </a>
       </SidebarHeader>
       <SidebarContent>
-        <nav aria-label="メインメニュー">
-          {groups.map((group, gi) => (
-            <SidebarGroup key={group.label ?? gi}>
-              {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {group.items.map((item) => {
-                    const Icon = item.icon
-                    if (!item.children) {
-                      return (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton isActive={current === item.id} render={link(item)} tooltip={item.label}>
-                            <Icon />
-                            <span>{item.label}</span>
-                          </SidebarMenuButton>
-                          {item.badge && <SidebarMenuBadge aria-hidden="true">{item.badge}</SidebarMenuBadge>}
-                        </SidebarMenuItem>
-                      )
-                    }
-                    return (
-                      <SidebarNavParent
-                        key={item.id}
-                        id={item.id}
-                        label={item.label}
-                        icon={Icon}
-                        pageLabel={item.pageLabel}
-                        items={item.children}
-                        current={current}
-                        hrefFor={hrefFor}
-                        onNavigate={(id, e) => go(id)(e)}
-                      />
-                    )
-                  })}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))}
-        </nav>
+        <SidebarNav
+          groups={toRegistryGroups(groups, hrefFor)}
+          currentId={current}
+          onNavigate={(id, e) => {
+            e.preventDefault()
+            onNavigate(id)
+          }}
+        />
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>

@@ -1,5 +1,12 @@
 import type { ComponentType } from "react"
 
+import { AppShellPage } from "./pages/app-structure/app-shell-page"
+import { NavigationPatternPage } from "./pages/app-structure/navigation-page"
+import { PageHeaderPatternPage } from "./pages/app-structure/page-header-page"
+import { PageLayoutPage } from "./pages/app-structure/page-layout-page"
+import { SectionLayoutPage } from "./pages/app-structure/section-layout-page"
+import { ShellExamples } from "./pages/app-structure/shell-examples"
+import { StructureApp } from "./pages/app-structure/structure-app"
 import { CalendarPage } from "./pages/advanced/calendar-page"
 import { ComboboxPage } from "./pages/advanced/combobox-page"
 import { CommandPage } from "./pages/advanced/command-page"
@@ -48,7 +55,15 @@ import { SheetPage } from "./pages/overlays/sheet-page"
 
 // コンポーネントを追加するときは、ページを作ってここに 1 行足す。
 // fullscreen のページは、プレビューの見出しを付けずに画面全体で表示する。
-export const catalog: { id: string; name: string; page: ComponentType; fullscreen?: boolean }[] = [
+// category は Patterns の分類。省略したページは Components。
+export type CatalogCategory = "components" | "app-structure"
+
+export const categories: { id: CatalogCategory; name: string }[] = [
+  { id: "components", name: "Components" },
+  { id: "app-structure", name: "Patterns：App Structure" },
+]
+
+export const catalog: { id: string; name: string; page: ComponentType; fullscreen?: boolean; category?: CatalogCategory }[] = [
   { id: "button", name: "Button", page: ButtonPage },
   { id: "input", name: "Input", page: InputPage },
   { id: "textarea", name: "Textarea", page: TextareaPage },
@@ -94,4 +109,11 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "pagination", name: "Pagination", page: PaginationPage },
   { id: "chart", name: "Chart", page: ChartPage },
   { id: "dashboard", name: "ダッシュボードの例", page: DashboardPage },
+  { id: "app-shell", name: "App Shell", page: AppShellPage, category: "app-structure" },
+  { id: "navigation", name: "Navigation", page: NavigationPatternPage, category: "app-structure" },
+  { id: "page-header", name: "Page Header", page: PageHeaderPatternPage, category: "app-structure" },
+  { id: "page-layout", name: "Page Layout", page: PageLayoutPage, category: "app-structure" },
+  { id: "section-layout", name: "Section Layout", page: SectionLayoutPage, category: "app-structure" },
+  { id: "structure-app", name: "営業管理の検証画面", page: StructureApp, fullscreen: true, category: "app-structure" },
+  { id: "shell-examples", name: "Shell の例", page: ShellExamples, fullscreen: true, category: "app-structure" },
 ]

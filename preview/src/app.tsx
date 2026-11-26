@@ -3,7 +3,7 @@ import { useEffect, useState } from "react"
 import { Toaster, ToastProvider } from "@/components/ui/toast"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
-import { catalog } from "./catalog"
+import { catalog, categories } from "./catalog"
 
 const brands = [
   { id: "neutral", name: "標準", vars: {} },
@@ -57,19 +57,29 @@ export function App() {
     <TooltipProvider>
     <div className="min-h-dvh bg-background text-foreground">
       <header className="mx-auto flex max-w-[960px] flex-wrap items-center justify-between gap-4 px-6 pt-8">
-        <nav aria-label="コンポーネント" className="flex flex-wrap items-center gap-x-6 gap-y-2 text-ui">
-          <span className="font-semibold">Flow Design</span>
-          {catalog.map((c) => (
-            <a
-              key={c.id}
-              href={`#/${c.id}`}
-              aria-current={c.id === id ? "page" : undefined}
-              className="text-muted-foreground underline-offset-4 hover:text-foreground aria-[current=page]:text-foreground aria-[current=page]:underline"
+        <div className="flex min-w-0 flex-col gap-2">
+          {categories.map((cat) => (
+            <nav
+              key={cat.id}
+              aria-label={cat.id === "components" ? "コンポーネント" : cat.name}
+              className="flex flex-wrap items-center gap-x-6 gap-y-2 text-ui"
             >
-              {c.name}
-            </a>
+              <span className="font-semibold">{cat.id === "components" ? "Flow Design" : cat.name}</span>
+              {catalog
+                .filter((c) => (c.category ?? "components") === cat.id)
+                .map((c) => (
+                  <a
+                    key={c.id}
+                    href={`#/${c.id}`}
+                    aria-current={c.id === id ? "page" : undefined}
+                    className="text-muted-foreground underline-offset-4 hover:text-foreground aria-[current=page]:text-foreground aria-[current=page]:underline"
+                  >
+                    {c.name}
+                  </a>
+                ))}
+            </nav>
           ))}
-        </nav>
+        </div>
         <fieldset className="flex items-center gap-4 text-ui">
           <legend className="sr-only">ブランドカラー</legend>
           <span aria-hidden="true" className="text-muted-foreground">
