@@ -263,7 +263,24 @@ v0.1 の最終調整で、次の仕様を正式に採用した。Pagination、Da
 
 ### 検証の結果
 
-（最終の統合の候補での検品の後に記入する）
+- 実施日：2026-11-26
+- 環境：macOS（Darwin 25.6）、Node.js 26.10.0、Playwright 1.65.1（Chromium 159、WebKit 27.x）
+- 統合の候補：`5dcd39a`（最新の `origin/main` = 1882f2a の上の 1 コミット。`origin/main` は検品の間に変わっていない）
+
+| 確認 | 結果 |
+| --- | --- |
+| `npm run typecheck` | 成功（exit 0） |
+| `npm run preview:build` | 成功（exit 0）。チャンクの大きさの警告は従来どおり（範囲外） |
+| `npm run test:tokens` | 成功（failed 0） |
+| `npm run test:ssr` | 84 件成功 |
+| `npm run test:patterns` | 368 件成功、82 件 skip、失敗 0 件 |
+| `npm run test:components`（1 回目） | 2110 件のうち 1879 件成功、231 件 skip、失敗 0 件（12.3 分、3 ワーカー） |
+| `npm run test:components`（2 回目、続けて実行） | 1879 件成功、231 件 skip、失敗 0 件（12.6 分、3 ワーカー） |
+
+- 記録された例外は、Vite の HMR の接続のコンソールのエラー（SSR の検品、`consoleEnvironment`）だけである。製品の例外とコンソールのエラーは 0 件。
+- 既存のテストの削除、skip の追加、許容誤差の拡大はしていない。既存のテストの変更は 2 か所：`advanced.spec.ts` の Select の検品に、フォーカスの移動を待つ判定を 1 つ加えた。`data-display.spec.ts` の Pagination と Data Table の 4 件は、置かれた領域の幅から狭い並べ方になるべきかを求めて表示の一致を確かめた後、それぞれの並べ方で同じ操作（移動、最後のページ、現在の位置）を確かめる。
+- 候補の前の一括の実行で 1 件失敗した（`data-browsing.spec.ts` の再取得の失敗の検品、`mobile`）。実行中に、検品の文言と製品の文言を同時に変えたためであり、変更の後の実行では成功している。
+- スクリーンショット（Git の管理外）：Chromium 1280×900（一覧、結果の照合の表示、再取得の失敗、カンバン、その他の条件の Sheet）、Pixel 7（一覧、一括操作のバー、Drawer）、320px（一覧の上部、Pagination）を撮り、目視で確かめた。WebKit と実機での目視の確認は行っていない。
 
 ### 独立したレビュー
 
@@ -318,6 +335,7 @@ v0.1 の最終調整で、次の仕様を正式に採用した。Pagination、Da
 
 | 項目 | 状況 |
 | --- | --- |
+| 再取得の失敗の理由の文と表示形式の切り替え | 1280px の画面で、一括操作のバーに「再取得するまで操作できません」を示すと、表示形式の切り替えが次の行へ折り返し、表の位置が約 50px 下がる。失敗の後の 1 回の移動のため、変更していない。次のレビューで扱う |
 | 実機の iOS Safari | 未検証。モバイルの一括操作のバーと Safe Area、ソフトウェアキーボードの表示中の編集の Sheet、Drawer を実機で確かめていない |
 | Android の実機 | 未検証。IME の変換中の入力（Components の `advanced.md` の制限を含む） |
 | VoiceOver、NVDA | 未検証。`aria-busy`、`role="status"`、`role="alert"`、`aria-live` の読み上げの回数を、Playwright の属性の検品だけで確かめている |
