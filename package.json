@@ -9,7 +9,7 @@
     "test:components": "playwright test -c preview/playwright.config.ts",
     "test:tokens": "node scripts/tokens/check-contrast.mjs && node scripts/tokens/verify-theme.mjs",
     "test:ssr": "playwright test -c preview/playwright.config.ts ssr",
-    "test:patterns": "playwright test -c preview/playwright.config.ts app-structure data-browsing"
+    "test:patterns": "playwright test -c preview/playwright.config.ts app-structure data-browsing data-analysis"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
