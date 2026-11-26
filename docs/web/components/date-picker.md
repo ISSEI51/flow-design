@@ -28,6 +28,9 @@
 | 開始日・終了日のラベル | 欄の上。12px、`muted-foreground` | `text-caption` |
 | Calendar の表示 | 768px 以上は Popover（期間は 2 か月）、768px 未満は下からの Drawer（1 か月） | |
 | プリセット | Popover では Calendar の左に縦に、Drawer では Calendar の上に折り返して並べる。選んでいる期間は `aria-pressed` | |
+| 期間の並べ方 | 置かれた領域の幅（Container Query、`@container/date-range`）で決める。24rem 以上は 1 行（開始日 〜 終了日 Calendar のボタン）。24rem 未満は、開始日と終了日を同じ幅で縦に並べ、Calendar のボタンを終了日の右に置く。「〜」は 1 行の並べ方だけで表示する | `@sm/date-range` |
+
+期間の並べ方は、画面の幅ではなく、`DateRangePicker` が置かれた領域の幅で決める。広い画面の中の狭い Sheet や Popover でも、開始日と終了日の欄の幅と位置がそろう（以前は画面の幅で「〜」の表示を決めていたため、狭い領域で「〜」だけが開始日の後に残り、終了日の欄が Calendar のボタンの分だけ狭くなっていた）。外側の要素（`data-slot="date-range-picker"`）の内側に、並べ方の要素を 1 つ置く。`data-slot`、入力欄、ボタン、送信の値は変わらない。`className` は外側の要素に付く。並べ方のクラス（`gap`、`items-*`、`flex-nowrap` など）を `className` で渡していた場合は効かなくなる（リポジトリの中には、`className` を渡している箇所はない）。
 
 ```tsx
 const [date, setDate] = useState<Date | null>(null)

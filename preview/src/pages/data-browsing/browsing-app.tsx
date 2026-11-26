@@ -125,6 +125,7 @@ function CustomersScreen({
   }, [listKey])
   const restore = snapshots.get(listKey) ?? null
   const [creating, setCreating] = useState(false)
+  const [refetchToken, setRefetchToken] = useState(0)
   const view = resolveInitialView({
     requested: route.params.get("view"),
     remembered: lastView,
@@ -155,6 +156,7 @@ function CustomersScreen({
         initialQuery={queryFromParams(route.params)}
         initialView={view}
         scrollElement={mainRef}
+        refetchToken={refetchToken}
         pageHref={(id) => appHref("customer", { id, ...(route.ws !== "hq" && { ws: route.ws }) })}
         onStateChange={(q, v) => {
           lastView = v
@@ -177,7 +179,7 @@ function CustomersScreen({
           onReload()
         }}
       />
-      <ServerControls ws={route.ws} onReload={onReload} onWorkspaceChange={onWorkspaceChange} />
+      <ServerControls ws={route.ws} onReload={onReload} onRefetch={() => setRefetchToken((n) => n + 1)} onWorkspaceChange={onWorkspaceChange} />
     </PageLayout>
   )
 }
@@ -246,7 +248,17 @@ function CreateCompanySheet({ open, onOpenChange, workspace, onCreated }: { open
 }
 
 // ---------------------------------------------------------------- 検証用の操作（製品には含めない）
-function ServerControls({ ws, onReload, onWorkspaceChange }: { ws: string; onReload: () => void; onWorkspaceChange: (ws: string) => void }) {
+function ServerControls({
+  ws,
+  onReload,
+  onRefetch,
+  onWorkspaceChange,
+}: {
+  ws: string
+  onReload: () => void
+  onRefetch: () => void
+  onWorkspaceChange: (ws: string) => void
+}) {
   const [, force] = useState(0)
   const set = (fn: () => void) => {
     fn()
@@ -301,6 +313,7 @@ function ServerControls({ ws, onReload, onWorkspaceChange }: { ws: string; onRel
               ["unknown", "一部の結果が不明"],
               ["request-unknown", "通信が切れる"],
               ["request-fail", "要求を受け付けない"],
+              ["incomplete", "結果が足りない・重複する"],
             ] as [BulkMode, string][]
           ).map(([v, l]) => radio("bulk", v, companyServer.bulkMode, l, () => set(() => (companyServer.bulkMode = v))))}
         </fieldset>
@@ -336,6 +349,9 @@ function ServerControls({ ws, onReload, onWorkspaceChange }: { ws: string; onRel
             />
             詳細ページの取引の履歴の取得を失敗させる
           </label>
+          <Button variant="outline" size="xs" data-testid="browsing-refetch" onClick={onRefetch}>
+            同じ条件で再取得する
+          </Button>
           <Button variant="outline" size="xs" onClick={onReload}>
             一覧を作り直す
           </Button>

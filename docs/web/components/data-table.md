@@ -195,10 +195,12 @@ const table = useTable({
 
 表示中の行が、現在の検索・絞り込み・並べ替え・ページの結果と確定していない間（`status` が `loading`、`refreshing`、`error`）、`DataTable` は表を locked にする。古い行を対象にした誤操作を防ぐため、次を受け付けない。
 
+`locked` を渡すと、`status` によらず locked を指定できる（既定は `status !== "ready"`）。同じ条件の再取得に失敗して前の行を表示している場合（`status` は `ready` のまま）など、表示は残して操作だけを止める場合に使う。Data Browsing の `useBrowseData` では `locked={!data.canOperate}` を渡す（[data-browsing.md](../patterns/data-browsing.md#データの表示と操作の可否)）。
+
 | 操作 | 部品 | locked の間 |
 | --- | --- | --- |
 | ページ内の全選択、行の選択・解除 | `DataTablePageCheckbox`、`DataTableRowCheckbox` | 無効（自動） |
-| 検索条件に一致する全データの選択、一括操作 | `DataTableSelectionBar` の `disabled` | 無効。「更新が終わるまで操作できません」と示す |
+| 検索条件に一致する全データの選択、一括操作 | `DataTableSelectionBar` の `disabled` | 無効。既定は「更新が終わるまで操作できません」と示す。理由が異なる場合は `disabledReason` で文を変える（同じ条件の再取得の失敗では「再取得するまで操作できません」） |
 | 行の中の操作（削除、編集など） | `useDataTableStatus().locked` を読み、製品が無効にする | 無効（プレビューの行のメニュー） |
 | 選択の解除 | `DataTableSelectionBar` | 押せる（表示中の行に依存しない） |
 | 行の詳細の閲覧、ページの移動、条件の変更 | | 押せる |
@@ -208,6 +210,15 @@ const table = useTable({
 - 取得、権限の確認、サーバー側での対象の検証は製品の責務である。サーバーは、一括操作の要求を受けたときに、対象が条件と権限に合っているかを確かめる。
 
 ### 一括削除の流れ
+
+確認の Dialog の扱いは、処理の長さで 2 つの方式から選ぶ（Data Browsing の確定した仕様、[bulk-actions.md](../patterns/bulk-actions.md#一括削除の確認)）。
+
+| 方式 | 使う場面 | Dialog |
+| --- | --- | --- |
+| 実行の開始時に閉じる（標準） | 進捗を示す一括操作、件数が多い操作、検索結果の全件の操作 | 実行のボタンで閉じ、一覧の一括操作の領域で処理中と進捗を示す。結果は、すべて完了なら Toast、それ以外は一覧の上に残す |
+| Dialog の中で処理中にする | 短時間で終わる単一のレコードの操作 | 下の手順。処理中は Dialog を開いたまま実行のボタンを Loading にし、成功の後に閉じる |
+
+このページのプレビューの一括削除（複数の行）は、Data Table の部品（Alert Dialog の `loading`、`finalFocus`、削除の後のフォーカスの移動）の組み合わせを示す Components 単体の例であり、一括操作の Pattern の標準ではない。製品の一括操作は、1 つ目の方式（Data Browsing の Bulk Actions）に従い、部分的な失敗を Toast だけで伝えない。どちらの方式でも、確認した時点の対象を固定し、二重実行を防ぎ、Dialog を閉じることを処理の中止として扱わない。
 
 1. 削除のボタンで Alert Dialog を開く。見出しに件数を書き、初めのフォーカスはキャンセルに置く（Alert Dialog の既定）。
 2. 実行のボタン（「2件を削除する」）を押すと、要求が終わるまで処理中（`loading`、`aria-busy`）にし、キャンセルを無効にする。Dialog は閉じない。

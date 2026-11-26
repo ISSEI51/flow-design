@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils"
 import { useBrowseData, useDelayedFlag } from "@/patterns/browse-data"
 import { useBrowseQuery, useFilterDraft } from "@/patterns/browse-query"
 import { BulkResultAlert, BulkRunStatus } from "@/patterns/bulk-actions"
-import { useBulkAction, useBulkSelection } from "@/patterns/bulk-selection"
+import { isBulkFullySucceeded, useBulkAction, useBulkSelection } from "@/patterns/bulk-selection"
 import { DataRefreshIndicator, DataRegionError, LoadingReveal } from "@/patterns/data-states"
 import { captureListPosition, getRecordNeighbors, useListPositionRestore, type ListPosition } from "@/patterns/list-detail"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
@@ -108,6 +108,7 @@ export function CompanyBrowser({
   onOpenPage,
   pageHref,
   pageSize = 20,
+  refetchToken,
 }: {
   testId: string
   workspace: string
@@ -125,6 +126,8 @@ export function CompanyBrowser({
   onOpenPage?: (id: string, snapshot: BrowserSnapshot) => void
   pageHref?: (id: string) => string
   pageSize?: number
+  /** 変わったら、同じ条件で取得し直す（検証用の操作。現在のページを維持する） */
+  refetchToken?: number
 }) {
   const { bulk: bulkEnabled = false, views = false, detailPage = false } = features
   const mobile = useIsMobile()
@@ -174,11 +177,17 @@ export function CompanyBrowser({
     enabled: view === "table",
     initialData: initial?.page ?? undefined,
   })
+  const reloadRef = useRef(data.reload)
+  reloadRef.current = data.reload
+  useEffect(() => {
+    if (refetchToken) reloadRef.current()
+  }, [refetchToken])
   const page = data.data
   const rows = useMemo(() => page?.rows ?? [], [page])
   const total = data.isCurrent ? (page?.total ?? null) : null
-  // 古いデータ（再取得中、取得失敗）に依存する操作は、すぐに制限する。読み込みの表示だけを 200ms 遅らせる。
-  const locked = view === "table" && data.status !== "ready"
+  // 古いデータ（再取得中、取得失敗、同じ条件の再取得の失敗）に依存する操作は、すぐに制限する。
+  // isCurrent（表示できる）ではなく canOperate（最新の取得に成功した）で判断する。読み込みの表示だけを 200ms 遅らせる。
+  const locked = view === "table" && !data.canOperate
   const showLoading = useDelayedFlag(data.status === "loading" || data.status === "refreshing")
   // 最後のページの行がなくなった（一括削除、ほかの利用者の削除）場合は、未登録や 0 件と表示せず、最後のページへ戻して取得し直す。
   const outOfRange = data.isCurrent && rows.length === 0 && q.pagination.pageIndex > 0
@@ -206,7 +215,10 @@ export function CompanyBrowser({
   // 操作の内容。結果（summary）に保存し、再試行で同じ内容を使う。
   type Payload = { kind: "patch"; patch: CompanyPatch } | { kind: "delete" } | { kind: "restore-owner"; owners: Record<string, string> }
   const previousOwners = useRef<Record<string, string>>({})
-  const allDone = (s: { failed: unknown[]; unknown: unknown[]; requestError: unknown }) => !s.requestError && s.failed.length === 0 && s.unknown.length === 0
+  const workspaceRef = useRef(workspace)
+  workspaceRef.current = workspace
+  // すべて完了し、結果に不足も矛盾もない場合だけ、Toast だけで知らせる。
+  const allDone = isBulkFullySucceeded
   // 押したボタンが消えたとき（実行の開始、選択が 0 件になった後）に、フォーカスを <body> に落とさない。
   const keepFocus = (target: () => HTMLElement | null) => {
     let frames = 0
@@ -222,8 +234,9 @@ export function CompanyBrowser({
     run: (target, context) => {
       const payload = context.payload
       previousOwners.current = {}
+      // 要求の宛先は、固定した対象のスコープ（描画の時点のワークスペースではない）。
       return runCompanyBulk(
-        workspace,
+        target.scope ?? workspace,
         target,
         (c) => {
           if (payload.kind === "patch") {
@@ -250,8 +263,15 @@ export function CompanyBrowser({
           action: undo
             ? {
                 label: "元に戻す",
-                onClick: () =>
-                  void action.start("担当者の変更の取り消し", { kind: "ids", ids: Object.keys(owners), scope: workspace }, { kind: "restore-owner", owners }),
+                onClick: () => {
+                  // 変更したときのワークスペースで取り消す。別のワークスペースに切り替えた後は実行しない。
+                  const scope = summary.target.scope
+                  if (scope !== workspaceRef.current) {
+                    toast({ title: "別のワークスペースに切り替えたため、元に戻せません", description: "元のワークスペースで、担当者を変更し直してください。" })
+                    return
+                  }
+                  void action.start("担当者の変更の取り消し", { kind: "ids", ids: Object.keys(owners), scope }, { kind: "restore-owner", owners })
+                },
               }
             : undefined,
         })
@@ -321,7 +341,9 @@ export function CompanyBrowser({
     fallbackFocus: () => root.current?.querySelector<HTMLElement>("[data-slot=empty-content] button") ?? searchRef.current,
   })
 
-  const onSaved = (saved: Customer) => data.setData((p) => ({ ...p, rows: p.rows.map((r) => (r.id === saved.id ? saved : r)) }))
+  // 保存の応答は、保存したワークスペースのデータにだけ反映する。
+  const onSaved = (saved: Customer) =>
+    data.setData((p) => ({ ...p, rows: p.rows.map((r) => (r.id === saved.id ? saved : r)) }), { scopeKey: workspace })
 
   const table = useTable({
     ...dataTableDefaults,
@@ -357,6 +379,7 @@ export function CompanyBrowser({
       className="min-w-0"
       // 一括操作は、表示中の行が最新の条件の結果と確定している間だけ受け付ける（再取得中、取得失敗の間は無効）。
       disabled={locked}
+      disabledReason={data.refreshFailed ? "再取得するまで操作できません" : undefined}
       selectedCount={selection.mode === "ids" ? (selection.count ?? 0) : 0}
       hiddenCount={selection.hiddenCount ?? 0}
       onClearSelection={selection.clear}
@@ -587,6 +610,7 @@ export function CompanyBrowser({
                   table={table}
                   layout="fixed"
                   status={outOfRange ? "refreshing" : data.status === "idle" ? "loading" : data.status}
+                  locked={locked}
                   filtered={browse.isFiltered}
                   caption="顧客の一覧"
                   onRowOpen={(row) => setOpenId(row.id)}
@@ -710,6 +734,8 @@ export function CompanyBrowser({
               <AlertDialogCancel>キャンセル</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
+                // 確認の間に再取得が始まった、選択がなくなった、別の実行が始まった場合は、実行させない。
+                disabled={locked || running || !selection.hasSelection}
                 onClick={() => {
                   setConfirmDelete(false)
                   startAction("削除", { kind: "delete" })

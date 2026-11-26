@@ -18,6 +18,19 @@ async function open(page: Page, id: string) {
 
 const box = async (l: Locator) => (await l.boundingBox())!
 
+// Pagination の狭い並べ方（番号の代わりに「3 / 29」）になるべきかを、置かれた領域の幅と、番号の並びに必要な幅
+// （ボタンの数 × 48px + 間 4px）から求め、実際の表示が一致することを確かめてから返す。
+// ボタンの数：広い画面で最初・最後を含む並びは 11、狭い画面（640px 未満）の並びは 7。
+async function expectPaginationMode(scope: Locator, isMobile: boolean) {
+  const buttons = isMobile ? 7 : 11
+  const width = (await box(scope.locator("[data-slot=pagination-controls]").first())).width
+  const compact = width < buttons * 52 - 4
+  const position = scope.locator("[data-slot=pagination-compact-position]").first()
+  if (compact) await expect(position).toBeVisible()
+  else await expect(position).toBeHidden()
+  return compact
+}
+
 const baseQuery: CustomerQuery = { search: "", status: null, owner: null, regions: [], sort: null, pageIndex: 0, pageSize: 50 }
 const total = (q: Partial<CustomerQuery>) => queryCustomers({ ...baseQuery, ...q }).total
 const fmt = (n: number) => n.toLocaleString("ja-JP")
@@ -519,12 +532,14 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     await expect(del).toBeFocused()
   })
 
-  test("bulk delete with the keyboard; deleting the last page and all data moves focus to what remains", async ({ page }) => {
+  test("bulk delete with the keyboard; deleting the last page and all data moves focus to what remains", async ({ page, isMobile }) => {
     await open(page, "data-table")
     const c = client(page)
     await page.evaluate(() => (window.__fdMockServer!.deleteLatency = 50))
     // 最後のページ（551〜580 件目）の行をすべて削除すると、存在する最後のページへ移る
-    await c.getByRole("button", { name: "12ページ目", exact: true }).click()
+    // ページ番号の並びが収まらない領域（Pagination の Container Query）では、「最後のページ」で移る。
+    if (await expectPaginationMode(c, isMobile)) await c.getByRole("button", { name: "最後のページ" }).click()
+    else await c.getByRole("button", { name: "12ページ目", exact: true }).click()
     await expect(c.locator("[data-slot=pagination-range]")).toContainText(`551–580 / ${fmt(customers.length)}件`)
     await c.getByRole("checkbox", { name: "このページの行をすべて選択" }).click()
     const del = c.getByRole("button", { name: "削除" })
@@ -699,7 +714,7 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     expect(await css(firstName, "position")).not.toBe("sticky")
   })
 
-  test("pagination: range, page size, next", async ({ page }) => {
+  test("pagination: range, page size, next", async ({ page, isMobile }) => {
     await open(page, "data-table")
     const c = client(page)
     const range = c.locator("[data-slot=pagination-range]")
@@ -707,7 +722,12 @@ test.describe("Data Table: client", { tag: "@webkit" }, () => {
     await c.getByRole("button", { name: "次へ" }).click()
     await expect(range).toContainText(`51–100 / ${fmt(customers.length)}件`)
     await expect(bodyRows(c)).toHaveCount(50)
-    await expect(c.getByRole("button", { name: "2ページ目", exact: true })).toHaveAttribute("aria-current", "page")
+    // ページ番号の並びが収まらない領域では、番号の代わりに現在の位置（2 / 12）を示す
+    if (await expectPaginationMode(c, isMobile)) {
+      await expect(c.locator("[data-slot=pagination-compact-position]")).toContainText("12ページ中 2ページ目")
+    } else {
+      await expect(c.getByRole("button", { name: "2ページ目", exact: true })).toHaveAttribute("aria-current", "page")
+    }
     // 表示件数を 100 件にすると、51 件目を含む 1 ページ目に移る
     await c.getByRole("combobox", { name: "表示件数" }).click()
     await page.getByRole("option", { name: "100件" }).click()
@@ -1051,7 +1071,37 @@ test.describe("Pagination", { tag: "@webkit" }, () => {
   test("many pages: ellipsis and a constant number of items", async ({ page, isMobile }) => {
     await open(page, "pagination")
     const n = nav(page, "pagination-many")
-    const items = n.locator("li")
+    const compact = n.locator("[data-slot=pagination-compact-position]")
+    if (await expectPaginationMode(page.getByTestId("pagination-many"), isMobile)) {
+      // 移動しても、表示する項目の数は変わらない（ボタンの位置が動かない）
+      const visibleItems = n.locator("li:visible")
+      const compactLen = await visibleItems.count()
+      // ページ番号の並び（7 項目、48px）が置かれた領域に収まらない：番号の代わりに位置を示し、最初・最後と前後の移動を置く
+      await expect(compact).toContainText("116ページ中")
+      for (const name of ["最初のページ", "前へ", "次へ", "最後のページ"]) {
+        const b = n.getByRole("button", { name })
+        await expect(b).toBeVisible()
+        expect((await box(b)).height).toBeGreaterThanOrEqual(48)
+      }
+      // 並びは領域の中に収まる
+      const area = await box(page.getByTestId("pagination-many"))
+      const navBox = await box(n)
+      expect(navBox.x + navBox.width).toBeLessThanOrEqual(area.x + area.width + 1)
+      await n.getByRole("button", { name: "次へ" }).click()
+      expect(await visibleItems.count()).toBe(compactLen)
+      // キーボードで「最後のページ」を押す（押したボタンが無効になった後のフォーカスを確かめる）
+      await n.getByRole("button", { name: "最後のページ" }).focus()
+      await page.keyboard.press("Enter")
+      await expect(page.getByTestId("pagination-many-state")).toHaveText("page=116 pageSize=50")
+      await expect(compact).toContainText("116ページ中 116ページ目")
+      expect(await visibleItems.count()).toBe(compactLen)
+      // 最後のページに着いて押したボタンが無効になったら、フォーカスは位置の表示へ移る（「最初のページ」へは移さない）
+      await expect(n.locator("[data-slot=pagination-compact-current]")).toBeFocused()
+      await expect(n.getByRole("button", { name: "次へ" })).toBeDisabled()
+      await expect(n.getByRole("button", { name: "最後のページ" })).toBeDisabled()
+      return
+    }
+    const items = n.locator("li:visible")
     const len = await items.count()
     await expect(n.locator("[data-slot=pagination-ellipsis]")).toHaveCount(2)
     // 狭い画面では前後のページを省く（並びは 5 項目）
@@ -1121,7 +1171,12 @@ test.describe("Pagination", { tag: "@webkit" }, () => {
     await expect(single.getByRole("button", { name: "次へ" })).toBeDisabled()
     // 処理中：移動と表示件数を受け付けない。現在のページは示したまま
     const busy = page.getByTestId("pagination-disabled")
-    await expect(busy.getByRole("button", { name: "3ページ目", exact: true })).toHaveAttribute("aria-current", "page")
+    // ページ番号の並びが収まらない領域では、番号の代わりに現在の位置を示す
+    if (await expectPaginationMode(busy, isMobile)) {
+      await expect(busy.locator("[data-slot=pagination-compact-position]")).toContainText("ページ中 3ページ目")
+    } else {
+      await expect(busy.getByRole("button", { name: "3ページ目", exact: true })).toHaveAttribute("aria-current", "page")
+    }
     for (const b of await busy.getByRole("button").all()) {
       if ((await b.getAttribute("aria-current")) !== "page") await expect(b).toBeDisabled()
     }

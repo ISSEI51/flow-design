@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { customers } from "../src/data/data-display/customers"
+import { settledBox } from "./helpers"
 import { collectPageErrors } from "./page-errors"
 
 // Patterns / Data Browsing（Search & Filter、List & Detail、Bulk Actions、View Switching、Data States）の検品。
@@ -915,5 +916,270 @@ test.describe("Review follow-ups", () => {
     await expect(result.getByRole("button", { name: /再試行|もう一度実行/ })).toHaveCount(0)
     await expect(result.getByRole("button", { name: "最新の状態を確認" })).toBeVisible()
     await expect(bar).toHaveCount(0)
+  })
+})
+
+// ------------------------------------------------------------------ v0.1 の最終調整の検品
+// ほかのワークスペースの行（K- または C-）が、1 回の描画でも表示されたかを記録する。
+async function watchRowPrefixes(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __fdSeenRows: string[] }
+    w.__fdSeenRows = []
+    const record = () => {
+      for (const el of document.querySelectorAll<HTMLElement>("[data-testid=app-list] [data-row-id]")) w.__fdSeenRows.push(el.dataset.rowId!)
+    }
+    new MutationObserver(record).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-row-id"] })
+  })
+}
+const seenRows = (page: Page) => page.evaluate(() => (window as unknown as { __fdSeenRows: string[] }).__fdSeenRows)
+
+async function switchWorkspace(page: Page, name: string) {
+  await page.getByTestId("browsing-workspace").click()
+  await page.getByRole("option", { name }).click()
+}
+
+test.describe("v0.1: scope boundaries and races", () => {
+  test("A → B → A quickly: rows of the other workspace never appear, and the latest scope wins", async ({ page }) => {
+    await openApp(page)
+    await server(page, (s) => (s.latency.list = 700))
+    await switchWorkspace(page, "九州支店")
+    await expect(rows(page)).toHaveCount(0)
+    await watchRowPrefixes(page)
+    await switchWorkspace(page, "本社営業部")
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001", { timeout: 4000 })
+    await page.waitForTimeout(900)
+    // 九州支店の要求の応答が後から届いても、本社営業部の一覧を上書きしない
+    expect((await seenRows(page)).filter((id) => id.startsWith("K-"))).toEqual([])
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001")
+  })
+
+  test("switching the workspace while the table is not shown (enabled: false) does not show the old workspace's rows", async ({ page }) => {
+    await openApp(page)
+    await page.getByRole("radiogroup", { name: "表示形式" }).getByRole("radio", { name: "カンバン" }).click()
+    await expect(page.getByTestId("app-list-board")).toBeVisible()
+    await server(page, (s) => (s.latency.list = 600))
+    await switchWorkspace(page, "九州支店")
+    await watchRowPrefixes(page)
+    await page.getByRole("radiogroup", { name: "表示形式" }).getByRole("radio", { name: "表" }).click()
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", /^K-/, { timeout: 4000 })
+    expect((await seenRows(page)).filter((id) => id.startsWith("C-"))).toEqual([])
+  })
+
+  test("a run started in A and finished after A → B → A does not change state or show a toast", async ({ page }) => {
+    await openApp(page)
+    await server(page, (s) => (s.latency.bulk = 1600))
+    await rowCheckbox(page, 0).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
+    await switchWorkspace(page, "九州支店")
+    await switchWorkspace(page, "本社営業部")
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001")
+    await page.waitForTimeout(2000)
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "完了しました" })).toHaveCount(0)
+    await expect(list(page).locator("[data-slot=bulk-result]")).toHaveCount(0)
+    await expect(list(page).locator("[data-slot=bulk-run-status]")).toHaveCount(0)
+    await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toHaveCount(0)
+  })
+
+  test("unmounting the list during a run: the late result does not show a toast or a result", async ({ page }) => {
+    await openApp(page)
+    await server(page, (s) => (s.latency.bulk = 1500))
+    await rowCheckbox(page, 0).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
+    await page.evaluate(() => (window.location.hash = "#/browsing-app?page=deals"))
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("商談")
+    await page.waitForTimeout(1900)
+    await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+  })
+
+  test("same-condition refresh failure: rows stay visible, but dependent operations are blocked with the reason; the page is kept", async ({ page }) => {
+    await openApp(page)
+    await pager(page).getByRole("button", { name: "次へ" }).click()
+    await expect(page).toHaveURL(/p=2/)
+    await rowCheckbox(page, 0).click()
+    await server(page, (s) => (s.failNext.list = true))
+    await page.getByTestId("browsing-refetch").click()
+    await expect(page.getByTestId("app-list-refresh-error")).toBeVisible()
+    // 同じ条件の再取得では、現在のページを維持する
+    await expect(page).toHaveURL(/p=2/)
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00021")
+    await expect(rowCheckbox(page, 1)).toBeDisabled()
+    await expect(rows(page).nth(1).getByRole("button", { name: /の操作$/ })).toBeDisabled()
+    await expect(list(page).locator("[data-slot=data-table-selection-disabled]")).toHaveText("再取得するまで操作できません")
+    await expect(page.getByTestId("app-list-bulk-owner")).toBeDisabled()
+    // 削除を含むその他の一括操作も無効
+    await expect(page.getByTestId("app-list-bulk-more")).toBeDisabled()
+    await page.getByTestId("app-list-refresh-error").getByRole("button", { name: "再試行" }).click()
+    await expect(page.getByTestId("app-list-refresh-error")).toBeHidden()
+    await expect(rowCheckbox(page, 1)).toBeEnabled()
+    await expect(page).toHaveURL(/p=2/)
+  })
+})
+
+test.describe("v0.1: bulk result integrity and fixed targets", () => {
+  test("missing, duplicated and unexpected results: not reported as all succeeded; the user is asked to check", async ({ page }) => {
+    await openApp(page)
+    await server(page, (s) => (s.bulkMode = "incomplete"))
+    for (const i of [0, 1, 2]) await rowCheckbox(page, i).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    const result = list(page).locator("[data-slot=bulk-result]")
+    await expect(result).toBeVisible()
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "完了しました" })).toHaveCount(0)
+    const integrity = result.locator("[data-slot=bulk-result-integrity]")
+    await expect(integrity).toContainText("重ねて 1件")
+    // 対象ではない行は、名前（ID）を示し、変更された可能性を伝える
+    await expect(integrity).toContainText("対象ではない行の結果を 1件受け取りました（X-99999）")
+    await expect(integrity).toContainText("変更された可能性があります")
+    // 結果が返らなかった行は、結果が不明な行の説明の中で 1 回だけ示す
+    await expect(result.locator("[data-slot=bulk-result-unknown]")).toContainText("うち 1件は、結果が返されませんでした")
+    await expect(result.getByText("最新の状態を確認してから、必要な行だけをもう一度操作してください。")).toHaveCount(1)
+    // 完了は 2 件（重複と対象外を数えない）、返らなかった 1 件は結果が不明
+    await expect(result).toContainText("完了2件")
+    await expect(result).toContainText("結果が不明1件")
+    await expect(result.getByRole("button", { name: "最新の状態を確認" })).toBeVisible()
+    await expect(result.getByRole("button", { name: /再試行/ })).toHaveCount(0)
+  })
+
+  test("a result does not change a selection the user changed during the run", async ({ page }) => {
+    await openApp(page)
+    await server(page, (s) => {
+      s.bulkMode = "partial"
+      s.latency.bulk = 1200
+    })
+    for (const i of [2, 3]) await rowCheckbox(page, i).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    await expect(list(page).locator("[data-slot=bulk-run-status]")).toBeVisible()
+    // 実行中に選択を変える
+    await list(page).getByRole("button", { name: "選択を解除" }).click()
+    await rowCheckbox(page, 7).click()
+    await expect(list(page).locator("[data-slot=bulk-result]")).toContainText("2件のうち、1件の担当者の変更が完了しました")
+    // 失敗した C-00003 を新しい選択に戻さない。利用者が選んだ C-00008 だけが選択中
+    await expect(rowCheckbox(page, 2)).not.toBeChecked()
+    await expect(rowCheckbox(page, 7)).toBeChecked()
+    await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toContainText("1件を選択中")
+    // 再試行は、実行したときの対象と操作の内容（担当者：田中 翔）で行う
+    await list(page).locator("[data-slot=bulk-result]").getByRole("button", { name: "失敗した 1件を再試行" }).click()
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "1件の担当者の変更が完了しました" })).toBeVisible()
+    const last = JSON.parse((await requests(page, "bulk")).at(-1)!.key)
+    expect(last).toMatchObject({ kind: "ids", ids: ["C-00003"] })
+    await expect(rows(page).nth(2).locator("td").nth(3)).toHaveText("田中 翔")
+  })
+
+  test("the query of an all-matching run is fixed when it starts", async ({ page }) => {
+    await openApp(page)
+    await server(page, (s) => (s.latency.bulk = 1200))
+    await selectStatus(page, "休止中")
+    await list(page).getByRole("checkbox", { name: "このページの行をすべて選択" }).click()
+    await list(page).locator("[data-slot=data-table-selection-bar]").getByRole("button", { name: /をすべて選択$/ }).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    await selectStatus(page, "契約中")
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "の担当者の変更が完了しました" })).toBeVisible()
+    const target = JSON.parse((await requests(page, "bulk")).at(-1)!.key)
+    expect(target.kind).toBe("query")
+    expect(target.query.filters.status).toBe("paused")
+    const paused = customers.filter((c) => c.status === "paused").map((c) => c.id)
+    expect((await server(page, (s) => s.processed)).sort()).toEqual(paused.sort())
+  })
+})
+
+test.describe("v0.1: layout", () => {
+  test("kanban: horizontal cues only toward hidden columns, gone at the edge; cards stay clickable", async ({ page, isMobile }) => {
+    if (!isMobile) await page.setViewportSize({ width: 900, height: 900 })
+    await openApp(page)
+    await page.getByRole("radiogroup", { name: "表示形式" }).getByRole("radio", { name: "カンバン" }).click()
+    const area = page.getByTestId("app-list-board-scroll")
+    const scroller = area.locator("[data-slot=horizontal-scroll-container]")
+    await expect(page.getByTestId("app-list-board-trial").locator("[data-row-id]").first()).toBeVisible()
+    await expect(area).toHaveAttribute("data-scroll-end", "true")
+    await expect(area).not.toHaveAttribute("data-scroll-start")
+    expect(await area.locator("[data-slot=table-scroll-cue]").first().evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none")
+    expect(await scroller.evaluate((el) => getComputedStyle(el).overflowX)).toBe("auto")
+    await scroller.evaluate((el) => el.scrollTo({ left: el.scrollWidth }))
+    await expect(area).toHaveAttribute("data-scroll-start", "true")
+    await expect(area).not.toHaveAttribute("data-scroll-end")
+    // 影の下のカードも押せる（右端の列の最初のカード）
+    await page.getByTestId("app-list-board-cancelled").locator("[data-row-id] button").first().click()
+    await expect(page.getByTestId("company-detail")).toBeVisible()
+  })
+
+  test("date range in the filter sheet: start and end inputs have the same width; wide areas keep one row", async ({ page, isMobile }) => {
+    test.skip(isMobile, "デスクトップの Sheet（狭い領域）と、資料のページ（広い領域）を比べる")
+    await openApp(page)
+    await page.getByTestId("app-list-more").click()
+    const sheet = page.getByTestId("app-list-filters")
+    await expect(sheet.locator("[data-slot=date-range-from]")).toBeVisible()
+    // Sheet の開く動きが終わってから測る
+    await settledBox(sheet)
+    const from = await box(sheet.locator("[data-slot=date-range-from]"))
+    const to = await box(sheet.locator("[data-slot=date-range-to]"))
+    expect(Math.abs(from.width - to.width)).toBeLessThan(1)
+    expect(Math.abs(from.x - to.x)).toBeLessThan(1)
+    await page.goto("/#/date-picker")
+    const picker = page.locator("[data-slot=date-range-picker]").first()
+    const a = await box(picker.locator("[data-slot=date-range-from]"))
+    const b = await box(picker.locator("[data-slot=date-range-to]"))
+    expect(Math.abs(a.y - b.y)).toBeLessThan(1)
+    expect(Math.abs(a.width - b.width)).toBeLessThan(1)
+    await expect(picker.getByText("〜")).toBeVisible()
+  })
+
+  test("320px product screen: pagination fits inside the content, keeps every operation and 48px targets", async ({ page, isMobile }) => {
+    test.skip(!isMobile, "指で操作する端末の 48px で確かめる")
+    await page.setViewportSize({ width: 320, height: 800 })
+    await openApp(page)
+    const content = await box(page.locator("[data-slot=page-layout-content]"))
+    const nav = pager(page)
+    const n = await box(nav)
+    expect(n.x + n.width).toBeLessThanOrEqual(content.x + content.width + 1)
+    for (const name of ["最初のページ", "前へ", "次へ", "最後のページ"]) {
+      const b = nav.getByRole("button", { name })
+      await expect(b).toBeVisible()
+      expect((await box(b)).height).toBeGreaterThanOrEqual(48)
+    }
+    await expect(nav.locator("[data-slot=pagination-compact-position]")).toContainText("29ページ中 1ページ目")
+    await nav.getByRole("button", { name: "最後のページ" }).click()
+    await expect(nav.locator("[data-slot=pagination-compact-position]")).toContainText("29ページ中 29ページ目")
+    await expect(nav.getByRole("button", { name: "次へ" })).toBeDisabled()
+    // 一覧の表示範囲の文字と表示件数も、領域の中に収まる
+    const controls = await box(list(page).locator("[data-slot=pagination-controls]"))
+    expect(controls.x + controls.width).toBeLessThanOrEqual(content.x + content.width + 1)
+  })
+})
+
+test.describe("v0.1: re-review follow-ups", () => {
+  test("undo after switching the workspace does not run against the new workspace", async ({ page }) => {
+    await openApp(page)
+    await rowCheckbox(page, 0).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    const toast = page.locator("[data-slot=toast]").filter({ hasText: "1件の担当者の変更が完了しました" })
+    await expect(toast).toBeVisible()
+    const before = (await requests(page, "bulk")).length
+    await switchWorkspace(page, "九州支店")
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", /^K-/)
+    await toast.getByRole("button", { name: "元に戻す" }).click()
+    await expect(page.locator("[data-slot=toast]").filter({ hasText: "別のワークスペースに切り替えたため、元に戻せません" })).toBeVisible()
+    expect((await requests(page, "bulk")).length).toBe(before)
+  })
+
+  test("a rejected request for selected IDs: all failed, no integrity warning and no status check prompt", async ({ page }) => {
+    await openApp(page)
+    await server(page, (s) => (s.bulkMode = "request-fail"))
+    await rowCheckbox(page, 0).click()
+    await rowCheckbox(page, 1).click()
+    await page.getByTestId("app-list-bulk-owner").click()
+    await page.getByRole("menuitem", { name: "田中 翔" }).click()
+    const result = list(page).locator("[data-slot=bulk-result]")
+    await expect(result).toContainText("2件の担当者の変更がすべて失敗しました")
+    await expect(result.locator("[data-slot=bulk-result-integrity]")).toHaveCount(0)
+    await expect(result.getByRole("button", { name: "最新の状態を確認" })).toHaveCount(0)
+    await expect(result.getByRole("button", { name: "失敗した 2件を再試行" })).toBeVisible()
+    await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toContainText("2件を選択中")
   })
 })

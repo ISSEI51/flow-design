@@ -3,7 +3,7 @@
 // 検証のための遅延は、ここ（プレビュー）だけで設定する。Registry の部品は遅延を持たない。
 
 import type { BrowseQuery } from "@/patterns/browse-query"
-import { BulkRequestError, type BulkItemResult, type BulkRunContext, type BulkTarget } from "@/patterns/bulk-selection"
+import { BulkRequestError, type BulkItemResult, type BulkRunContext, type BulkRunResponse, type BulkTarget } from "@/patterns/bulk-selection"
 
 import { customers as seedCustomers, type ContractStatus, type Customer } from "../data-display/customers"
 
@@ -52,7 +52,7 @@ export const workspaces: Workspace[] = [
 
 type LatencyKind = "list" | "detail" | "activity" | "update" | "bulk"
 
-export type BulkMode = "success" | "partial" | "fail" | "unknown" | "request-unknown" | "request-fail"
+export type BulkMode = "success" | "partial" | "fail" | "unknown" | "request-unknown" | "request-fail" | "incomplete"
 
 type ServerConfig = {
   /** 応答までの時間（ms） */
@@ -271,7 +271,7 @@ export function runCompanyBulk(
   apply: (c: Customer) => void,
   context: BulkRunContext,
   deleteRows = false
-): Promise<BulkItemResult[]> {
+): Promise<BulkRunResponse> {
   companyServer.requests.push({ kind: "bulk", workspace, key: JSON.stringify(target) })
   const mode = companyServer.bulkMode
   const ids =
@@ -328,11 +328,17 @@ export function runCompanyBulk(
         if (c) apply(c)
         return { id, outcome }
       })
+      // incomplete：結果の一部を返さず、対象ではない ID の結果と、重複した結果を混ぜる（結果の完全性の検品）。
+      let reported = results
+      if (mode === "incomplete" && results.length > 0) {
+        reported = [...results.slice(0, -1), results[0], { id: "X-99999", outcome: "succeeded" }]
+      }
       if (deleteRows) {
         const removed = new Set(results.filter((r) => r.outcome !== "failed").map((r) => r.id))
         store[workspace] = list.filter((c) => !removed.has(c.id))
       }
-      resolve(results)
+      // 全件の選択（query）では、バックエンドが確定した対象の件数を返す（API の契約）。
+      resolve(target.kind === "query" ? { items: reported, confirmedCount: ids.length } : reported)
     }
     setTimeout(tick, step)
   })

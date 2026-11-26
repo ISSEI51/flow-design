@@ -97,6 +97,7 @@ export function DataBrowsingSsrFixture() {
             failed: [{ id: "C-00003", outcome: "failed", message: "権限がありません", retryable: false }],
             unknown: [],
             requestError: null,
+            integrity: { missing: 0, duplicates: 0, unexpected: 0, invalid: 0, confirmedCount: 2, unreported: null, overReported: 0, unexpectedIds: [], expectedCount: 2, countChanged: false, reconciled: true, complete: true },
           }}
           onDismiss={() => undefined}
         />

@@ -108,7 +108,14 @@ function useBrowseData<Q, T>({
   React.useEffect(() => {
     if (!enabled) {
       seq.current++
-      setState((s) => (s.status === "idle" ? s : { ...s, status: "idle", error: null, refreshFailed: false, requestKey: null }))
+      setState((s) =>
+        // 取得しない間にスコープが変わった場合も、前のスコープのデータを残さない。
+        s.scope !== scopeKey
+          ? { data: undefined, dataKey: null, scope: scopeKey, status: "idle", error: null, refreshFailed: false, fetchedAt: null, requestKey: null }
+          : s.status === "idle"
+            ? s
+            : { ...s, status: "idle", error: null, refreshFailed: false, requestKey: null }
+      )
       return
     }
     if (skipFirst.current) {
@@ -149,13 +156,23 @@ function useBrowseData<Q, T>({
     // shouldKeep は ref を読むため、依存に含めない。
   }, [key, scopeKey, enabled, reloadToken]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // アンマウントしたら、送った要求の応答を無効にする（AbortSignal を無視する fetcher の応答も反映しない）。
+  React.useEffect(
+    () => () => {
+      seq.current++
+    },
+    []
+  )
+
   // 描画の時点で、条件やスコープが変わったことを反映する（効果が走るまでの 1 回の描画でも、古いデータを最新として返さない）。
   let { data, status } = state
   let dataKey = state.dataKey
-  if (enabled && state.scope !== scopeKey) {
+  const sameScope = state.scope === scopeKey
+  if (!sameScope) {
+    // 別のスコープのデータは、取得しない間（enabled: false）も含めて、1 回の描画でも返さない。
     data = undefined
     dataKey = null
-    status = "loading"
+    status = enabled ? "loading" : "idle"
   } else if (enabled && state.requestKey !== key) {
     // 現在の条件の要求をまだ送っていない（効果が走る前の描画）。前の要求の状態（成功、失敗、再取得中）を返さない。
     if (data !== undefined && shouldKeep(state.dataKey, key)) status = "refreshing"
@@ -169,24 +186,44 @@ function useBrowseData<Q, T>({
   }
 
   const reload = React.useCallback(() => setReloadToken((t) => t + 1), [])
-  const setData = React.useCallback((updater: (data: T) => T) => {
-    setState((s) => (s.data === undefined ? s : { ...s, data: updater(s.data) }))
+  /**
+   * 保存した結果などを、取得し直さずに反映する。
+   * 遅れて届いた保存の応答を、別のスコープや別の条件のデータに反映しないよう、保存を始めたときの scopeKey と dataKey を渡せる。
+   */
+  const setData = React.useCallback((updater: (data: T) => T, guard?: { scopeKey?: string; dataKey?: string | null }) => {
+    setState((s) => {
+      if (s.data === undefined) return s
+      if (guard && "scopeKey" in guard && guard.scopeKey !== s.scope) return s
+      if (guard && guard.dataKey !== undefined && guard.dataKey !== s.dataKey) return s
+      return { ...s, data: updater(s.data) }
+    })
   }, [])
 
+  const isCurrent = status === "ready" && dataKey === key
+  const refreshFailed = isCurrent && state.refreshFailed
   return {
-    /** 表示するデータ。status が error のときは、結果として表示しない（前の条件のデータが残っている場合がある） */
+    /**
+     * 表示できるデータ。現在の条件の結果とは限らない（再取得中は前の条件のデータ）。
+     * status が error のときは、結果として表示しない（前の条件のデータが残っている場合がある）
+     */
     data,
     /** data が対応する条件のキー */
     dataKey,
     status,
-    /** 最新の要求の失敗 */
-    error: status === "error" || state.refreshFailed ? state.error : null,
-    /** 同じ条件の再取得に失敗し、前のデータを表示している */
-    refreshFailed: status === "ready" && state.refreshFailed,
-    /** data が現在の条件の結果として確定している */
-    isCurrent: status === "ready" && dataKey === key,
+    /** 最新の要求の失敗（現在のスコープのもの） */
+    error: sameScope && (status === "error" || refreshFailed) ? state.error : null,
+    /** 同じ条件の再取得に失敗し、前のデータ（この条件の最後に確定した結果）を表示している */
+    refreshFailed,
+    /** data が現在の条件の結果として表示できる（同じ条件の再取得に失敗した場合も true） */
+    isCurrent,
+    /**
+     * data に依存する変更の操作（一括操作、行の削除、編集の開始など）を受け付けてよい。
+     * 現在の条件の結果で、かつ最新の取得に成功している（再取得中、取得失敗、同じ条件の再取得の失敗では false）。
+     * isCurrent や status === "ready" だけで操作の可否を判断しない。
+     */
+    canOperate: isCurrent && !state.refreshFailed,
     /** data を取得した時刻（Date.now()）。サーバーで描画した値には含まれない */
-    fetchedAt: dataKey === key ? state.fetchedAt : null,
+    fetchedAt: sameScope && dataKey === key ? state.fetchedAt : null,
     /** 同じ条件で取得し直す */
     reload,
     /** 保存した結果などを、取得し直さずに反映する */

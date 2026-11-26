@@ -2,7 +2,7 @@
 
 一覧から詳細を確かめ、必要な操作へ進み、一覧に戻る。
 
-状態：初期実装 ・ 実装：[`registry/patterns/list-detail.ts`](../../../registry/patterns/list-detail.ts)、[`registry/patterns/table-scroll-area.tsx`](../../../registry/patterns/table-scroll-area.tsx) ・ 全体：[Data Browsing](data-browsing.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/list-detail.ts`](../../../registry/patterns/list-detail.ts)、[`registry/patterns/table-scroll-area.tsx`](../../../registry/patterns/table-scroll-area.tsx) ・ 全体：[Data Browsing](data-browsing.md)
 
 ## 目的
 
@@ -89,6 +89,7 @@
   - 影は `pointer-events: none` と `aria-hidden` の装飾で、クリック、文字の選択、フォーカスを妨げない。
   - 内容の幅（列の表示・非表示、列の幅、行の差し替え）と、領域の幅（Sidebar の開閉、画面の幅）の変化に追従する（ResizeObserver と MutationObserver）。
 - Table と DataTable は変更していない。`TableScrollArea` が、中の `data-slot="table-container"` を探して測る。
+- 表ではない、横に並ぶ内容（Kanban の列など）には `HorizontalScrollArea` を使う。自身がスクロールの領域になり、同じ規則で影を示す（[view-switching.md](view-switching.md#レスポンシブ)）。
 
 ### 固定列
 
@@ -126,10 +127,13 @@
 
 | 状態 | 持つ場所 |
 | --- | --- |
-| 詳細を表示中の行 | 製品（`openId`）。`DataTable` の `activeRowId` に渡す。一括操作の選択とは別 |
+| 詳細を表示中の行 | 製品（`openId`）。`DataTable` の `activeRowId` に渡す。一括操作の選択とは別。スコープ（ワークスペース）と組で持ち、別のスコープに切り替えた描画から、前の行の詳細を開かない（検証画面は `{ workspace, id }` で持つ） |
 | 詳細のデータ | `useBrowseData`（`keepPreviousData: false`、`enabled: openId !== null`、`scopeKey`） |
 | 前後の移動 | `getRecordNeighbors({ ids, activeId, offset, total })` |
 | 一覧の位置 | `captureListPosition` の値（`ListPosition`）を製品が保存する |
+| 行に依存する操作の可否 | 一覧の `useBrowseData` の `canOperate`。再取得中と、同じ条件の再取得の失敗の間は、行の操作（Dropdown Menu）と選択を受け付けない（`DataTable` の `locked={!canOperate}`、行の中では `useDataTableStatus().locked`）。行の閲覧（詳細を開く）は受け付ける |
+
+一覧への復帰の時期（`ready`）には、`isCurrent`（現在の条件の結果を表示できる）を使う。保持していたデータで先に表示し、取得し直した結果（行の削除などを反映した結果）が届いてから復元する。操作の可否には `canOperate` を使う（[data-browsing.md](data-browsing.md#データの表示と操作の可否)）。
 
 ## レスポンシブ
 
@@ -161,7 +165,7 @@ const detail = useBrowseData({
 const neighbors = getRecordNeighbors({ ids: rows.map((r) => r.id), activeId: openId, offset: page.offset, total })
 
 <TableScrollArea>
-  <DataTable table={table} onRowOpen={(row) => setOpenId(row.id)} activeRowId={openId} … />
+  <DataTable table={table} onRowOpen={(row) => setOpenId(row.id)} activeRowId={openId} locked={!data.canOperate} … />
 </TableScrollArea>
 <Sheet mode="view" open={openId !== null} onOpenChange={(open) => !open && setOpenId(null)}>
   <SheetContent finalFocus={() => rowTrigger() ?? true}>…</SheetContent>
