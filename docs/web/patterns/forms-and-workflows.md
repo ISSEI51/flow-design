@@ -226,7 +226,24 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 
 ### 検証の結果
 
-コミットする状態で、次をこの順に続けて実行した（2026-11-26、4 ワーカー、macOS（Darwin 25.6）、Node.js 26.10.0、Playwright 1.65.1（Chromium 159、WebKit 27.x））。origin/main（`1882f2a`）は作業の開始から変わっていないため、この状態が main との統合の候補である。
+次をこの順に続けて実行した（2026-11-26、4 ワーカー、macOS（Darwin 25.6）、Node.js 26.10.0、Playwright 1.65.1（Chromium 159、WebKit 27.x））。
+
+#### main との統合の候補（`22d6bea`）
+
+初期実装のコミット（`be6972b`）の後に、origin/main に Data Browsing v0.1（`5dcd39a`、`aa7e664`）が入った。origin/main をマージし（競合は README の進捗の表だけで、両方の内容を残した）、その状態で実行した。
+
+| 確認 | 結果 |
+| --- | --- |
+| `npm run typecheck` | 成功（exit 0） |
+| `npm run preview:build` | 成功（exit 0） |
+| `npm run test:tokens` | 成功（failed 0） |
+| `npm run test:ssr` | 96 件成功 |
+| `npm run test:patterns` | 604 件成功、96 件 skip、失敗 0 件（3.8 分） |
+| `npm run test:components` | 2115 件成功、245 件 skip、失敗 0 件（12.0 分） |
+
+製品の例外とコンソールのエラーは 0 件。
+
+#### 初期実装のコミット（`be6972b`、origin/main `1882f2a` の上）
 
 | 確認 | 結果 |
 | --- | --- |
