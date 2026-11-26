@@ -195,7 +195,26 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 ### 検証の結果
 
-（統合の候補での結果を、検品の後に記録する。）
+- 実施日：2026-11-26
+- 環境：macOS（Darwin 25.6）、Node.js 26.10.0、Playwright 1.65.1（Chromium 159、WebKit 27.x）
+
+最新の `origin/main`（aa7e664、Data Browsing v0.1 確定候補）との統合の候補（dfd1095）での結果。
+
+| 確認 | 結果 |
+| --- | --- |
+| `npm run typecheck` | 成功（exit 0） |
+| `npm run preview:build` | 成功（exit 0）。チャンクの大きさの警告は従来どおり（範囲外） |
+| `npm run test:tokens` | 成功（failed 0） |
+| `npm run test:ssr` | 96 件成功（Data Analysis の 12 件を含む） |
+| `npm run test:patterns` | 533 件成功、117 件 skip、失敗 0 件（3 ワーカー） |
+| `npm run test:components` | 2044 件成功、266 件 skip、失敗 0 件（13.6 分、3 ワーカー） |
+
+- 統合の前の `test:components` の一括の実行では、Components の既存のテスト `button.spec.ts` の「Tab reaches the button」が desktop と mobile で失敗した。原因は、プレビューの上部に Data Analysis の 6 つのリンクを加えたことで、ボタンに届くまでの Tab の回数が 84 回になり、テストの固定の上限（80 回）を超えたことである（main では 78 回）。ボタンの動作の不具合ではない。上限を広げるのではなく、ページの中の操作できる要素の数から上限を求めるように直した（テストの判定は変えていない）。
+- 独立したレビューの指摘への対処の前の一括の実行（Data Analysis の検品）では、Base UI の Select が選択肢の一覧の変更の時点で値を最初の値に戻す事象により、集計単位の検品が失敗した。選択肢を固定し、使えない選択肢を無効にする方式に直した（「独自に判断した事項」）。
+- 記録された例外は、Vite の HMR の接続のコンソールのエラー（SSR の検品、`consoleEnvironment`）だけである。製品の例外とコンソールのエラーは 0 件。
+- 既存のテストの削除、skip の追加、許容誤差の拡大はしていない。新しいテストの skip は、既存の規則（Node.js の単体の検品は desktop だけ、デスクトップだけ・モバイルだけの表示、ハードウェアキーボードの操作）によるもの。
+
+スクリーンショット（Git の管理外）：検証画面の事業の状況、顧客維持の分析、Cross-filtering の選択、企業の詳細、処理の監視、資料の 5 ページ（Chromium 1280×900）、事業の状況（Pixel 7）を撮り、目視で確かめた。WebKit と実機での目視の確認は行っていない。
 
 ### 独立したレビュー
 
