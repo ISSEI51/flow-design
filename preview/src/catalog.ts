@@ -15,6 +15,13 @@ import { DataStatesPage } from "./pages/data-browsing/data-states-page"
 import { ListDetailPage } from "./pages/data-browsing/list-detail-page"
 import { SearchFilterPage } from "./pages/data-browsing/search-filter-page"
 import { ViewSwitchingPage } from "./pages/data-browsing/view-switching-page"
+import { AccountApp } from "./pages/system-account/account-app"
+import { AuthenticationPage } from "./pages/system-account/authentication-page"
+import { NotificationsPage } from "./pages/system-account/notifications-page"
+import { OnboardingPage } from "./pages/system-account/onboarding-page"
+import { PermissionStatesPage } from "./pages/system-account/permission-states-page"
+import { SettingsPatternPage } from "./pages/system-account/settings-page"
+import { SystemStatesPage } from "./pages/system-account/system-states-page"
 import { ComboboxPage } from "./pages/advanced/combobox-page"
 import { CommandPage } from "./pages/advanced/command-page"
 import { CsvImportPage } from "./pages/advanced/csv-import-page"
@@ -63,12 +70,13 @@ import { SheetPage } from "./pages/overlays/sheet-page"
 // コンポーネントを追加するときは、ページを作ってここに 1 行足す。
 // fullscreen のページは、プレビューの見出しを付けずに画面全体で表示する。
 // category は Patterns の分類。省略したページは Components。
-export type CatalogCategory = "components" | "app-structure" | "data-browsing"
+export type CatalogCategory = "components" | "app-structure" | "data-browsing" | "system-account"
 
 export const categories: { id: CatalogCategory; name: string }[] = [
   { id: "components", name: "Components" },
   { id: "app-structure", name: "Patterns：App Structure" },
   { id: "data-browsing", name: "Patterns：Data Browsing" },
+  { id: "system-account", name: "Patterns：System & Account" },
 ]
 
 // hidden のページ（検品用の画面）は、プレビューの上部の一覧に表示しない。
@@ -132,4 +140,11 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "view-switching", name: "View Switching", page: ViewSwitchingPage, category: "data-browsing" },
   { id: "data-states", name: "Data States", page: DataStatesPage, category: "data-browsing" },
   { id: "browsing-app", name: "営業管理の検証画面（Data Browsing）", page: BrowsingApp, fullscreen: true, category: "data-browsing" },
+  { id: "authentication", name: "Authentication", page: AuthenticationPage, category: "system-account" },
+  { id: "settings", name: "Settings", page: SettingsPatternPage, category: "system-account" },
+  { id: "onboarding", name: "Onboarding", page: OnboardingPage, category: "system-account" },
+  { id: "permission-states", name: "Permission States", page: PermissionStatesPage, category: "system-account" },
+  { id: "system-states", name: "System States", page: SystemStatesPage, category: "system-account" },
+  { id: "notifications", name: "Notifications", page: NotificationsPage, category: "system-account" },
+  { id: "account-app", name: "営業管理の検証画面（System & Account）", page: AccountApp, fullscreen: true, category: "system-account" },
 ]
