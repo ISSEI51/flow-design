@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/toast"
 import { AppShell, AppShellBody, AppShellHeader, AppShellMain, MinimalShell } from "@/patterns/app-shell"
 import { BottomNav, BottomNavItem } from "@/patterns/bottom-nav"
 import { PageLayout, type PageWidth } from "@/patterns/page-layout"
+import { isNavParent, type NavChildItem, type NavGroup, type NavItem } from "@/patterns/sidebar-nav"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { Section, SectionHeader, SectionStack, SectionTitle } from "@/patterns/section-layout"
 import { cn } from "@/lib/utils"
@@ -185,8 +186,17 @@ function HybridShellExample({ page }: { page: string }) {
   const area = areaOf(page)
   // 機能群ごとの Sidebar の項目（営業、請求、分析の順のグループ）
   const groupIndex = { sales: 1, billing: 2, analytics: 3 }[area]!
-  const areaGroups = [groups[groupIndex]]
-    .map((g) => ({ items: g.items.map((i) => ({ ...i, href: i.href && hrefFor("hybrid", i.id), children: i.children?.map((c) => ({ ...c, href: hrefFor("hybrid", c.id) })) })) }))
+  // この例のルーティング（#/shell-examples?type=hybrid&page=...）に合わせて、リンク先を付け直す
+  const areaGroups: NavGroup[] = [groups[groupIndex]].map((g) => ({
+    items: g.items.map((i): NavItem => {
+      if (!isNavParent(i)) return { ...i, href: hrefFor("hybrid", i.id) }
+      const link = (c: NavChildItem) => ({ ...c, href: hrefFor("hybrid", c.id) })
+      if (i.href) return { ...i, href: hrefFor("hybrid", i.id), children: i.children.map(link) }
+      // ページを持たない親は、子の項目が 1 つ以上（型の [最初の子, ...残り]）のまま付け直す
+      const [first, ...rest] = i.children
+      return { ...i, children: [link(first), ...rest.map(link)] }
+    }),
+  }))
   const label = groups.flatMap((g) => g.items.flatMap((i) => [i, ...(i.children ?? [])])).find((i) => i.id === page)?.label ?? "ページ"
   return (
     <AppShell>

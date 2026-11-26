@@ -216,7 +216,18 @@ test.describe("Navigation (desktop)", { tag: "@webkit" }, () => {
     // 現在地はニュートラルの面と太さ 600
     const current = nav(page).getByRole("link", { name: "顧客", exact: true })
     await page.mouse.move(800, 600)
-    expect(sameColor(await css(current, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
+    // 現在地が変わった直後は、色の変化（--duration-fast）の途中のため、変化が終わるまで待つ
+    const accent = await token(page, "--sidebar-accent")
+    // 変化の途中は oklab() などで返り比べられないため、その間は「まだ一致しない」として待つ
+    await expect
+      .poll(async () => {
+        try {
+          return sameColor(await css(current, "background-color"), accent)
+        } catch {
+          return false
+        }
+      })
+      .toBe(true)
     expect(await css(current, "font-weight")).toBe("600")
   })
 
@@ -275,10 +286,12 @@ test.describe("Navigation (desktop)", { tag: "@webkit" }, () => {
     await expect(parent).toHaveAccessibleName("契約")
   })
 
-  test("badge: the meaning of the number is announced with the item name", async ({ page }) => {
+  test("badge: the meaning of the number is announced as the item description", async ({ page }) => {
     await openApp(page, "home")
-    // sr-only の要素は位置が独立するため、名前の計算で区切りの空白が入る場合がある
-    await expect(nav(page).getByRole("link", { name: /^商談\s*、進行中 18 件$/ })).toBeVisible()
+    // 名前は変えず、説明（aria-describedby）で数字の意味を伝える
+    const deals = nav(page).getByRole("link", { name: "商談", exact: true })
+    await expect(deals).toBeVisible()
+    await expect(deals).toHaveAccessibleDescription("進行中 18 件")
   })
 
   test("without a sidebar, Ctrl / ⌘ + B is left to the browser", async ({ page }) => {

@@ -193,7 +193,7 @@ Natural Motion
 | --- | --- |
 | 思想、原則、デザイントークン v0.1 | 完了 |
 | Components v0.1（39 種） | 完了 |
-| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：初期実装、Data Browsing：初期実装） |
+| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：初期実装） |
 | Registry & Gallery、Agent Skills | 予定 |
 
 今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
@@ -204,7 +204,7 @@ Components が個々の UI の部品であるのに対し、Patterns はユー�
 
 | グループ | 内容 | 状態 |
 | --- | --- | --- |
-| App Structure | App Shell、Navigation、Page Header、Page Layout、Section Layout（[app-structure.md](docs/web/patterns/app-structure.md)） | 初期実装（レビュー前） |
+| App Structure | App Shell、Navigation、Page Header、Page Layout、Section Layout（[app-structure.md](docs/web/patterns/app-structure.md)） | v0.1 確定 |
 | Data Browsing | Search & Filter、List & Detail、Bulk Actions、View Switching、Data States（[data-browsing.md](docs/web/patterns/data-browsing.md)） | 初期実装（レビュー前） |
 | Forms & Workflows | 登録・編集のフォーム、複数の手順の操作、未保存の変更の確認など | 未着手 |
 | Data Analysis | ダッシュボード、レポートなど | 未着手 |

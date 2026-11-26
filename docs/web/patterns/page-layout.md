@@ -2,7 +2,7 @@
 
 ページの内容の最大幅、配置、余白、列の構成、スクロールを決める。
 
-状態：初期実装 ・ 実装：[`registry/patterns/page-layout.tsx`](../../../registry/patterns/page-layout.tsx) ・ 全体：[App Structure](app-structure.md)
+状態：v0.1 確定 ・ 実装：[`registry/patterns/page-layout.tsx`](../../../registry/patterns/page-layout.tsx) ・ 全体：[App Structure](app-structure.md)
 
 ## 目的
 
@@ -30,7 +30,8 @@
 | `compact` | 400px（25rem） | ログイン、認証 | `--page-width-compact` |
 
 - 製品全体で変える場合は、`:root` などで CSS 変数を上書きする。ページごとに変える場合は `maxWidth`（CSS の長さ）を渡す。
-- 値は rem。ブラウザの文字の大きさの設定を大きくした利用者にも、1 行の文字数を保つ。既定の文字の大きさ（16px）で表の px の値になる。
+- 値は rem。ブラウザの文字の大きさの設定を大きくした利用者にも、1 行の文字数を保つ。既定の文字の大きさ（16px）で表の px の値になる。ページの余白（1rem / 1.5rem）も文字の大きさに合わせて広がる。
+- 最大幅が領域より広い場合は、領域の幅（余白を除く）になる。ページ全体は横にスクロールしない（ルートの文字の大きさを 20px、24px、32px にして、1920px、1280px、390px の幅で確かめた）。
 
 ### 適用範囲
 

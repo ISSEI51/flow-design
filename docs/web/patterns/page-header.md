@@ -2,7 +2,7 @@
 
 ページの目的（タイトル）と、ページ全体に対する操作をまとめる。
 
-状態：初期実装 ・ 実装：[`registry/patterns/page-header.tsx`](../../../registry/patterns/page-header.tsx) ・ 全体：[App Structure](app-structure.md)
+状態：v0.1 確定 ・ 実装：[`registry/patterns/page-header.tsx`](../../../registry/patterns/page-header.tsx) ・ 全体：[App Structure](app-structure.md)
 
 ## 目的
 
@@ -50,6 +50,8 @@ Minimal Shell の画面を含め、すべてのページの最初に 1 つ置く
 - スクロールの領域の上端に固定する。ページの上の余白を Page Header の内側に含め、内容が上の余白に見えないようにする。
 - 固定している間（ページの上の余白を越えてスクロールした後）だけ、下に細い境界線（`border`）を引く。
 - 1 つのスクロールの領域に置く Sticky の Page Header は 1 つまで（`scroll-padding-top` を 1 つの値で設定するため）。
+- Page Header の高さが変わる場合（補足の説明の表示、文字の折り返し、文字の大きさの設定）は、`ResizeObserver` で `scroll-padding-top` と `--app-shell-sticky-top` を更新する。
+- Sticky をやめた場合（`sticky` を false にする、Page Header を取り除く）は、`scroll-padding-top` と `--app-shell-sticky-top` を取り除く。
 - スクロールの領域に `scroll-padding-top`（Page Header の高さ）を設定し、Tab でフォーカスした要素が Page Header の下に隠れないようにする（WCAG 2.4.11）。
 
 ### 使用例

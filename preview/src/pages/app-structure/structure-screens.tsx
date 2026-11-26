@@ -414,9 +414,9 @@ export function CustomerScreen({ id, href, go, long }: { id: string | null; href
         </SectionStack>
         {/* 補足の列は、見出しを 1 段下げ（h3・20px）、メインより弱く示す。h2 は支援技術にだけ示す */}
         <aside aria-labelledby="customer-aside-title" data-testid="customer-aside">
-          <Section>
+          <Section titleId="customer-aside-title">
             <SectionHeader className="sr-only">
-              <SectionTitle id="customer-aside-title">補足の情報</SectionTitle>
+              <SectionTitle>補足の情報</SectionTitle>
             </SectionHeader>
             <SectionStack spacing="group">
               <Section>

@@ -13,7 +13,7 @@ import type { BrowseQuery } from "@/patterns/browse-query"
 import { PageLayout } from "@/patterns/page-layout"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderTitle } from "@/patterns/page-header"
 import { Section, SectionDescription, SectionHeader, SectionHeading, SectionTitle } from "@/patterns/section-layout"
-import type { NavGroup } from "@/patterns/sidebar-nav"
+import type { NavGroup, NavItem } from "@/patterns/sidebar-nav"
 import { resolveInitialView } from "@/patterns/view-switcher"
 
 import { structureLabels, structureNav, structureSettingsItem, structureUser } from "../../data/app-structure"
@@ -346,15 +346,18 @@ function ServerControls({ ws, onReload, onWorkspaceChange }: { ws: string; onRel
 }
 
 // ---------------------------------------------------------------- 画面全体
+// App Structure の検証画面のメニューを、この画面の URL に置き換える（項目の構造は変えない）。
 function navFor(groups: NavGroup[]): NavGroup[] {
-  const fix = (href: string | undefined, id: string) => (href ? appHref(id) : undefined)
   return groups.map((g) => ({
     ...g,
-    items: g.items.map((it) => ({
-      ...it,
-      href: fix(it.href, it.id),
-      children: it.children?.map((c) => ({ ...c, href: appHref(c.id) })),
-    })),
+    items: g.items.map(
+      (it) =>
+        ({
+          ...it,
+          ...(it.href !== undefined && { href: appHref(it.id) }),
+          ...(it.children && { children: it.children.map((c) => ({ ...c, href: appHref(c.id) })) }),
+        }) as NavItem
+    ),
   }))
 }
 

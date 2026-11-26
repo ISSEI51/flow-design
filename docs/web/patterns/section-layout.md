@@ -2,7 +2,7 @@
 
 ページの中の情報のまとまり（セクション）を、見出し、間隔、区切り方で表す。
 
-状態：初期実装 ・ 実装：[`registry/patterns/section-layout.tsx`](../../../registry/patterns/section-layout.tsx) ・ 全体：[App Structure](app-structure.md)
+状態：v0.1 確定 ・ 実装：[`registry/patterns/section-layout.tsx`](../../../registry/patterns/section-layout.tsx) ・ 全体：[App Structure](app-structure.md)
 
 ## 目的
 
@@ -21,10 +21,10 @@ Page Layout の中で、内容を意味のまとまりに分ける場合に使�
 
 | 部品 | 役割 |
 | --- | --- |
-| `Section` | `<section>`。見出しの階層（`level`）を子へ伝える。`divider` で前の内容との間に細い境界線を引く。`landmark` を付けると、見出しの id で `aria-labelledby` を付け、region のランドマークにする |
+| `Section` | `<section>`。見出しの階層（`level`）を子へ伝える。`divider` で前の内容との間に細い境界線を引く。`landmark` を付けると、見出しの id で `aria-labelledby` を付け、region のランドマークにする。`titleId` で見出しの id を指定できる |
 | `SectionHeader` | 見出しと操作の行。操作は右に置き、収まらない場合は見出しの下へ移す |
 | `SectionHeading` | 見出しと補足の説明のまとまり（説明や操作がある場合） |
-| `SectionTitle` | 見出し。要素（h2〜h6）と大きさは階層から決まる |
+| `SectionTitle` | 見出し。要素（h2〜h6）と大きさは階層から決まる。id は `Section` の `titleId`（省略すると自動）で、直接は受け取らない。1 つの Section に 1 つだけ置く |
 | `SectionDescription` | 補足の説明（14px）。必要な場合だけ |
 | `SectionActions` | セクションの中の操作。Secondary か Ghost を基本とする |
 | `SectionStack` | 同じ関係のまとまりを、同じ間隔で縦に並べる |
@@ -37,7 +37,21 @@ Page Layout の中で、内容を意味のまとまりに分ける場合に使�
 | サブセクション | h3 以下（`Section` の中の `Section`） | 20px / 600（`text-heading`） | 16px |
 | 補足の説明 | `<p>` | 14px（`text-ui`） | 見出しの下 8px |
 
-`Section` を入れ子にすると、見出しの要素が 1 つずつ下がる（h2 → h3 → h4）。文字の大きさだけで見出しを表さない。Card の中など、階層を変える必要がある場合は `level` を指定する。
+`Section` を入れ子にすると、見出しの要素が 1 つずつ下がる（h2 → h3 → h4 → h5 → h6）。h6 より深い入れ子は h6 のままにする（3 階層を超える入れ子は、情報の構造を見直す）。文字の大きさだけで見出しを表さない。Card の中など、階層を変える必要がある場合は `level`（2〜6）を指定する。指定した Section の中の入れ子は、その階層から 1 つずつ下がる。
+
+### 名前と id
+
+| 指定 | 結果 |
+| --- | --- |
+| なし（既定） | ランドマークにしない。`aria-labelledby` を付けない |
+| `landmark` と `SectionTitle` | 見出しを名前にした region（`aria-labelledby` は見出しの id） |
+| `landmark` と `titleId` | 見出しの id を指定した値にする（ページ内のリンクの移動先など）。`aria-labelledby` もその値 |
+| `landmark` と `aria-label` | `aria-label` を名前にした region。見出しを置かない場合に使う |
+| `landmark` だけ（見出しも `aria-label` もない） | ブラウザで描画した後に `aria-labelledby` を外し、region にならない。ただし、サーバーで描画した HTML には、Hydration まで存在しない id への参照が残る（サーバーでは見出しの有無を判定できないため）。見出しを置かない landmark には `aria-label` を使う |
+| 見出しを後から表示・削除する | `SectionTitle` が表示されたときと取り除かれたときに Section へ知らせ、`aria-labelledby` を付け外しする |
+
+- 見出しの id は `useId` で作り、複数の Section を置いても重複しない。`titleId` を指定する場合、その値の一意性は製品の責務である。
+- 1 つの Section に `SectionTitle` を 2 つ置くと、id が重複する。2 つ目の見出しが必要な場合は、`Section` を入れ子にする。
 
 ### 余白
 
@@ -101,13 +115,14 @@ Page Layout の中で、内容を意味のまとまりに分ける場合に使�
 ## 操作とレスポンシブ
 
 - セクションの中の操作は見出しの右に置く。見出しに 16rem を残せない場合は、見出しの下へ移す。
+- 長い見出しは折り返す（`word-break: auto-phrase`、長い英単語は `overflow-wrap: anywhere`）。省略記号で切らない。320px の幅でも、操作は見出しの下へ移って表示され、ページは横にスクロールしない。
 - 列は領域の幅で 1 列に戻り、DOM の順序を保つ。
 
 ## アクセシビリティ
 
 - 見出しは HTML の見出しの要素で、階層を飛ばさない（h1 → h2 → h3）。
 - 見出しは常に HTML の見出しの要素で、支援技術の見出しの一覧から移動できる。
-- `<section>` を region のランドマークにするのは、`landmark` を付けた場合だけ（見出しの id による `aria-labelledby`）。小さなまとまりまでランドマークにすると、ランドマークで移動する候補が増えすぎるためである。付ける場合は `SectionTitle` を必ず置く。
+- `<section>` を region のランドマークにするのは、`landmark` を付けた場合だけ（見出しの id による `aria-labelledby`、または `aria-label`）。小さなまとまりまでランドマークにすると、ランドマークで移動する候補が増えすぎるためである。
 - 文字の大きさと見出しの要素が一致するため、見た目の階層と支援技術に伝わる階層が同じになる。
 
 ## 実装例
@@ -155,6 +170,7 @@ Page Layout の中で、内容を意味のまとまりに分ける場合に使�
 - 見出しの文言。見出しと同じ意味の説明を添えない。
 - 背景色と Card を使う理由（区切り方の順序のどの段階か）。
 - 見出しの階層を変える必要がある場合の `level` の指定。
-- ランドマークにする Section の選択（`landmark`）。
+- ランドマークにする Section の選択（`landmark`）と、その名前（`SectionTitle` か `aria-label`）。
+- `titleId` を指定する場合の、ページの中での一意性。
 - 補足の列など、メインより弱く示す領域の見出しの階層（例：支援技術にだけ示す h2 の下に h3 を置く）。
 - エラーのある項目を含む Accordion を開く処理。

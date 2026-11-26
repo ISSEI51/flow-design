@@ -1,6 +1,7 @@
 import type { ComponentType } from "react"
 
 import { AppShellPage } from "./pages/app-structure/app-shell-page"
+import { StructureChecks } from "./pages/app-structure/checks-page"
 import { NavigationPatternPage } from "./pages/app-structure/navigation-page"
 import { PageHeaderPatternPage } from "./pages/app-structure/page-header-page"
 import { PageLayoutPage } from "./pages/app-structure/page-layout-page"
@@ -70,7 +71,8 @@ export const categories: { id: CatalogCategory; name: string }[] = [
   { id: "data-browsing", name: "Patterns：Data Browsing" },
 ]
 
-export const catalog: { id: string; name: string; page: ComponentType; fullscreen?: boolean; category?: CatalogCategory }[] = [
+// hidden のページ（検品用の画面）は、プレビューの上部の一覧に表示しない。
+export const catalog: { id: string; name: string; page: ComponentType; fullscreen?: boolean; category?: CatalogCategory; hidden?: boolean }[] = [
   { id: "button", name: "Button", page: ButtonPage },
   { id: "input", name: "Input", page: InputPage },
   { id: "textarea", name: "Textarea", page: TextareaPage },
@@ -123,6 +125,7 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "section-layout", name: "Section Layout", page: SectionLayoutPage, category: "app-structure" },
   { id: "structure-app", name: "営業管理の検証画面", page: StructureApp, fullscreen: true, category: "app-structure" },
   { id: "shell-examples", name: "Shell の例", page: ShellExamples, fullscreen: true, category: "app-structure" },
+  { id: "structure-checks", name: "App Structure の検品", page: StructureChecks, fullscreen: true, category: "app-structure", hidden: true },
   { id: "search-filter", name: "Search & Filter", page: SearchFilterPage, category: "data-browsing" },
   { id: "list-detail", name: "List & Detail", page: ListDetailPage, category: "data-browsing" },
   { id: "bulk-actions", name: "Bulk Actions", page: BulkActionsPage, category: "data-browsing" },

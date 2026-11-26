@@ -11,7 +11,7 @@ import {
   Wallet,
 } from "lucide-react"
 
-import type { NavGroup, NavItem } from "@/patterns/sidebar-nav"
+import type { NavGroup, NavLinkItem } from "@/patterns/sidebar-nav"
 
 // App Structure の検証用の業務アプリケーション（営業管理）のデータ。Registry の部品はこのデータを知らない。
 // 項目は機能の分類ではなく、営業の業務の流れ（見込み客 → 顧客 → 商談 → 見積もり → 契約 → 請求 → 入金）の順に並べる。
@@ -60,7 +60,8 @@ export function structureLabels(long: boolean) {
 export function structureNav(long: boolean, extra?: Record<string, string>): NavGroup[] {
   const l = structureLabels(long)
   const href = (id: string) => structureHref(id, extra)
-  const item = (id: string, icon: NavItem["icon"], more?: Partial<NavItem>): NavItem => ({ id, label: l[id], icon, href: href(id), ...more })
+  const item = (id: string, icon: NavLinkItem["icon"], badge?: { badge: string; badgeLabel: string }): NavLinkItem =>
+    badge ? { id, label: l[id], icon, href: href(id), ...badge } : { id, label: l[id], icon, href: href(id) }
   return [
     { items: [item("home", House)] },
     {
@@ -70,13 +71,18 @@ export function structureNav(long: boolean, extra?: Record<string, string>): Nav
         item("customers", Building2),
         item("deals", Handshake, { badge: "18", badgeLabel: "進行中 18 件" }),
         item("quotes", FileSignature),
-        item("contracts", FileText, {
+        {
+          // 契約は自身のページ（契約の一覧）を持つ親
+          id: "contracts",
+          label: l.contracts,
+          icon: FileText,
+          href: href("contracts"),
           pageLabel: "契約の一覧",
           children: [
             { id: "renewals", label: l.renewals, href: href("renewals") },
             { id: "cancellations", label: l.cancellations, href: href("cancellations") },
           ],
-        }),
+        },
       ],
     },
     {
@@ -101,7 +107,7 @@ export function structureNav(long: boolean, extra?: Record<string, string>): Nav
   ]
 }
 
-export const structureSettingsItem = (long: boolean, extra?: Record<string, string>): NavItem => ({
+export const structureSettingsItem = (long: boolean, extra?: Record<string, string>): NavLinkItem => ({
   id: "settings",
   label: structureLabels(long).settings,
   icon: Settings,

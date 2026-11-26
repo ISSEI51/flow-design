@@ -2,7 +2,7 @@
 
 製品の画面全体の骨組み。ナビゲーション、メインの内容、スクロールの領域の関係を決める。
 
-状態：初期実装 ・ 実装：[`registry/patterns/app-shell.tsx`](../../../registry/patterns/app-shell.tsx) ・ 全体：[App Structure](app-structure.md)
+状態：v0.1 確定 ・ 実装：[`registry/patterns/app-shell.tsx`](../../../registry/patterns/app-shell.tsx) ・ 全体：[App Structure](app-structure.md)
 
 ## 目的
 
@@ -75,10 +75,38 @@
 | ランドマーク | `AppShellHeader` は `<header>`、メインメニューは `<nav aria-label="メインメニュー">`、`AppShellMain` は `<main>`。main は画面に 1 つ |
 | スキップリンク | `AppShell` の最初の要素。最初の Tab で左上に表示する。押すと main にフォーカスを移す（`tabindex="-1"`）。URL のハッシュは変えない |
 | キーボード | Sidebar の開閉は `SidebarTrigger` と Ctrl / ⌘ + B。折りたたみ時の子の項目は Dropdown Menu（[Navigation](navigation.md)） |
-| 移動の後のフォーカス | `AppShellMain` の `pageKey` が変わったら、main を先頭までスクロールし、ページの h1 にフォーカスを移す（`focusOnNavigate`、既定は `"heading"`）。h1 がなければ main。モバイルのメニューから移動した場合は、Sheet が閉じてから移す。最初の表示では動かさない |
+| 移動の後のフォーカス | `AppShellMain` の `pageKey` が変わったら、main を先頭までスクロールし、ページの h1 にフォーカスを移す（`focusOnNavigate`、既定は `"heading"`）。h1 がなければ main。モバイルのメニューから移動した場合は、Sheet が閉じてから移す。最初の表示では動かさない（「ページの移動の後のフォーカスとスクロール」） |
 | モバイルのメニュー | Sheet の中にフォーカスを閉じ込め、Escape で閉じてメニューのボタンへ戻す（Sidebar と Sheet の仕様） |
 | SSR と Hydration | サーバーでは window と document を参照しない。サーバーの HTML はデスクトップの表示で、Hydration の後にモバイルの表示へ切り替わる。モバイルの幅では、Hydration の前も CSS（`md` 未満で非表示）で Sidebar を隠す |
 | 動きを減らす設定 | Sidebar の幅の変化は `--duration-layout` で、動きを減らす設定では 0ms |
+
+## ページの移動の後のフォーカスとスクロール
+
+`AppShellMain` の `pageKey` が変わったときに行う。`pageKey` はページを表す値（パス、ルートの名前と id など）で、同じページの中の状態（Tabs など）では変えない。
+
+| 条件 | 動作 |
+| --- | --- |
+| 最初の表示 | フォーカスもスクロールも動かさない |
+| `focusOnNavigate="heading"`（既定）で h1 がある | main を先頭までスクロールし、h1 に `tabindex="-1"` を付けてフォーカスを移す（`preventScroll`） |
+| h1 がない | main にフォーカスを移す |
+| `focusOnNavigate="main"` | 常に main |
+| `focusOnNavigate={false}` | フォーカスを移さない（押したリンクにフォーカスが残る） |
+| `scrollOnNavigate={false}` | スクロールの位置を変えない。製品が自分の effect で位置を復元する |
+| モバイルのメニュー（Sidebar の Sheet）から移動した | Sheet が閉じ、Base UI がフォーカスをメニューのボタンに戻した後に移す |
+| Header Shell の Sheet から移動した | Sheet が閉じた後、h1 にフォーカスが移ることを検品（Chromium、WebKit）で確かめた。共通の待ち合わせは追加していない。この結果は Base UI 1.9 の、閉じるときにフォーカスを戻す処理の挙動に依存する（公開された仕様としては確かめていない）。Base UI を更新するときは、この検品で確かめ直す |
+| 短い間に続けて移動した | 前の移動の処理を取り消し、最後のページにだけフォーカスを移す |
+
+- フォーカスは `preventScroll` で移す。製品が復元したスクロールの位置（`scrollOnNavigate={false}` の場合）を変えない。戻る・進むで位置を復元する場合は、その移動だけ `focusOnNavigate={false}` にし、前に押したリンクへフォーカスを戻す方法もある（製品が判断する）。
+- h1 を探すのは、移動の描画の後の 1 回だけ。データの読み込みの後に表示する見出しは探さない。
+
+### 遅れて表示する見出し
+
+- 推奨：ページの見出しは、移動と同時に描画する。タイトルがルートから決まる場合は、内容の読み込み中も h1 を先に表示し、読み込み中の表示（Skeleton など）は h1 の下に置く。
+- 見出しがデータで決まる場合（顧客の名前など）：移動の直後は main にフォーカスが移る。製品は見出しを表示した後に `useAppShell().focusHeading()` を呼ぶ（戻り値は移したかどうか）。`focusHeading` が h1 へフォーカスを移すのは、次をすべて満たす場合だけである。
+  - 直前のページの移動で、`focusOnNavigate="heading"` で h1 がなく、main にフォーカスした。
+  - その後もフォーカスが main にある（利用者がほかの要素へ移していない）。
+  - 最初の表示ではない（最初の表示ではフォーカスを動かさない）。
+- そのため、製品は「最初の表示か、移動の後か」を判定せずに、見出しを表示した後に毎回 `focusHeading()` を呼んでよい。
 
 ## 実装例
 

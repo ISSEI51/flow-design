@@ -66,7 +66,7 @@ export function App() {
             >
               <span className="font-semibold">{cat.id === "components" ? "Flow Design" : cat.name}</span>
               {catalog
-                .filter((c) => (c.category ?? "components") === cat.id)
+                .filter((c) => (c.category ?? "components") === cat.id && !c.hidden)
                 .map((c) => (
                   <a
                     key={c.id}
