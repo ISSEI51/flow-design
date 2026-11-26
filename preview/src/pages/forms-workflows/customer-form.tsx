@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -16,6 +16,7 @@ import {
   createCustomer,
   customerName,
   listCustomers,
+  matchesSavedCustomer,
   lookupZip,
   plans,
   updateCustomer,
@@ -70,7 +71,7 @@ const kinds = [
   { value: "individual", label: "個人" },
 ]
 
-function customerFields(exceptId?: string): FormFields<CustomerValues> {
+function customerFields(exceptId: string | undefined, ws: string): FormFields<CustomerValues> {
   return {
     kind: { label: "種類", required: true },
     company: { label: "会社名", required: true, active: (v) => v.kind === "corporate", normalize: (v) => v.trim() },
@@ -80,7 +81,10 @@ function customerFields(exceptId?: string): FormFields<CustomerValues> {
       label: "顧客コード",
       required: true,
       validate: (v) => (/^C-\d{4}$/.test(v) ? null : "顧客コードは「C-」と 4 桁の数字で入力してください（例：C-0123）"),
-      validateAsync: (v, _all, { signal }) => checkCustomerCode(v, { signal, exceptId }),
+      // 顧客コードの重複は、ワークスペースごとに確かめる（ワークスペースは scopeKey として検証のキーに入る）。
+      // 確かめられなかった場合は保存できない（asyncFailure の既定 block）。保存の処理でもサーバーが重複を確かめる
+      validateAsync: (v, _all, { signal }) => checkCustomerCode(v, { signal, exceptId, ws }),
+      asyncTimeoutMs: 5000,
     },
     email: {
       label: "メールアドレス",
@@ -114,6 +118,7 @@ export function CustomerForm({
   mode,
   initial,
   customerId,
+  ws = "hq",
   idPrefix,
   label,
   onSaved,
@@ -125,6 +130,8 @@ export function CustomerForm({
   mode: "create" | "edit"
   initial: CustomerValues
   customerId?: string
+  /** ワークスペース。要求の宛先とスコープ */
+  ws?: string
   idPrefix: string
   /** 移動の確認の文に示す名前 */
   label?: string
@@ -135,8 +142,9 @@ export function CustomerForm({
   sticky?: boolean
   testId?: string
 }) {
-  const [fields] = useState(() => customerFields(customerId))
-  const form = useFormState<CustomerValues>({ initialValues: initial, fields })
+  const fields = useMemo(() => customerFields(customerId, ws), [customerId, ws])
+  // スコープ：ワークスペースとレコード。編集は変更がなければ保存しない（requireChanges）
+  const form = useFormState<CustomerValues>({ initialValues: initial, fields, scopeKey: `${ws}:${customerId ?? "new"}`, requireChanges: mode === "edit" })
   const id = (name: keyof CustomerValues) => `${idPrefix}-${name}`
   const noticeId = `${idPrefix}-save-notice`
   const continueRef = useRef(false)
@@ -182,11 +190,11 @@ export function CustomerForm({
     async (values) => {
       const input = { ...values, plan: values.plan ?? undefined }
       if (mode === "create") {
-        const result = await createCustomer(input)
+        const result = await createCustomer(input, ws)
         if (result.status === "success" && result.id) savedId.current = result.id
         return result as FormSaveResult<CustomerValues>
       }
-      return (await updateCustomer(customerId!, input)) as FormSaveResult<CustomerValues>
+      return (await updateCustomer(customerId!, input, ws)) as FormSaveResult<CustomerValues>
     },
     {
       onBlocked: (blockers) => {
@@ -205,9 +213,10 @@ export function CustomerForm({
   )
 
   useUnsavedChanges({
-    dirty: form.isDirty,
+    dirty: form.isDirty || form.status === "unknown",
     saving: form.submitting,
     label,
+    revision: form.revision,
     canSave: form.canSubmit,
     onSave: () => save(),
     onDiscard: form.discard,
@@ -215,6 +224,13 @@ export function CustomerForm({
 
   // 保存されたかわからない場合：同じ顧客コードの顧客が登録されているかを確かめる
   const [checking, setChecking] = useState(false)
+  // 確かめた結果の移動（onSaved）は、resolveUnknown の結果を描画し、未保存の変更の登録を更新した後に行う
+  const [confirmedSaved, setConfirmedSaved] = useState<CustomerSaved | null>(null)
+  useEffect(() => {
+    if (!confirmedSaved) return
+    setConfirmedSaved(null)
+    onSaved(confirmedSaved)
+  }, [confirmedSaved])
   const checkSaved = () => {
     setChecking(true)
     window.setTimeout(() => {
@@ -222,28 +238,26 @@ export function CustomerForm({
       // 登録は同じ顧客コードの顧客があるか、編集は保存した値がサーバーの値と一致するかで確かめる
       // 照合するのは、結果が不明になった保存で送信した値（その後に入力した値ではない）
       const sent = form.submittedValues ?? form.values
+      // 送信した項目（表示していた項目）だけを、すべて比べる
+      const sentInput = Object.fromEntries(
+        (Object.keys(sent) as (keyof CustomerValues)[])
+          .filter((key) => fields[key]?.active?.(sent) ?? true)
+          .map((key) => [key, key === "plan" ? (sent.plan ?? undefined) : sent[key]])
+      )
       const found =
         mode === "create"
-          ? listCustomers().find((c) => c.code === sent.code)
-          : listCustomers().find(
-              (c) =>
-                c.id === customerId &&
-                c.email === sent.email.trim().toLowerCase() &&
-                c.phone === sent.phone &&
-                c.address === sent.address.trim() &&
-                c.note === sent.note &&
-                (c.plan || null) === sent.plan
-            )
+          ? listCustomers(false, ws).find((c) => c.code === sent.code)
+          : listCustomers(false, ws).find((c) => c.id === customerId && matchesSavedCustomer(c, sentInput))
       if (found) {
         // 送信した値を基準値にする。送信の後に変えた値は、未保存のまま残る
-        form.markSaved(sent)
-        onSaved({ id: found.id, name: customerName(found), continueNext: false })
-      } else form.clearFormError()
+        form.resolveUnknown({ saved: true, values: sent })
+        setConfirmedSaved({ id: found.id, name: customerName(found), continueNext: false })
+      } else form.resolveUnknown({ saved: false })
     }, 400)
   }
 
   const unknown = form.status === "unknown"
-  const canPress = form.canSubmit && (mode === "create" || form.isDirty)
+  const canPress = form.canSubmit
   const text = (name: "company" | "lastName" | "firstName" | "code" | "email" | "phone" | "zip" | "address" | "note") => ({
     ...form.inputProps(name),
     id: id(name),
@@ -318,9 +332,16 @@ export function CustomerForm({
                 </Field>
               </FormRow>
             </FieldSet>
-            <Field invalid={!!form.error("code")}>
+            <Field invalid={!!form.error("code") || codeStatus === "error"}>
               <FieldLabel>顧客コード</FieldLabel>
-              <Input {...text("code")} className="max-w-48" autoComplete="off" spellCheck={false} />
+              <div className="flex flex-wrap items-center gap-2">
+                <Input {...text("code")} className="max-w-48" autoComplete="off" spellCheck={false} />
+                {codeStatus === "error" && (
+                  <Button type="button" variant="secondary" size="sm" onClick={() => form.revalidate("code")} data-testid={`${idPrefix}-code-recheck`}>
+                    もう一度確かめる
+                  </Button>
+                )}
+              </div>
               {form.error("code") ? (
                 err("code")
               ) : (
@@ -329,8 +350,8 @@ export function CustomerForm({
                     ? "登録済みのコードと重ならないかを確かめています"
                     : codeStatus === "valid"
                       ? "このコードは使えます"
-                      : codeStatus === "unverified"
-                        ? "重複を確かめられませんでした。保存するときに確かめます"
+                      : codeStatus === "error"
+                        ? (form.asyncMessage("code") ?? "重複を確かめられませんでした")
                         : "C-0123 の形。ほかの顧客と同じコードは使えません"}
                 </FieldDescription>
               )}
@@ -465,7 +486,7 @@ export function CustomerForm({
               data-testid={`${idPrefix}-save-notice`}
               blockers={form.blockers}
               hidden={form.submitting || form.composing}
-              unchanged={mode === "edit" && !form.isDirty}
+              unchanged={form.unchanged}
               detail
               onFocusField={(name) => focusFormControl(id(name))}
             />

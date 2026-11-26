@@ -5,6 +5,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/toast"
 import { ConfirmActionDialog, useUndoableAction } from "@/patterns/confirm-action"
+import { FormSaveError } from "@/patterns/form-state"
 
 import { formsServer, wait } from "../../data/forms-workflows/server"
 import { PageHeader } from "../../layout/page-header"
@@ -13,9 +14,11 @@ import { Bullets } from "../app-structure/parts"
 import { AppLink, Mock, Rules } from "../data-browsing/doc-parts"
 import { ServerModes } from "./doc-parts"
 
+// 模擬の実行。失敗（実行されていない）と結果が不明（実行されたかわからない）を区別して投げる
 const run = async () => {
   await wait(formsServer.latency.action)
-  if (formsServer.actionMode === "fail") throw new Error("サーバーに接続できませんでした")
+  if (formsServer.actionMode === "fail") throw new FormSaveError("サーバーが受け付けませんでした", "failed")
+  if (formsServer.actionMode === "unknown") throw new FormSaveError("応答がないまま時間が過ぎました。実行されたかを確かめられていません。最新の状態を確認してください。", "unknown")
 }
 
 // 確かめずに実行する（影響が小さく、すぐに直せる）
@@ -82,7 +85,8 @@ function UndoExample() {
                   },
                   undo: async (task) => {
                     await wait(formsServer.latency.action)
-                    if (formsServer.undoMode === "fail") throw new Error("サーバーに接続できませんでした。アーカイブ済みの一覧から戻してください")
+                    if (formsServer.undoMode === "fail") throw new FormSaveError("サーバーが受け付けませんでした。アーカイブ済みの一覧から戻してください", "failed")
+                    if (formsServer.undoMode === "unknown") throw new FormSaveError("元に戻せたかを確かめられていません。アーカイブ済みの一覧で確認してください", "unknown")
                     // アーカイブ済みの一覧からすでに戻した場合は、二重に戻さない
                     setArchived((a) => a.filter((x) => x !== task))
                     setItems((l) => (l.includes(task) ? l : [...l, task]))
@@ -145,8 +149,10 @@ function SendInvoices() {
         onConfirm={async () => {
           try {
             await run()
-          } catch {
-            return { error: "送信できませんでした。サーバーに接続できません。まだ送信していないため、もう一度送信できます。" }
+          } catch (e) {
+            // 送信されていないことが確かな場合だけ、もう一度送信できる。結果が不明なら、再送信させない（二重の送信を防ぐ）
+            if (e instanceof FormSaveError && e.outcome === "failed") return { error: "送信できませんでした。まだ送信していないため、もう一度送信できます。" }
+            return { unknown: "送信されたかを確かめられていません。請求書の一覧で送信の状態を確認してください。" }
           }
           toast({ variant: "success", title: "3件の請求書を送信しました" })
         }}
@@ -178,11 +184,8 @@ function DeleteContact() {
         confirmLabel="担当者を削除"
         data-testid="confirm-delete"
         onConfirm={async () => {
-          try {
-            await run()
-          } catch {
-            return { error: "削除できませんでした。サーバーに接続できません。時間をおいて、もう一度実行してください。" }
-          }
+          // 失敗と結果が不明は、ConfirmActionDialog が例外の種類で区別する
+          await run()
           toast({ variant: "success", title: "担当者「山田 太郎」を削除しました" })
         }}
       />
@@ -209,11 +212,8 @@ function DeleteWorkspace() {
         confirmLabel="ワークスペースを削除"
         data-testid="confirm-workspace"
         onConfirm={async () => {
-          try {
-            await run()
-          } catch {
-            return { error: "削除できませんでした。サーバーに接続できません。時間をおいて、もう一度実行してください。" }
-          }
+          // 失敗と結果が不明は、ConfirmActionDialog が例外の種類で区別する
+          await run()
           toast({ variant: "success", title: "ワークスペースの削除を受け付けました", description: "この例では、データを削除していません" })
         }}
       />

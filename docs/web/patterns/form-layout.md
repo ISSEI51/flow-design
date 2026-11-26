@@ -2,7 +2,7 @@
 
 フォームの項目の並び、まとまり、間隔、操作ボタンの位置を決める。
 
-状態：初期実装 ・ 実装：[`registry/patterns/form-layout.tsx`](../../../registry/patterns/form-layout.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/form-layout.tsx`](../../../registry/patterns/form-layout.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
 
 ## 目的
 
@@ -25,7 +25,7 @@
 | 必須・任意 | `FieldOptionalMark`、`FieldRequiredMark` | 少ない方に印を付け、フォームの上に凡例を置く |
 | 補足 | FieldDescription | 入力の形式や制約など、判断に必要なことだけ |
 | 操作ボタン | `FormActions` | フォームの末尾。キャンセル（Secondary）を左、保存（Primary）を右 |
-| 保存できない理由 | `SaveBlockerNotice` | 操作ボタンの近く（[create-and-edit.md](create-and-edit.md)） |
+| 保存できない理由 | `SaveBlockerNotice`（`blockers`、`hidden`、`detail`、`detailLimit`、`goal`、`unchanged`、`onFocusField`） | 操作ボタンの近く。下の「保存できない理由」と [create-and-edit.md](create-and-edit.md) |
 | フォーカスの移動 | `focusFormControl(id)` | 理由の一覧やエラーから、該当する入力欄へ移る |
 
 ### 列とまとまり
@@ -77,7 +77,7 @@
 ### 入力の負荷
 
 - 自動補完、既存のデータの再利用、合理的な初期値を使う。自動補完した値は、利用者が直せる。
-- 遅れて届いた自動補完の結果で、利用者が直した値を上書きしない。補完を始める時点で `captureEdits(["address"])` を記録し、結果を `applyAutofill(token, patch)` に渡す。その間に利用者が変えた項目には入れない。
+- 遅れて届いた自動補完の結果で、利用者が直した値を上書きしない。補完を始める時点で `captureEdits(["address"])` を記録し（`AutofillToken`）、結果を `applyAutofill(token, patch)` に渡す。その間に利用者が変えた項目、ほかの自動補完が値を入れた項目には入れない。`reset` とスコープの変更（`scopeKey`）の後に届いた応答では、値を変えない。同じ項目の自動補完を続けて実行した場合も、古い応答で新しい値を上書きしない。
 - 例の郵便番号からの住所の補完は、補完を始める時点で住所に利用者が入力した値がある場合（前回の補完の値でない場合）は補完しない。結果は住所の下の `role="status"` の文で示す（「郵便番号から入力しました。番地を続けて入力してください」「入力した住所を残しました（郵便番号からの補完で上書きしていません）」など）。
 - 自動補完で入れた値は、入力を終えた値として扱い、問題があればすぐにエラーを示す。利用者の編集の回数には数えない。
 - 契約の条件、金額、権限などの重要な選択肢を、初期値で選ばない（例：契約プランは未選択から始める）。
@@ -96,9 +96,27 @@
 - 下の余白に Safe Area（`--app-safe-bottom`）を含める。
 - タッチ操作の端末（`pointer: coarse`）で文字の入力欄にフォーカスがある間は、固定を解除する（`data-typing`）。ソフトウェアキーボードの上に固定の領域を残さない。固定を解除しても、フォームの末尾の位置は変わらない。
 
+### 保存できない理由
+
+`SaveBlockerNotice` は、保存ボタンが押せない理由を、操作ボタンの近くに示す。`id` を保存ボタンの `aria-describedby` に渡す。
+
+| 状態 | 表示 |
+| --- | --- |
+| 未入力・入力の途中の項目がある（`missing`、`incomplete`） | 「あと N 項目を入力すると保存できます」 |
+| エラーを表示している項目がある（`invalid`） | 「N 項目に修正が必要です」。未入力の項目もあれば「未入力の項目が N つ、修正が必要な項目が N つあります」 |
+| 非同期の検証ができなかった項目がある（`check-failed`） | 「{項目の名前}を確かめられませんでした。確かめ直すと{goal}」。未入力や修正が必要な項目と同時の場合は、件数の文の後に「{項目の名前}を確かめられませんでした」 |
+| 非同期の検証の結果を待っている（`checking`） | 「{項目の名前}を確認しています」 |
+| 変更のない編集のフォーム（`unchanged`） | 画面には示さない。支援技術にだけ「変更がありません。変更すると保存できます」を伝える（`sr-only`） |
+| 理由がない | 何も表示しない。要素は残し、`aria-describedby` の参照先を保つ |
+| `hidden`（保存中、変換中など） | 理由を示さない |
+
+- 文は上の表の順に 1 つだけ示す。「保存できます」の部分は `goal` で変える（ステップでは「次へ進めます」）。
+- `detail` と `onFocusField` を渡すと、該当する項目へ移動するボタンを置く。理由の項目が `detailLimit`（既定 3）以下なら項目ごとに並べ（「会社名（未入力）」「顧客コード（確認できなかった）」）、超える場合は「最初の項目（会社名）へ移動」だけを置く。修正が必要な項目、確認できなかった項目、未入力と入力の途中の項目の順に並べる。
+- 変更のない編集のフォームで、押せない理由を画面に足さない方式は、v0.1 でも維持する（[create-and-edit.md](create-and-edit.md) の「変更のない編集のフォーム」）。
+
 ### 検証
 
-保存ボタンの有効と無効、検証のタイミングは [create-and-edit.md](create-and-edit.md) の仕様にそろえる。
+保存ボタンの有効と無効、検証のタイミング、Enter による送信、Focusable Disabled は [create-and-edit.md](create-and-edit.md) の仕様にそろえる。
 
 ## アンチパターン
 
@@ -113,6 +131,7 @@
 | 条件で不要になった項目を表示したままにする | 判断と入力の負荷が増える | `active` で表示しない |
 | 表示していない項目の値を消す、または送信する | 条件を戻したときに入力が失われる。不要な値を送る | 値を残し、送信と検証から除く |
 | 遅れて届いた自動補完で、利用者の修正を上書きする | 入力した値が失われる | `captureEdits` と `applyAutofill` |
+| 変更のない編集のフォームに、押せない理由の文を画面に足す | 見ればわかることを示し、画面の情報が増える | `unchanged` で支援技術にだけ伝える |
 | 金額や契約の条件を初期値で選ぶ | 意図しない契約や請求になる | 未選択から始める |
 | 狭い画面で操作ボタンを固定する | 入力欄とエラーが隠れる | 640px より狭い画面では末尾に置く（`FormActions`） |
 
@@ -128,7 +147,7 @@
 - 行にまとめた項目は FieldSet と FieldLegend で囲み、まとまりの名前を伝える。凡例を見せない場合は `className="sr-only"`。
 - 必須の項目には `required` を付ける。`*` は読み上げない（`aria-hidden`）。「任意」はラベルの一部として読み上げられる。
 - 視覚の順序、DOM の順序、Tab の順序を一致させる。
-- `SaveBlockerNotice` の id を保存ボタンの `aria-describedby` に渡し、押せない理由をボタンの説明にする。
+- `SaveBlockerNotice` の id を保存ボタンの `aria-describedby` に渡し、押せない理由をボタンの説明にする。保存ボタンは Focusable Disabled（`focusableWhenDisabled`、`aria-disabled="true"`）にし、無効の間も Tab で移って理由を聞けるようにする（[create-and-edit.md](create-and-edit.md#focusable-disabled)）。
 - `focusFormControl(id)` は、Checkbox と Switch のように id が隠れた input に付く部品では、同じ Field の操作部品（`role="checkbox"`、`role="switch"`、`role="radio"`）にフォーカスを移す。フォーカスの後に、入力欄を画面の中央へスクロールする。
 - 固定した操作ボタンは、`scroll-padding-bottom` でフォーカスした要素を隠さない。
 
@@ -157,7 +176,7 @@ const form = useFormState<BillingValues>({
 const id = (n: keyof BillingValues) => `billing-${n}`
 
 <PageLayout width="focused">
-  <form noValidate onSubmit={(e) => void save(e)} className="flex flex-col gap-8">
+  <form noValidate onSubmit={(e) => void save(e)} onKeyDown={(e) => submitOnEnter(e, save)} className="flex flex-col gap-8">
     <p className="text-ui text-muted-foreground">「任意」と書かれていない項目は必須です。</p>
     <SectionStack>
       <Section>

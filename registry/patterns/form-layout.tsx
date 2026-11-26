@@ -161,13 +161,13 @@ function focusFormControl(id: string) {
   return true
 }
 
-const kindLabel = { missing: "未入力", incomplete: "入力の途中", invalid: "修正が必要", checking: "確認中" } as const
+const kindLabel = { missing: "未入力", incomplete: "入力の途中", invalid: "修正が必要", checking: "確認中", "check-failed": "確認できなかった" } as const
 
 /**
  * 保存ボタンが押せない理由。保存ボタンの aria-describedby に id を渡す。
  * - 未入力の項目と、入力の途中の項目（エラーをまだ表示していない）は「あと N 項目」と数える。
  * - エラーを表示している項目は「修正が必要」と数える。
- * - 非同期の検証の結果を待っている間は「確認しています」と示す。
+ * - 非同期の検証の結果を待っている間は「確認しています」と示す。検証できなかった（check-failed）場合は、保存できない理由として示す。
  * detail を指定すると、該当する項目へ移動するボタンを置く（長いフォーム）。項目が detailLimit 以下なら項目ごとに並べ、
  * 超える場合は最初の項目へのボタンだけを置く。
  * 理由がないときは、何も表示しない（要素は残し、aria-describedby の参照先を保つ）。
@@ -203,13 +203,18 @@ function SaveBlockerNotice<V extends FormValues>({
   const toFill = list.filter((b) => b.kind === "missing" || b.kind === "incomplete")
   const invalid = list.filter((b) => b.kind === "invalid")
   const checking = list.filter((b) => b.kind === "checking")
-  // 修正が必要な項目を先に、その後は画面の順序
-  const ordered = [...invalid, ...toFill]
-  let summary = ""
-  if (toFill.length && invalid.length) summary = `未入力の項目が ${toFill.length} つ、修正が必要な項目が ${invalid.length} つあります`
-  else if (toFill.length) summary = `あと ${toFill.length} 項目を入力すると${goal}`
-  else if (invalid.length) summary = `${invalid.length} 項目に修正が必要です`
-  else if (checking.length) summary = `${checking.map((b) => b.label).join("、")}を確認しています`
+  const checkFailed = list.filter((b) => b.kind === "check-failed")
+  // 修正が必要な項目と確認できなかった項目を先に、その後は画面の順序
+  const ordered = [...invalid, ...checkFailed, ...toFill]
+  // 理由が 1 種類だけなら、何をすれば goal になるかを示す。複数の種類があれば、種類ごとの件数を並べる
+  const failedLabels = checkFailed.map((b) => b.label).join("、")
+  const parts: string[] = []
+  if (toFill.length && invalid.length) parts.push(`未入力の項目が ${toFill.length} つ、修正が必要な項目が ${invalid.length} つあります`)
+  else if (toFill.length) parts.push(checkFailed.length ? `未入力の項目が ${toFill.length} つあります` : `あと ${toFill.length} 項目を入力すると${goal}`)
+  else if (invalid.length) parts.push(`${invalid.length} 項目に修正が必要です`)
+  if (checkFailed.length) parts.push(parts.length ? `${failedLabels}を確かめられませんでした` : `${failedLabels}を確かめられませんでした。確かめ直すと${goal}`)
+  if (!parts.length && checking.length) parts.push(`${checking.map((b) => b.label).join("、")}を確認しています`)
+  const summary = parts.join("。")
   return (
     <div data-slot="save-blocker-notice" className={cn("flex min-w-0 flex-col gap-2 text-ui", className)} {...props}>
       {summary && <p className="text-muted-foreground [word-break:auto-phrase]">{summary}</p>}

@@ -1,25 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
-import { Ellipsis } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Sheet, SheetBody, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/toast"
-import { ConfirmActionDialog, useUndoableAction } from "@/patterns/confirm-action"
+import { ConfirmActionDialog } from "@/patterns/confirm-action"
 import { FormActions, SaveBlockerNotice, focusFormControl } from "@/patterns/form-layout"
-import { useFormState, type FormFields, type FormState, type FormValues, submitOnEnter } from "@/patterns/form-state"
+import { FormSaveError, useFormState, type FormFields, type FormState, type FormValues, submitOnEnter } from "@/patterns/form-state"
 import { PageLayout } from "@/patterns/page-layout"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { useAutosave, useInstantSave } from "@/patterns/save-modes"
@@ -27,23 +17,23 @@ import { Section, SectionDescription, SectionHeader, SectionHeading, SectionStac
 import { DiscardChangesAlert, useUnsavedChanges } from "@/patterns/unsaved-changes"
 
 import {
-  archiveCustomer,
   customerName,
-  deleteCustomers,
   deleteWorkspace,
+  fetchSetting,
   formsServer,
   getCustomer,
   listCustomers,
   patchCustomer,
   planLabel,
+  readSetting,
   restoreCustomer,
   saveSetting,
   saveSettingsForm,
+  workspaceName,
   type Customer,
 } from "../../data/forms-workflows/server"
 import { ContractWizard } from "./contract-wizard"
 import { CustomerForm, customerToValues, emptyCustomer, type CustomerSaved } from "./customer-form"
-import { ExportDialog, type ExportColumn } from "./export-dialog"
 import { formsHref } from "./forms-router"
 import { ImportWizard } from "./import-wizard"
 
@@ -61,231 +51,11 @@ const useRefresh = () => {
   return () => setN((n) => n + 1)
 }
 
-// ---------------------------------------------------------------- 顧客の一覧
-const exportColumns: ExportColumn[] = [
-  { id: "code", label: "顧客コード", visible: true },
-  { id: "name", label: "名前", visible: true },
-  { id: "email", label: "メールアドレス", visible: true },
-  { id: "plan", label: "プラン", visible: true },
-  { id: "phone", label: "電話番号", visible: false },
-  { id: "address", label: "住所", visible: false },
-]
-const rowFor = (c: Customer) => ({ code: c.code, name: customerName(c), email: c.email, plan: planLabel(c.plan), phone: c.phone, address: c.address })
-
-export function CustomersScreen({ nav }: { nav: Nav }) {
-  const refresh = useRefresh()
-  const { toast } = useToast()
-  const undo = useUndoableAction()
-  const [query, setQuery] = useState("")
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
-  const [confirmIds, setConfirmIds] = useState<string[] | null>(null)
-  const [exportOrigin, setExportOrigin] = useState<"table" | "selection-bar" | null>(null)
-  const all = listCustomers()
-  const rows = all.filter((c) => !query.trim() || `${c.code} ${customerName(c)} ${c.email}`.includes(query.trim()))
-  const archivedCount = listCustomers(true).length
-  // 確認の対象は、現在も存在する行だけ（確認の間に別の利用者がアーカイブした行は除く）。
-  // 閉じる動きの間も内容を変えないよう、最後に表示した対象を残す
-  const lastTargets = useRef<string[]>([])
-  if (confirmIds) lastTargets.current = confirmIds.filter((id) => all.some((c) => c.id === id))
-  const targets = lastTargets.current
-
-  // 検証用：確認を開いた 2 秒後に、ほかの利用者が対象の 1 件をアーカイブする
-  useEffect(() => {
-    if (!confirmIds || !window.__fdFormsChangeWhileConfirm || confirmIds.length < 2) return
-    const t = window.setTimeout(() => {
-      const c = getCustomer(confirmIds[0])
-      if (c) c.archived = true
-      refresh()
-    }, 2000)
-    return () => window.clearTimeout(t)
-    // 開いたときだけ
-  }, [confirmIds])
-
-  const toggle = (id: string, on: boolean) =>
-    setSelected((s) => {
-      const n = new Set(s)
-      if (on) n.add(id)
-      else n.delete(id)
-      return n
-    })
-
-  const archive = (c: Customer) =>
-    void undo
-      .run({
-        perform: () => archiveCustomer(c.id),
-        undo: async (id) => {
-          await restoreCustomer(id)
-          refresh()
-        },
-        title: `${customerName(c)}をアーカイブしました`,
-        undoneTitle: `${customerName(c)}を元に戻しました`,
-        expiredDescription: "アーカイブ済みの顧客の一覧から戻せます",
-      })
-      .then(() => {
-        setSelected((s) => new Set([...s].filter((x) => x !== c.id)))
-        refresh()
-      })
-
-  const named = targets.map((id) => ({ id, name: customerName(getCustomer(id) ?? { kind: "corporate", company: id, lastName: "", firstName: "" }) }))
-  return (
-    <PageLayout width="full" data-testid="forms-customers">
-      <PageHeader>
-        <PageHeaderContent>
-          <PageHeaderTitle>顧客</PageHeaderTitle>
-        </PageHeaderContent>
-        <PageHeaderActions>
-          <a {...nav.linkProps(formsHref("import"))} className="inline-flex min-h-control items-center rounded-lg px-5 text-ui font-medium outline-none hover:bg-accent focus-visible:focus-ring">
-            CSV から取り込む
-          </a>
-          <Button onClick={() => nav.navigate(formsHref("customer-new"))} data-testid="customers-new">
-            顧客を登録
-          </Button>
-        </PageHeaderActions>
-      </PageHeader>
-
-      <div className="flex min-w-0 flex-col gap-4">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <Field className="max-w-80">
-            <FieldLabel>検索</FieldLabel>
-            <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="コード、名前、メールアドレス" data-testid="customers-search" />
-          </Field>
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="secondary" data-testid="customers-export" />}>エクスポート</DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setExportOrigin("table")}>項目を選んでエクスポート…</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        <div className="flex min-h-10 flex-wrap items-center gap-x-4 gap-y-2 text-ui" aria-live="polite" data-testid="customers-bar">
-          {selected.size > 0 ? (
-            <>
-              <span className="font-medium">{selected.size}件を選択中</span>
-              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-                選択を解除
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => setExportOrigin("selection-bar")}>
-                エクスポート
-              </Button>
-              <Button size="sm" variant="secondary" className="text-destructive" onClick={() => setConfirmIds([...selected])} data-testid="customers-delete-selected">
-                削除
-              </Button>
-            </>
-          ) : (
-            <span className="text-muted-foreground">{rows.length}件</span>
-          )}
-        </div>
-
-        <Table data-testid="customers-table">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-12">
-                <span className="sr-only">選択</span>
-              </TableHead>
-              <TableHead>顧客コード</TableHead>
-              <TableHead>名前</TableHead>
-              <TableHead>メールアドレス</TableHead>
-              <TableHead>プラン</TableHead>
-              <TableHead className="w-14">
-                <span className="sr-only">操作</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((c) => (
-              <TableRow key={c.id} data-row-id={c.id}>
-                <TableCell>
-                  <Checkbox checked={selected.has(c.id)} onCheckedChange={(on) => toggle(c.id, on)} aria-label={`${customerName(c)}を選択`} />
-                </TableCell>
-                <TableCell className="tabular-nums">{c.code}</TableCell>
-                <TableCell>
-                  <a {...nav.linkProps(formsHref("customer", { id: c.id }))} className="font-medium underline-offset-4 outline-none hover:underline focus-visible:focus-ring">
-                    {customerName(c)}
-                  </a>
-                </TableCell>
-                <TableCell>{c.email}</TableCell>
-                <TableCell>{planLabel(c.plan)}</TableCell>
-                <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={`${customerName(c)}の操作`} />}>
-                      <Ellipsis />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => nav.navigate(formsHref("customer-edit", { id: c.id, from: "list" }))}>編集</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => archive(c)}>アーカイブ</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem variant="destructive" onClick={() => setConfirmIds([c.id])}>
-                        削除
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <a {...nav.linkProps(formsHref("archived"))} className="inline-flex min-h-10 w-fit items-center text-ui underline underline-offset-4 outline-none focus-visible:focus-ring">
-          アーカイブ済みの顧客（{archivedCount}件）
-        </a>
-      </div>
-
-      <ConfirmActionDialog
-        open={confirmIds !== null}
-        onOpenChange={(o) => !o && setConfirmIds(null)}
-        variant="destructive"
-        title={`${targets.length}件の顧客を削除しますか？`}
-        description="削除した顧客は元に戻せません。契約と請求の履歴も表示できなくなります。残す必要がある場合は、アーカイブを使ってください。"
-        confirmLabel={`${targets.length}件を削除`}
-        retryLabel="もう一度削除"
-        targetKey={[...targets].sort().join(",")}
-        data-testid="customers-delete-dialog"
-        onConfirm={async ({ targetKey }) => {
-          const ids = (targetKey ?? "").split(",").filter(Boolean)
-          const error = (await deleteCustomers(ids))?.error
-          if (error) return { error }
-          setSelected((s) => new Set([...s].filter((x) => !ids.includes(x))))
-          refresh()
-          toast({ variant: "success", title: `${ids.length}件の顧客を削除しました` })
-        }}
-      >
-        <ul className="flex flex-col gap-1 text-ui" data-testid="customers-delete-targets">
-          {named.slice(0, 3).map((n) => (
-            <li key={n.id}>{n.name}</li>
-          ))}
-          {named.length > 3 && <li className="text-muted-foreground">ほか {named.length - 3}件</li>}
-        </ul>
-      </ConfirmActionDialog>
-
-      {exportOrigin && (
-        <ExportDialog
-          open
-          onOpenChange={(o) => !o && setExportOrigin(null)}
-          origin={exportOrigin}
-          kind="顧客"
-          columns={exportColumns}
-          // この一覧はページに分けていないため、「表示中のページ」は選択肢にしない（検索結果と同じになる）。
-          // 「すべてのデータ」は、アーカイブ済みの顧客を含む
-          counts={{ selected: selected.size, page: undefined, results: rows.length, all: all.length + listCustomers(true).length }}
-          getRows={async (scope) =>
-            (scope === "selected" ? all.filter((c) => selected.has(c.id)) : scope === "all" ? [...all, ...listCustomers(true)] : rows).map(rowFor)
-          }
-        />
-      )}
-    </PageLayout>
-  )
-}
-
-declare global {
-  interface Window {
-    __fdFormsChangeWhileConfirm?: boolean
-  }
-}
-
-export function ArchivedScreen({ nav }: { nav: Nav }) {
+export function ArchivedScreen({ nav, ws }: { nav: Nav; ws: string }) {
   const refresh = useRefresh()
   const { toast } = useToast()
   const [restoring, setRestoring] = useState<ReadonlySet<string>>(new Set())
-  const rows = listCustomers(true)
+  const rows = listCustomers(true, ws)
   return (
     <PageLayout width="standard" data-testid="forms-archived">
       <PageHeader>
@@ -311,7 +81,7 @@ export function ArchivedScreen({ nav }: { nav: Nav }) {
                   if (restoring.has(c.id)) return
                   setRestoring((s) => new Set([...s, c.id]))
                   try {
-                    await restoreCustomer(c.id)
+                    await restoreCustomer(c.id, ws)
                     toast({ variant: "success", title: `${customerName(c)}を元に戻しました` })
                   } catch (e) {
                     toast({ variant: "destructive", title: "元に戻せませんでした", description: e instanceof Error ? e.message : undefined })
@@ -326,7 +96,7 @@ export function ArchivedScreen({ nav }: { nav: Nav }) {
           ))}
         </ul>
       )}
-      <a {...nav.linkProps(formsHref("customers"))} className="inline-flex min-h-10 w-fit items-center text-ui underline underline-offset-4 outline-none focus-visible:focus-ring">
+      <a {...nav.linkProps(formsHref("customers", { ws }))} className="inline-flex min-h-10 w-fit items-center text-ui underline underline-offset-4 outline-none focus-visible:focus-ring">
         顧客の一覧へ
       </a>
     </PageLayout>
@@ -334,7 +104,7 @@ export function ArchivedScreen({ nav }: { nav: Nav }) {
 }
 
 // ---------------------------------------------------------------- 登録と編集
-export function CustomerNewScreen({ nav }: { nav: Nav }) {
+export function CustomerNewScreen({ nav, ws }: { nav: Nav; ws: string }) {
   const { toast } = useToast()
   const onSaved = (s: CustomerSaved) => {
     if (s.continueNext) {
@@ -343,7 +113,7 @@ export function CustomerNewScreen({ nav }: { nav: Nav }) {
     }
     toast({ variant: "success", title: `${s.name}を登録しました` })
     // 利用者が別の画面への移動を求めている間（保存して移動など）は、その移動を優先する。保存中に変えた内容が残る場合は移動しない
-    if (!nav.pending() && !s.changedWhileSaving) nav.navigate(formsHref("customer", { id: s.id }), { replace: true })
+    if (!nav.pending() && !s.changedWhileSaving) nav.navigate(formsHref("customer", { id: s.id, ws }), { replace: true })
   }
   return (
     <PageLayout width="focused" data-testid="forms-customer-new">
@@ -355,23 +125,25 @@ export function CustomerNewScreen({ nav }: { nav: Nav }) {
       <CustomerForm
         mode="create"
         initial={emptyCustomer}
+        ws={ws}
         idPrefix="new"
         label="顧客の登録"
         allowContinue
         sticky
         testId="customer-new-form"
         onSaved={onSaved}
-        onCancel={() => nav.navigate(formsHref("customers"))}
+        onCancel={() => nav.navigate(formsHref("customers", { ws }))}
       />
     </PageLayout>
   )
 }
 
-export function CustomerEditScreen({ nav, id, from }: { nav: Nav; id: string; from: string | null }) {
+export function CustomerEditScreen({ nav, id, from, ws }: { nav: Nav; id: string; from: string | null; ws: string }) {
   const { toast } = useToast()
-  const [customer] = useState(() => getCustomer(id))
-  const back = from === "detail" ? formsHref("customer", { id }) : formsHref("customers")
-  if (!customer) return <MissingCustomer nav={nav} />
+  const [customer] = useState(() => getCustomer(id, ws))
+  // 一覧から開いた編集は、一覧に戻って条件、位置、フォーカスを復元する（restore=1）
+  const back = from === "detail" ? formsHref("customer", { id, ws }) : formsHref("customers", { ws, restore: "1" })
+  if (!customer) return <MissingCustomer nav={nav} ws={ws} />
   return (
     <PageLayout width="focused" data-testid="forms-customer-edit">
       <PageHeader>
@@ -383,6 +155,7 @@ export function CustomerEditScreen({ nav, id, from }: { nav: Nav; id: string; fr
         mode="edit"
         initial={customerToValues(customer)}
         customerId={customer.id}
+        ws={ws}
         idPrefix="edit"
         label="顧客の編集"
         sticky
@@ -399,7 +172,7 @@ export function CustomerEditScreen({ nav, id, from }: { nav: Nav; id: string; fr
   )
 }
 
-function MissingCustomer({ nav }: { nav: Nav }) {
+function MissingCustomer({ nav, ws }: { nav: Nav; ws: string }) {
   return (
     <PageLayout width="standard">
       <PageHeader>
@@ -407,7 +180,7 @@ function MissingCustomer({ nav }: { nav: Nav }) {
           <PageHeaderTitle>顧客が見つかりません</PageHeaderTitle>
         </PageHeaderContent>
       </PageHeader>
-      <a {...nav.linkProps(formsHref("customers"))} className="text-ui underline underline-offset-4">
+      <a {...nav.linkProps(formsHref("customers", { ws }))} className="text-ui underline underline-offset-4">
         顧客の一覧へ
       </a>
     </PageLayout>
@@ -426,12 +199,12 @@ const contactFields: FormFields<ContactValues> = {
   phone: { label: "電話番号", validate: (v) => (/^[0-9-]{10,13}$/.test(v) ? null : "電話番号は数字とハイフンで入力してください（例：03-1234-5678）") },
 }
 
-export function CustomerDetailScreen({ nav, id }: { nav: Nav; id: string }) {
+export function CustomerDetailScreen({ nav, id, ws }: { nav: Nav; id: string; ws: string }) {
   const refresh = useRefresh()
   const { toast } = useToast()
-  const customer = getCustomer(id)
+  const customer = getCustomer(id, ws)
   const [contactOpen, setContactOpen] = useState(false)
-  if (!customer) return <MissingCustomer nav={nav} />
+  if (!customer) return <MissingCustomer nav={nav} ws={ws} />
   return (
     <PageLayout width="standard" data-testid="forms-customer">
       <PageHeader>
@@ -440,7 +213,7 @@ export function CustomerDetailScreen({ nav, id }: { nav: Nav; id: string }) {
           <PageHeaderDescription>{customer.code}</PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions>
-          <Button variant="secondary" onClick={() => nav.navigate(formsHref("customer-edit", { id, from: "detail" }))}>
+          <Button variant="secondary" onClick={() => nav.navigate(formsHref("customer-edit", { id, from: "detail", ws }))}>
             編集
           </Button>
         </PageHeaderActions>
@@ -484,13 +257,14 @@ export function CustomerDetailScreen({ nav, id }: { nav: Nav; id: string }) {
           <InlineNote
             value={customer.note}
             onSave={async (note) => {
-              await patchCustomer(id, { note })
+              await patchCustomer(id, { note }, ws)
               refresh()
             }}
           />
         </Section>
       </SectionStack>
       <ContactSheet
+        ws={ws}
         open={contactOpen}
         onOpenChange={setContactOpen}
         customer={customer}
@@ -547,8 +321,12 @@ function InlineNote({ value, onSave }: { value: string; onSave: (v: string) => P
         try {
           await onSave(draft)
           finish()
-        } catch {
-          setError("保存できませんでした。入力した内容は残っています。もう一度保存してください。")
+        } catch (e) {
+          setError(
+            e instanceof FormSaveError && e.outcome === "failed"
+              ? "保存できませんでした。入力した内容は残っています。もう一度保存してください。"
+              : "保存されたかを確かめられていません。ページを開き直して確認してください。"
+          )
         } finally {
           setSaving(false)
         }
@@ -575,19 +353,37 @@ function InlineNote({ value, onSave }: { value: string; onSave: (v: string) => P
 }
 
 /** 一覧や詳細からの簡単な編集（編集の Sheet）。Sheet の未保存の変更の仕組みを使い、移動の確認と二重にしない */
-function ContactSheet({ open, onOpenChange, customer, onSaved }: { open: boolean; onOpenChange: (o: boolean) => void; customer: Customer; onSaved: () => void }) {
-  const form = useFormState<ContactValues>({ initialValues: { email: customer.email, phone: customer.phone }, fields: contactFields })
+function ContactSheet({
+  open,
+  onOpenChange,
+  customer,
+  onSaved,
+  ws,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  customer: Customer
+  onSaved: () => void
+  ws: string
+}) {
+  // スコープはワークスペースとレコード。別のレコードで開き直した後に、前の保存の結果を使わない
+  const form = useFormState<ContactValues>({
+    initialValues: { email: customer.email, phone: customer.phone },
+    fields: contactFields,
+    scopeKey: `${ws}:${customer.id}`,
+    requireChanges: true,
+  })
   const [confirm, setConfirm] = useState(false)
   useEffect(() => {
     if (open) form.reset({ email: customer.email, phone: customer.phone })
     // 開いたときに、保存されている値から始める
   }, [open])
   // ページの移動（ブラウザの戻るなど）でも失われないよう登録する。Sheet を閉じる操作は Sheet の確認だけが扱う
-  useUnsavedChanges({ dirty: open && form.isDirty, saving: form.submitting, label: "連絡先", onDiscard: form.discard })
+  useUnsavedChanges({ dirty: open && form.isDirty, saving: form.submitting, label: "連絡先", revision: form.revision, onDiscard: form.discard })
   const close = () => onOpenChange(false)
   const save = form.handleSubmit(
     async (v) => {
-      await patchCustomer(customer.id, { email: (v.email ?? "").trim().toLowerCase(), phone: v.phone })
+      await patchCustomer(customer.id, { email: (v.email ?? "").trim().toLowerCase(), phone: v.phone }, ws)
       return { status: "success" }
     },
     {
@@ -659,7 +455,9 @@ function SettingsForm<V extends FormValues>({
   initial,
   fields,
   children,
+  ws,
 }: {
+  ws: string
   kind: string
   title: string
   description?: string
@@ -668,14 +466,24 @@ function SettingsForm<V extends FormValues>({
   children: (form: FormState<V>, id: (n: keyof V) => string) => ReactNode
 }) {
   const { toast } = useToast()
-  const form = useFormState<V>({ initialValues: initial, fields })
+  // スコープはワークスペース。保存中に切り替わった場合、古い保存の結果で新しいワークスペースの値と通知を変えない
+  // ワークスペースごとにサーバーが保存している値から始める（保存したことがなければ initial）
+  const stored = () => ({ ...initial, ...readSetting<Partial<V>>(ws, `form-${kind}`, {}) })
+  const form = useFormState<V>({ initialValues: stored(), fields, scopeKey: ws, requireChanges: true })
   const id = (n: keyof V) => `settings-${kind}-${String(n)}`
-  const save = form.handleSubmit((v) => saveSettingsForm<V>(kind, v), {
+  const lastWs = useRef(ws)
+  useEffect(() => {
+    if (lastWs.current === ws) return
+    lastWs.current = ws
+    form.reset(stored())
+    // ワークスペースが変わったときだけ、そのワークスペースの値から始める
+  }, [ws])
+  const save = form.handleSubmit((v) => saveSettingsForm<V>(kind, v, ws), {
     onBlocked: (b) => b[0] && focusFormControl(id(b[0].name)),
     onSuccess: () => toast({ variant: "success", title: `${title}を保存しました` }),
   })
   // 保存の単位ごとに登録する。1 つを保存しても、ほかのフォームの未保存の状態は残る
-  useUnsavedChanges({ dirty: form.isDirty, saving: form.submitting, label: title, canSave: form.canSubmit, onSave: () => save(), onDiscard: form.discard })
+  useUnsavedChanges({ dirty: form.isDirty, saving: form.submitting, label: title, revision: form.revision, canSave: form.canSubmit, onSave: () => save(), onDiscard: form.discard })
   return (
     <Section data-testid={`settings-${kind}`} data-dirty={form.isDirty || undefined}>
       <SectionHeader>
@@ -716,54 +524,87 @@ const text = <V extends FormValues>(form: FormState<V>, name: keyof V & string, 
   id,
 })
 
-export function InstantSwitch({ label, description, initial, kind }: { label: string; description: string; initial: boolean; kind: string }) {
-  const [saved, setSaved] = useState(initial)
+export function InstantSwitch({ label, description, initial, kind, ws = "hq" }: { label: string; description: string; initial: boolean; kind: string; ws?: string }) {
+  const [saved, setSaved] = useState(() => readSetting(ws, kind, initial))
+  useEffect(() => setSaved(readSetting(ws, kind, initial)), [ws, kind, initial])
   const s = useInstantSave<boolean>({
     value: saved,
-    save: async (next) => {
-      await saveSetting(kind, next, { fail: formsServer.instantFails })
-      setSaved(next)
+    scopeKey: ws,
+    // スコープの変更で中止された後は、この画面の状態を変えない（新しいワークスペースの値を、古い保存の結果で上書きしない）
+    save: async (next, { signal }) => {
+      await saveSetting(kind, next, { mode: formsServer.instantMode, ws })
+      if (!signal.aborted) setSaved(next)
     },
+    // 結果が不明な場合に、サーバーの値を読み直す
+    verify: () => fetchSetting(kind, initial, ws),
   })
-  const message =
-    s.status === "saving" ? "保存しています" : s.status === "saved" ? (s.value ? "オンにしました" : "オフにしました") : s.status === "failed" ? "保存できなかったため、元の設定に戻しました。もう一度切り替えてください" : description
+  const message = {
+    idle: description,
+    saving: "保存しています",
+    saved: s.value ? "オンにしました" : "オフにしました",
+    failed: "保存できなかったため、元の設定に戻しました。もう一度切り替えてください",
+    unknown: "保存されたかを確かめられていません。表示はサーバーの値と異なる場合があります",
+    checking: "サーバーの設定を確かめています",
+  }[s.status]
   return (
-    <Field orientation="horizontal" invalid={s.status === "failed"} data-testid={`instant-${kind}`}>
+    <Field orientation="horizontal" invalid={s.status === "failed"} data-testid={`instant-${kind}`} data-status={s.status}>
       <FieldContent>
         <FieldLabel>{label}</FieldLabel>
-        <FieldDescription role="status" className={s.status === "failed" ? "text-destructive" : undefined}>
+        <FieldDescription role="status" className={s.status === "failed" ? "text-destructive" : s.status === "unknown" ? "text-warning" : undefined}>
           {message}
         </FieldDescription>
+        {s.unknown && (
+          <div>
+            <Button size="xs" variant="secondary" onClick={() => void s.check()}>
+              設定を確かめる
+            </Button>
+          </div>
+        )}
       </FieldContent>
-      <Switch checked={s.value} onCheckedChange={(v) => s.change(v)} disabled={s.pending} />
+      <Switch checked={s.value} onCheckedChange={(v) => s.change(v)} disabled={s.pending || s.unknown} />
     </Field>
   )
 }
 
-export function AutosaveMemo() {
-  const [value, setValue] = useState("毎月第 1 営業日に、契約の更新が近い顧客を確認する。")
+export function AutosaveMemo({ ws = "hq" }: { ws?: string }) {
+  const initialMemo = "毎月第 1 営業日に、契約の更新が近い顧客を確認する。"
+  const [value, setValue] = useState(() => readSetting(ws, "memo", initialMemo))
+  // ワークスペースが変わったら、そのワークスペースのメモを表示する（scopeKey で、前のワークスペースの保存の結果を使わない）
+  const lastWs = useRef(ws)
+  if (lastWs.current !== ws) {
+    lastWs.current = ws
+    setValue(readSetting(ws, "memo", initialMemo))
+  }
   const auto = useAutosave({
     value,
+    scopeKey: ws,
     save: async (v) => {
-      await saveSetting("memo", v, { fail: formsServer.autosaveFails })
+      await saveSetting("memo", v, { mode: formsServer.autosaveMode, ws })
     },
   })
-  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", label: "チームのメモ", canSave: true, onSave: () => auto.flush() })
+  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", label: "チームのメモ", canSave: auto.status !== "unknown", onSave: () => auto.flush() })
   const status = {
     saved: auto.savedAt ? `${auto.savedAt.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} に保存しました` : "保存済み",
     unsaved: "入力が止まると保存します",
     saving: "保存しています",
     failed: "保存できませんでした。通信の状態を確認してください",
+    unknown: "保存されたかを確かめられていません。自動では保存し直しません",
   }[auto.status]
   return (
     <Field invalid={auto.status === "failed"}>
       <FieldLabel>チームのメモ</FieldLabel>
       <Textarea rows={4} value={value} onChange={(e) => setValue(e.target.value)} data-testid="autosave-memo" />
       <div className="flex flex-wrap items-center gap-3">
-        <FieldDescription role="status" data-testid="autosave-status" data-status={auto.status} className={auto.status === "failed" ? "text-destructive" : undefined}>
+        <FieldDescription
+          role="status"
+          data-testid="autosave-status"
+          data-status={auto.status}
+          className={auto.status === "failed" ? "text-destructive" : auto.status === "unknown" ? "text-warning" : undefined}
+        >
           {status}
         </FieldDescription>
-        {auto.status === "failed" && (
+        {(auto.status === "failed" || auto.status === "unknown") && (
+          // メモの全体を保存する（同じ内容を保存し直しても結果が変わらない）ため、利用者の操作で保存し直せる
           <Button size="xs" variant="secondary" onClick={() => void auto.retry()}>
             もう一度保存
           </Button>
@@ -776,7 +617,7 @@ export function AutosaveMemo() {
 type CompanyValues = { name: string; phone: string }
 type BillingValues = { recipient: string; email: string }
 
-export function SettingsScreen() {
+export function SettingsScreen({ ws }: { ws: string }) {
   const { toast } = useToast()
   const [deleting, setDeleting] = useState(false)
   return (
@@ -788,6 +629,7 @@ export function SettingsScreen() {
       </PageHeader>
       <SectionStack>
         <SettingsForm<CompanyValues>
+          ws={ws}
           kind="company"
           title="会社の情報"
           initial={{ name: "株式会社フロー", phone: "03-0000-1111" }}
@@ -812,6 +654,7 @@ export function SettingsScreen() {
           )}
         </SettingsForm>
         <SettingsForm<BillingValues>
+          ws={ws}
           kind="billing"
           title="請求先"
           description="請求書の宛名と送付先"
@@ -844,8 +687,8 @@ export function SettingsScreen() {
             </SectionHeading>
           </SectionHeader>
           <div className="flex max-w-[40rem] flex-col">
-            <InstantSwitch kind="notify-renewal" label="契約の更新が近づいたら通知する" description="更新日の 30 日前に通知します" initial />
-            <InstantSwitch kind="notify-import" label="取り込みが終わったら通知する" description="取り込みの結果をメールで送ります" initial={false} />
+            <InstantSwitch ws={ws} kind="notify-renewal" label="契約の更新が近づいたら通知する" description="更新日の 30 日前に通知します" initial />
+            <InstantSwitch ws={ws} kind="notify-import" label="取り込みが終わったら通知する" description="取り込みの結果をメールで送ります" initial={false} />
           </div>
         </Section>
         <Section>
@@ -856,7 +699,7 @@ export function SettingsScreen() {
             </SectionHeading>
           </SectionHeader>
           <div className="max-w-[40rem]">
-            <AutosaveMemo />
+            <AutosaveMemo ws={ws} />
           </div>
         </Section>
         <Section divider>
@@ -877,15 +720,15 @@ export function SettingsScreen() {
         open={deleting}
         onOpenChange={setDeleting}
         variant="destructive"
-        title="ワークスペース「本社営業部」を削除しますか？"
-        description="顧客 5件、契約、請求、取り込みの履歴を含む、すべてのデータを削除します。削除したデータは元に戻せません。"
-        confirmationText="本社営業部"
-        confirmationLabel="確認のため、ワークスペースの名前「本社営業部」を入力してください"
+        title={`ワークスペース「${workspaceName(ws)}」を削除しますか？`}
+        description={`顧客 ${listCustomers(false, ws).length}件、契約、請求、取り込みの履歴を含む、すべてのデータを削除します。削除したデータは元に戻せません。`}
+        confirmationText={workspaceName(ws)}
+        confirmationLabel={`確認のため、ワークスペースの名前「${workspaceName(ws)}」を入力してください`}
         confirmLabel="ワークスペースを削除"
+        targetKey={ws}
         data-testid="workspace-delete-dialog"
         onConfirm={async () => {
-          const result = await deleteWorkspace("本社営業部")
-          if (result?.error) return { error: result.error }
+          await deleteWorkspace(workspaceName(ws))
           toast({ variant: "success", title: "ワークスペースの削除を受け付けました", description: "検証画面のため、データは削除していません" })
         }}
       />
@@ -894,7 +737,7 @@ export function SettingsScreen() {
 }
 
 // ---------------------------------------------------------------- 契約と取り込み
-export function ContractsScreen({ nav }: { nav: Nav }) {
+export function ContractsScreen({ nav, ws }: { nav: Nav; ws: string }) {
   return (
     <PageLayout width="standard" data-testid="forms-contracts">
       <PageHeader>
@@ -902,7 +745,7 @@ export function ContractsScreen({ nav }: { nav: Nav }) {
           <PageHeaderTitle>契約</PageHeaderTitle>
         </PageHeaderContent>
         <PageHeaderActions>
-          <Button onClick={() => nav.navigate(formsHref("contract-new"))} data-testid="contracts-new">
+          <Button onClick={() => nav.navigate(formsHref("contract-new", { ws }))} data-testid="contracts-new">
             契約を登録
           </Button>
         </PageHeaderActions>
@@ -912,7 +755,7 @@ export function ContractsScreen({ nav }: { nav: Nav }) {
   )
 }
 
-export function ContractNewScreen({ nav }: { nav: Nav }) {
+export function ContractNewScreen({ nav, ws }: { nav: Nav; ws: string }) {
   return (
     <PageLayout width="focused" data-testid="forms-contract-new">
       <PageHeader>
@@ -920,12 +763,19 @@ export function ContractNewScreen({ nav }: { nav: Nav }) {
           <PageHeaderTitle>契約を登録</PageHeaderTitle>
         </PageHeaderContent>
       </PageHeader>
-      <ContractWizard draftKey="hanako.sato:hq:contract-new" idPrefix="contract" onCancel={() => nav.navigate(formsHref("contracts"))} onDone={() => nav.navigate(formsHref("contracts"))} />
+      {/* 下書きは、アカウント、ワークスペース、画面で分ける（境界を越えて共有しない） */}
+      <ContractWizard
+        key={ws}
+        draftKey={`hanako.sato:${ws}:contract-new`}
+        idPrefix="contract"
+        onCancel={() => nav.navigate(formsHref("contracts", { ws }))}
+        onDone={() => nav.navigate(formsHref("contracts", { ws }))}
+      />
     </PageLayout>
   )
 }
 
-export function ImportScreen({ nav }: { nav: Nav }) {
+export function ImportScreen({ nav, ws }: { nav: Nav; ws: string }) {
   return (
     <PageLayout width="standard" data-testid="forms-import">
       <PageHeader>
@@ -933,7 +783,7 @@ export function ImportScreen({ nav }: { nav: Nav }) {
           <PageHeaderTitle>顧客を取り込む</PageHeaderTitle>
         </PageHeaderContent>
       </PageHeader>
-      <ImportWizard idPrefix="import" onFinished={() => nav.navigate(formsHref("customers"))} />
+      <ImportWizard key={ws} idPrefix="import" onFinished={() => nav.navigate(formsHref("customers", { ws }))} />
     </PageLayout>
   )
 }

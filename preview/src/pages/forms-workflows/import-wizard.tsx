@@ -9,8 +9,8 @@ import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { FormActions } from "@/patterns/form-layout"
 import { escapeCsvCell, exportFileName } from "@/patterns/export"
-import { createImportColumns, useColumnMapping } from "@/patterns/import-mapping"
-import { ColumnMappingList, ImportIssueTable, ImportResultSummary, ImportValidationSummary, importOutcome, type ImportFilter, type ImportResult } from "@/patterns/import-review"
+import { createImportColumns, reconcileImportResult, useColumnMapping, type ImportIntegrity, type ImportRowResult } from "@/patterns/import-mapping"
+import { ColumnMappingList, ImportIssueTable, ImportResultSummary, ImportValidationSummary, importOutcome, type ImportFilter } from "@/patterns/import-review"
 import { useStepFlow, type StepDefinition } from "@/patterns/step-flow"
 import { Stepper } from "@/patterns/stepper"
 import { useUnsavedChanges } from "@/patterns/unsaved-changes"
@@ -70,7 +70,8 @@ export function ImportWizard({ idPrefix, onFinished }: { idPrefix: string; onFin
   const sourceKey = parsed && file && parsed.key === file.key ? parsed.key : null
   const columns = useMemo(() => (sourceKey && parsed ? createImportColumns(parsed.headers, parsed.rows) : []), [sourceKey, parsed])
   const mapping = useColumnMapping({ sourceKey, columns, fields: importFields })
-  const mappingKey = `${sourceKey}:${JSON.stringify(mapping.mapping)}`
+  // 検証の結果は、対応付けの状態（ファイル、列と項目の構成、対応付け）のキーと組で持つ
+  const mappingKey = mapping.key
   const [validation, setValidation] = useState<{ key: string; plan: ImportPlanRow[]; issues: Awaited<ReturnType<typeof validateRows>>["issues"] } | null>(null)
   const [validating, setValidating] = useState(false)
   const validationCurrent = validation?.key === mappingKey ? validation : null
@@ -79,13 +80,10 @@ export function ImportWizard({ idPrefix, onFinished }: { idPrefix: string; onFin
   const [clearBlanks, setClearBlanks] = useState(false)
   const [allOrNothing, setAllOrNothing] = useState(false)
   const [running, setRunning] = useState<{ done: number; total: number } | null>(null)
-  // unknownRows：結果を受け取れなかった行。行の位置から推測せず、実行ごとに記録する
-  const [outcome, setOutcome] = useState<{
-    result: ImportResult
-    failedRows: { row: number; reason: string }[]
-    unknownRows: ImportPlanRow[]
-    targets: ImportPlanRow[]
-  } | null>(null)
+  // 行ごとの結果（元のファイルの行番号から）。実行ごとに reconcileImportResult で照合し、行の位置から推測しない
+  const [run0, setOutcomeState] = useState<{ targets: ImportPlanRow[]; byRow: Record<number, ImportRowResult>; integrity: ImportIntegrity } | null>(null)
+  const outcome = run0 ? summarize(run0) : null
+  const setOutcome = setOutcomeState
   const [retrying, setRetrying] = useState(false)
   const validateController = useRef<AbortController | null>(null)
 
@@ -172,52 +170,85 @@ export function ImportWizard({ idPrefix, onFinished }: { idPrefix: string; onFin
   // ---------------------------------------------------------------- 4 実行
   const run = async (rows: ImportPlanRow[]) => {
     setRunning({ done: 0, total: rows.length })
-    const r = await runImport(rows, { policy, clearBlanks, onProgress: (done) => setRunning({ done, total: rows.length }) })
-    setRunning(null)
-    return r
+    let raw: unknown
+    try {
+      raw = await runImport(rows, { policy, clearBlanks, onProgress: (done) => setRunning({ done, total: rows.length }) })
+    } catch {
+      // 応答がない（通信の例外）：サーバーで処理が終わっている行があるかもしれない。すべての行を結果が不明として扱い、自動で再実行しない
+      raw = {
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        failed: 0,
+        unknown: rows.length,
+        rows: rows.map((t) => ({ row: t.row, outcome: "unknown", reason: "応答を受け取れませんでした" })),
+      }
+    } finally {
+      setRunning(null)
+    }
+    // サーバーの応答を、送った行と照合する（重複、対象ではない行、結果の不足、件数の不一致）
+    const r = reconcileImportResult({ total: rows.length, rows: rows.map((t) => t.row) }, raw)
+    return { byRow: Object.fromEntries((r.rows ?? []).map((x) => [x.row, x])), integrity: r.integrity }
   }
   const start = async () => {
     if (running || finished || blockedByErrors || !validationCurrent) return
     const r = await run(targets)
-    setOutcome({ ...r, targets })
+    setOutcome({ targets, byRow: r.byRow, integrity: r.integrity })
     advance.current = "confirm"
   }
   const retryFailed = async () => {
-    if (!outcome || retrying) return
+    if (!run0 || retrying) return
     setRetrying(true)
-    // 失敗した行だけを再処理する。成功した行は対象にしない
-    const failed = new Set(outcome.failedRows.map((f) => f.row))
-    const rows = outcome.targets.filter((t) => failed.has(t.row))
+    // 確定した失敗の行だけを再処理する。成功した行と、結果が不明な行は対象にしない
+    const rows = run0.targets.filter((t) => run0.byRow[t.row]?.outcome === "failed")
     const r = await run(rows)
     setRetrying(false)
-    setOutcome({
-      targets: outcome.targets,
-      failedRows: r.failedRows,
-      unknownRows: [...outcome.unknownRows, ...r.unknownRows],
-      result: {
-        created: outcome.result.created + r.result.created,
-        updated: outcome.result.updated + r.result.updated,
-        skipped: outcome.result.skipped + r.result.skipped,
-        failed: r.result.failed,
-        unknown: outcome.result.unknown + r.result.unknown,
-        total: outcome.result.total,
-      },
-    })
+    // 前の実行で見つかった矛盾（対象ではない行の結果、重なった結果）は残す。結果の不足は、再処理した行の分を入れ替える
+    const retried = new Set(rows.map((t) => t.row))
+    const prev = run0.integrity
+    const merged: ImportIntegrity = {
+      invalidCounts: [...new Set([...prev.invalidCounts, ...r.integrity.invalidCounts])],
+      totalMismatch: prev.totalMismatch || r.integrity.totalMismatch,
+      missingRows: [...prev.missingRows.filter((x) => !retried.has(x)), ...r.integrity.missingRows],
+      duplicateRows: [...new Set([...prev.duplicateRows, ...r.integrity.duplicateRows])],
+      unexpectedRows: [...new Set([...prev.unexpectedRows, ...r.integrity.unexpectedRows])],
+      countsDisagree: prev.countsDisagree || r.integrity.countsDisagree,
+      complete: false,
+    }
+    merged.complete =
+      merged.invalidCounts.length === 0 && !merged.totalMismatch && merged.missingRows.length === 0 && merged.duplicateRows.length === 0 && merged.unexpectedRows.length === 0 && !merged.countsDisagree
+    setOutcome({ targets: run0.targets, byRow: { ...run0.byRow, ...r.byRow }, integrity: merged })
   }
 
   // 結果が不明な行の状態をサーバーに確かめる。登録されていなかった行は失敗として扱い、再処理できるようにする
   const [checkingStatus, setCheckingStatus] = useState(false)
   const checkStatus = async () => {
-    if (!outcome || checkingStatus) return
+    if (!run0 || checkingStatus) return
     setCheckingStatus(true)
-    const notRegistered = await checkImportStatus(outcome.unknownRows)
-    setCheckingStatus(false)
-    setOutcome({
-      ...outcome,
-      failedRows: [...outcome.failedRows, ...notRegistered.map((r) => ({ row: r.row, reason: "通信が切れたため、登録されていませんでした" }))],
-      unknownRows: outcome.unknownRows.filter((u) => !notRegistered.some((n) => n.row === u.row)),
-      result: { ...outcome.result, failed: outcome.result.failed + notRegistered.length, unknown: outcome.result.unknown - notRegistered.length },
-    })
+    const unknownRows = run0!.targets.filter((t) => run0!.byRow[t.row]?.outcome === "unknown")
+    let status: Awaited<ReturnType<typeof checkImportStatus>>
+    try {
+      status = await checkImportStatus(unknownRows)
+    } catch {
+      // 確かめられなかった：結果が不明のまま残す
+      return
+    } finally {
+      setCheckingStatus(false)
+    }
+    const byRow = { ...run0!.byRow }
+    // 登録されていた行は成功として扱い、再処理の対象にしない。登録されていなかった行だけを失敗にし、再処理できるようにする
+    for (const r of status.registered) byRow[r.row] = { row: r.row, outcome: "created", reason: "状態を確かめ、登録されていました" }
+    for (const r of status.notRegistered) byRow[r.row] = { row: r.row, outcome: "failed", reason: "結果を受け取れず、登録されていませんでした" }
+    // 状態を確かめた行は、結果の不足ではなくなる
+    const checked = new Set(unknownRows.map((r) => r.row))
+    const i = run0!.integrity
+    const missingRows = i.missingRows.filter((r) => !checked.has(r))
+    const integrity = {
+      ...i,
+      missingRows,
+      complete: i.invalidCounts.length === 0 && !i.totalMismatch && missingRows.length === 0 && i.duplicateRows.length === 0 && i.unexpectedRows.length === 0 && !i.countsDisagree,
+    }
+    setOutcome({ ...run0!, byRow, integrity })
   }
 
   const restart = () => {
@@ -233,12 +264,12 @@ export function ImportWizard({ idPrefix, onFinished }: { idPrefix: string; onFin
 
   const downloadIssues = () => {
     if (!validationCurrent) return
-    const lines = ["行,状態,項目,原因,直し方", ...validationCurrent.issues.map((i) => [i.row, i.state === "error" ? "エラー" : "確認が必要", i.field, i.message, i.fix ?? ""].map(escapeCsvCell).join(","))]
+    const lines = ["行,状態,項目,原因,直し方", ...validationCurrent.issues.map((i) => [i.row, i.state === "error" ? "エラー" : "確認が必要", i.field, i.message, i.fix ?? ""].map((v) => escapeCsvCell(v)).join(","))]
     downloadText(exportFileName({ kind: "取り込みの確認", scope: "エラーと要確認", date: new Date(), extension: "csv" }), lines.join("\r\n"), { bom: true })
   }
   const downloadFailed = () => {
     if (!outcome) return
-    const lines = ["行,原因", ...outcome.failedRows.map((f) => [f.row, f.reason].map(escapeCsvCell).join(","))]
+    const lines = ["行,原因", ...outcome.failedRows.map((f) => [f.row, f.reason].map((v) => escapeCsvCell(v)).join(","))]
     downloadText(exportFileName({ kind: "取り込みの失敗", date: new Date(), extension: "csv" }), lines.join("\r\n"), { bom: true })
   }
 
@@ -251,6 +282,8 @@ export function ImportWizard({ idPrefix, onFinished }: { idPrefix: string; onFin
       <Stepper
         items={flow.items}
         total={flow.total}
+        // 直後の見出しがステップの名前を示すため、簡易の表示では名前を重ねない
+        currentLabel="hidden"
         onSelect={running || finished ? undefined : (id) => flow.goTo(id)}
         aria-label="取り込みの手順"
         data-testid={`${idPrefix}-stepper`}
@@ -466,6 +499,7 @@ export function ImportWizard({ idPrefix, onFinished }: { idPrefix: string; onFin
         <div className="flex flex-col gap-6" data-testid={`${idPrefix}-result`}>
           <ImportResultSummary
             result={outcome.result}
+            integrity={outcome.integrity}
             retrying={retrying || checkingStatus}
             onRetryFailed={outcome.result.failed > 0 ? () => void retryFailed() : undefined}
             onDownloadFailed={outcome.result.failed > 0 ? downloadFailed : undefined}
@@ -574,6 +608,17 @@ function runLabel(c: ReturnType<typeof planCounts>) {
   const fmt = (n: number) => n.toLocaleString("ja-JP")
   const excluded = [c.error > 0 && `エラーの ${fmt(c.error)}件`, c.skip > 0 && `重複の ${fmt(c.skip)}件`].filter(Boolean).join("と")
   return `${fmt(c.create + c.update)}件を取り込む${excluded ? `（${excluded}を除く）` : ""}`
+}
+
+// 行ごとの結果から、件数と失敗した行を数える。処理の対象（targets）のすべての行に結果がある前提（照合で不足を結果が不明にしている）
+function summarize(r: { targets: ImportPlanRow[]; byRow: Record<number, ImportRowResult>; integrity: ImportIntegrity }) {
+  const list = r.targets.map((t) => r.byRow[t.row] ?? { row: t.row, outcome: "unknown" as const, reason: "結果が返されませんでした" })
+  const n = (o: ImportRowResult["outcome"]) => list.filter((x) => x.outcome === o).length
+  return {
+    result: { created: n("created"), updated: n("updated"), skipped: n("skipped"), failed: n("failed"), unknown: n("unknown"), total: r.targets.length },
+    failedRows: list.filter((x) => x.outcome === "failed").map((x) => ({ row: x.row, reason: x.reason ?? "" })),
+    integrity: r.integrity,
+  }
 }
 
 const duplicateOptions = [

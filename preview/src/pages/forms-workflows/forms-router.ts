@@ -63,6 +63,8 @@ export function useFormsRouter() {
       g.confirmNavigation(() => {
         bypass.current = true
         window.history.go(delta)
+        // 移動が起きなかった（履歴の項目がない）場合に、印を残さない。残すと、次の戻る・進むで確かめずに移動してしまう
+        window.setTimeout(() => (bypass.current = false), 1000)
       })
     }
     window.addEventListener("popstate", onPop)
@@ -93,8 +95,17 @@ export function useFormsRouter() {
     [navigate]
   )
 
+  /**
+   * 確認を通さずに URL と画面を置き換える（別のタブでのワークスペースの切り替えを再現する検証のため）。
+   * 製品で、利用者の操作による移動に使わない
+   */
+  const replaceSilently = useCallback((href: string) => {
+    window.history.replaceState({ fdFormsIdx: index.current }, "", href)
+    setRoute(readFormsRoute())
+  }, [])
+
   /** 移動の確認を表示しているか（最新の値。保存の後の処理から読む） */
   const isPending = useCallback(() => guardRef.current.pending, [])
 
-  return { route, navigate, linkProps, isPending }
+  return { route, navigate, linkProps, isPending, replaceSilently }
 }

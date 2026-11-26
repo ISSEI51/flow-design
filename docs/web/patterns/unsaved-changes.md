@@ -2,7 +2,7 @@
 
 未保存の変更がある間の、ページの移動、Overlay を閉じる操作、再読み込みを確かめる。
 
-状態：初期実装 ・ 実装：[`registry/patterns/unsaved-changes.tsx`](../../../registry/patterns/unsaved-changes.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/unsaved-changes.tsx`](../../../registry/patterns/unsaved-changes.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
 
 ## 目的
 
@@ -17,7 +17,7 @@
 | 部分 | 部品 | 仕様 |
 | --- | --- | --- |
 | 確認の仕組み | `UnsavedChangesProvider` | 画面（App Shell の外側など）に 1 つ置く。保存の単位ごとの状態を集め、移動の確認の Alert Dialog と beforeunload の登録を持つ。`labels` で文言を変える |
-| 保存の単位の登録 | `useUnsavedChanges({ dirty, saving, label, canSave, onSave, onDiscard })` | フォームごとに呼ぶ。アンマウントで登録を解除する |
+| 保存の単位の登録 | `useUnsavedChanges({ dirty, saving, label, canSave, revision, onSave, onDiscard })` | フォームごとに呼ぶ。`revision` には `useFormState` の `revision` を渡す。アンマウントで登録を解除する |
 | ルーターとの接続 | `useNavigationGuard()` | `confirmNavigation(proceed, { onCancel })`、`hasUnsavedChanges`、`saving`、`pending` |
 | 移動の確認 | Alert Dialog（`data-slot="unsaved-changes-dialog"`） | 「変更を破棄しますか？」。「編集を続ける」「変更を破棄」、必要な場合だけ「保存して移動」 |
 | 保存を待つ確認 | 同じ Alert Dialog（`data-phase="waiting"`） | 「保存しています」「保存が終わると移動します。」「移動をやめる」 |
@@ -25,8 +25,10 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/unsaved-navigation-dark.svg">
-  <img alt="未保存の変更がある状態での移動の図。移動の要求（Sidebar、リンク、戻る・進む）に対して、未保存の変更があるかを確かめ、いいえなら移動する。はいなら Alert Dialog「変更を破棄しますか？」を開く。選択肢は 3 つで、編集を続ける（初期フォーカス、Escape）は留まる、変更を破棄（現在の変更を捨てる）は移動し再び確認しない、保存して移動（すべて保存できる場合だけ表示する）は成功なら移動し、失敗なら留まり入力を残す。ほかの移動として、保存中は保存が終わるまで待ち「移動をやめる」で取り消せること、再読み込み・タブを閉じる操作は beforeunload によるブラウザの標準の確認で、文言は指定できないことを示す。下の帯に、未保存は最後に保存した値と現在の値の比較で、触れただけでは未保存にしない、とある。" src="../../diagrams/unsaved-navigation-light.svg">
+  <img alt="未保存の変更がある状態での移動の図。移動の要求で未保存の変更があれば Alert Dialog を表示し、編集を続けると留まり、変更を破棄するとこの移動の処理の間だけ確認せずに移動する（新しい変更は確認の対象）。保存して移動では、1 つでも保存に失敗したら残りを保存せずに止めて留まり、保存の間に新しい入力があれば移動せずにもう一度確かめる。保存中は保存が終わるまで待ち、再読み込みやタブを閉じる場合はブラウザの標準の確認（beforeunload）を使う。" src="../../diagrams/unsaved-navigation-light.svg">
 </picture>
+
+図の「再び確認しない」は、「変更を破棄」と「保存して移動」の後の移動の処理の間だけ、同じ変更について確認を出さないことを示す。新しい変更がある場合と、移動が起きなかった場合は、再び確かめる（下の「確認の繰り返しの防止」）。「保存して移動」の成功の後に、保存の間の新しい入力が残っている場合は、移動せずに確認に戻る（下の「移動の確認」）。
 
 ## バリエーション
 
@@ -46,7 +48,7 @@
 - 最後に保存した値と現在の値を比べる（`useFormState` の `isDirty`）。入力欄に触れただけでは未保存にしない。値を元に戻したら、未保存でなくなる。
 - 実際に保存するデータの形で比べる。`normalize`（前後の空白を除く、順序に意味のない配列を並べるなど）の後の値を、キーの順序によらない比較（`stableKey`）で比べる。オブジェクトの参照や配列の並び順だけで判定しない。
 - 保存の成功の後に、基準値を保存した値にする。保存中に入力を変えた場合は、送信した値を基準値にし、送信の後の入力を保存済みとして扱わない。
-- 例：Inline の編集は「編集中で、下書きの値が保存した値と異なる」、自動保存は `hasUnsavedChanges`（保存中を含む）、取り込みは「ファイルを選び、取り込みが終わっていない」を `dirty` にしている。
+- 例：Inline の編集は「編集中で、下書きの値が保存した値と異なる」、自動保存は `hasUnsavedChanges`（保存中と、結果が不明を含む）、取り込みは「ファイルを選び、取り込みが終わっていない」を `dirty` にしている。顧客のフォームと契約の登録は、保存の結果が不明の間も `dirty` にする（`form.isDirty || form.status === "unknown"`）。
 
 ### 状態の表示
 
@@ -62,20 +64,31 @@
 ### 移動の確認
 
 - Alert Dialog を使う。通常は「編集を続ける」と「変更を破棄」の 2 択にする。
-- 「保存して移動」は、未保存のすべての単位に `onSave` があり、`canSave` が true の場合だけ表示する。単位を順に保存し、1 つでも失敗したら残りを保存せずに止め、移動しない（現在の画面と入力を残す）。すべて成功した場合だけ移動する。
+- 「保存して移動」は、未保存のすべての単位に `onSave` があり、`canSave` が true の場合だけ表示する。
+  - 単位ごとに順に保存する。1 つでも失敗したら（`onSave` が false を返す、例外を投げる）、残りを保存せずに止め、移動しない（確認を閉じ、現在の画面と入力を残す。要求の `onCancel` を呼ぶ）。それまでに保存できた単位は保存済みのまま残る。
+  - すべて成功した後に、保存の間の新しい入力（保存を始めた時点の `revision` からの変更）が残っている場合は、移動せずに確認（`confirm`）に戻る。新しい入力を、確認なしに捨てない。
+  - すべて成功し、未保存の変更が残っていない場合だけ移動する。
+  - 実行中も「移動をやめる」で移動だけを取りやめられる。保存は続き、成功すれば未保存の状態が解除され、失敗すればフォームにエラーが残る。取りやめた後に保存が終わっても、移動しない。
+  - 検品：`forms-workflows-checks.spec.ts` の「save and move: a failure in the second unit stays and keeps the input」「save and move: new input during the save asks again instead of moving」（`#/forms-checks?case=unsaved`）。
 - 初期フォーカスは「編集を続ける」（Alert Dialog の既定）、Escape も「編集を続ける」と同じ。外側のクリックでは閉じない。
 - 確認の文には、保存の単位の `label` を並べる（「「会社の情報」「請求先」の変更は保存されていません。」）。`label` がなければ「入力した内容は保存されません。」。
 - 「変更を破棄」は、各単位の `onDiscard` を呼んでから移動する。同じ画面に残る場合に再び確かめないよう、`onDiscard` では値を基準値に戻す（`form.discard`）。
 
 ### 複数の移動の要求
 
-- 確認の表示中に別の移動の要求が来た場合は、最後の要求だけを残す。前の要求の `onCancel` を呼ぶ。
-- 「保存して移動」の実行中に来た要求は受け付けず、その要求の `onCancel` を呼ぶ。実行中も「移動をやめる」で移動を取りやめられる。保存は続き、成功すれば未保存の状態が解除され、失敗すればフォームにエラーが残る。
-- 「編集を続ける」の後は、要求を捨てる（`onCancel`）。取り消した後に、遅れて移動しない。
+- 確認の表示中（`confirm`）と保存を待つ間（`waiting`）に別の移動の要求が来た場合は、最後の要求だけを残す。前の要求の `onCancel` を呼ぶ。古い要求では移動しない。
+- 「保存して移動」の実行中（`saving`）に別の移動の要求が来た場合は、保存を続け、保存の後の移動先を最新の要求に置き換える。前の要求の `onCancel` を呼ぶ。保存がすべて成功し、保存の間の新しい入力がなければ、最新の要求の移動先へ移動する。新しい入力が残っていれば、最新の要求で確認に戻る。保存に失敗したら移動せず、最新の要求の `onCancel` を呼ぶ。初期実装と v0.1 の途中では、実行中に来た要求を受け付けず、その要求の `onCancel` を呼んでいた（利用者が最後に選んだ移動先が無視されていた）。
+- 「編集を続ける」「移動をやめる」の後は、要求を捨てる（`onCancel`）。取り消した後に、遅れて移動しない。保存の結果が後から届いても移動しない。
 
 ### 確認の繰り返しの防止
 
-- 「変更を破棄」と「保存して移動」の対象の単位は、その単位の `dirty` が false になるまで、確認の対象から外す。移動の処理の間に、同じ変更で再び確認が出ない。
+- 「変更を破棄」と「保存して移動」の対象の単位には、確認を省く印（`released`）を付ける。印は、その時点の `revision`（「保存して移動」は保存を始めた時点の `revision`）と組で持つ。移動の処理の間に、同じ変更で再び確認が出ない。
+- 印は、次のいずれかで解く。
+  - `revision` が変わった（新しい変更がある）。
+  - `dirty` が false になった。
+  - 移動の処理（`proceed`）が終わった（次のタスク。`setTimeout(…, 0)`）。
+- 移動を許可した後に、実際の移動が失敗した（画面が残った）場合も、印は残らない。その後の変更は、再び確認の対象になる（検品：「after an allowed navigation fails, later changes are protected again」）。
+- `revision` を渡さない単位では、`dirty` が false になるか、移動の処理が終わるまで、印を残す。
 - 戻る・進むの例のルーターは、元に戻すための `popstate` と、許可された移動の `popstate` では確認を開かない。
 
 ### 保存中の移動
@@ -90,9 +103,17 @@
 
 Registry は特定のルーターに依存しない。実際の移動の阻止と再開は、製品のルーターが行う。
 
+製品への導入の要件：
+
+- アプリの外への移動（再読み込み、タブを閉じる、別のサイト）は、beforeunload で確認する（Provider が登録する）。
+- アプリの中の移動（同じ origin の別のアプリの部分への移動を含む）は、ルーターの blocker などで、移動の前に `confirmNavigation` を通す。画面を切り替える処理が `confirmNavigation` より先に動く構成にしない。
+- 戻る・進むでは、履歴の項目に位置（index）を記録し、移動の量（delta）を求められるようにする。
+- 移動を許可した後の `popstate` を区別する印は、移動が起きなかった場合に残さない（残すと、次の戻る・進むで確かめずに移動する）。例のルーターは 1 秒後に印を解く。
+
 - リンクと Sidebar の移動：既定の移動を止め、`confirmNavigation(() => router.push(href))` を呼ぶ。修飾キー付きのクリック（新しいタブ）は止めない。
 - 移動を止めて「続ける」と「戻す」の処理を渡すルーター（React Router、TanStack Router の blocker など）：止める条件に `hasUnsavedChanges || saving` を使い、止めた移動を `confirmNavigation(proceed, { onCancel: reset })` に渡す。`proceed` を第 1 引数に、`reset` を `onCancel` に対応させる。
-- ブラウザの戻る・進む：`popstate` の時点では URL がすでに変わっている。例のルーター（`preview/src/pages/forms-workflows/forms-router.ts`）は、履歴の項目ごとに位置（`history.state.fdFormsIdx`）を記録し、`history.go(-delta)` で元の項目に戻してから確認を開く。許可されたら `history.go(delta)` で改めて移動する。
+- ブラウザの戻る・進む：`popstate` の時点では URL がすでに変わっている。例のルーター（`preview/src/pages/forms-workflows/forms-router.ts`）は、履歴の項目ごとに位置（`history.state.fdFormsIdx`）を記録し、`history.go(-delta)` で元の項目に戻してから確認を開く。許可されたら `history.go(delta)` で改めて移動する。元に戻すための `popstate` と、許可された移動の `popstate`（印 `bypass`）では確認を開かない。`bypass` は、履歴の項目がないなどで移動が起きなかった場合に備えて、1 秒後に解く。
+- プレビューの制約：検証画面からプレビューの別のページへ「戻る」で移る場合は、プレビューの一覧が先に画面を切り替えるため、確認できない。製品では、上の導入の要件に従う。
 - `confirmNavigation` は、未保存の変更も保存中の処理もなければ、すぐに `proceed` を呼んで true を返す。あれば確認を開いて false を返す。
 
 ### App Shell との関係
@@ -143,8 +164,10 @@ Registry は特定のルーターに依存しない。実際の移動の阻止�
 | オブジェクトの参照で比べる | 同じ値でも未保存になる | `normalize` と `stableKey` |
 | フォームの中の Tabs や Accordion で確かめる | 入力が残る操作を妨げる | ページの移動だけ確かめる |
 | 確認の後に、取り消した移動を実行する | 利用者の判断と異なる | `onCancel` で要求を捨てる |
-| 確認の後の移動で、再び確認が出る | 同じ判断を繰り返させる | 破棄した単位を対象から外す |
-| 保存に失敗しても移動する | 入力が失われる | 保存がすべて成功した場合だけ移動 |
+| 確認の後の移動で、再び確認が出る | 同じ判断を繰り返させる | 破棄した単位を、移動の処理の間だけ対象から外す（`released`） |
+| 確認を省く印を、移動の後も残す | 移動が失敗した後や、新しい入力を、確認なしに失う | `revision` と組で持ち、移動の処理の後に解く |
+| 「保存して移動」の保存の間の新しい入力を、確認せずに捨てる | 保存していない入力が失われる | 確認に戻る |
+| 保存に失敗しても移動する | 入力が失われる | 保存がすべて成功した場合だけ移動。1 つでも失敗したら残りを保存せずに止める |
 | 保存中の移動を、ずっと止める | 通信の障害で操作できなくなる | 待つ間も「移動をやめる」で取り消せる |
 | Overlay の確認と移動の確認を二重に出す | 同じ判断を 2 回させる | 閉じる操作は Overlay の仕組みだけ |
 | beforeunload を常に登録する | 変更がないのに確認が出る | 未保存か保存中の間だけ |
@@ -156,13 +179,14 @@ Registry は特定のルーターに依存しない。実際の移動の阻止�
 
 | 状態 | 持つ場所 | 内容 |
 | --- | --- | --- |
-| 保存の単位 | Provider の登録の一覧（`useUnsavedChanges` の id ごと） | `label`、`dirty`、`saving`、`canSave`（`onSave` がない場合は false）、`save`、`discard`、`released` |
+| 保存の単位 | Provider の登録の一覧（`useUnsavedChanges` の id ごと） | `label`、`dirty`、`saving`、`canSave`（`onSave` がない場合は false）、`revision`、`save`、`discard`、`released`（確認を省く印と、その時点の `revision`） |
 | 移動の要求 | Provider | `proceed`、`onCancel`、段階（`waiting`、`confirm`、`saving`）。最後の 1 件だけ |
-| 未保存の変更があるか | `useNavigationGuard().hasUnsavedChanges` | `dirty` で `released` でない単位がある |
+| 未保存の変更があるか | `useNavigationGuard().hasUnsavedChanges` | `dirty` で、`released` でない（または印の `revision` が現在と異なる）単位がある |
 | 保存中か | `useNavigationGuard().saving` | `saving` の単位がある |
 | 確認を表示しているか | `useNavigationGuard().pending` | 移動の要求がある |
 
-- `useUnsavedChanges` は、マウントで登録し、アンマウントで解除する。値の変化は登録を保ったまま反映する。Provider の外では何もしない。
+- `useUnsavedChanges` は、マウントで登録し、アンマウントで解除する。値の変化は登録を保ったまま反映する（`update`）。Provider の外では何もしない。
+- Provider は、登録の関数（変わらない Context）と状態（変わる Context）を分けて提供する。状態が変わるたびに登録をやり直さないため、確認を省く印（`released`）が登録のやり直しで消えない。
 - `useNavigationGuard` は Provider の外では、常に `proceed` を呼んで true を返す。
 
 ## アクセシビリティ
@@ -174,10 +198,11 @@ Registry は特定のルーターに依存しない。実際の移動の阻止�
 ## 製品側の責務
 
 - ルーターとの接続（リンク、Sidebar、戻る・進む、ルーターの blocker）。
-- 保存の処理（`onSave`）が、成功した場合だけ true を返すこと。いつまでも応答しない保存を、時間切れとして `failed` か `unknown` で終わらせること（確認は「移動をやめる」で閉じられるが、保存ボタンは保存中のままになる）。
+- 保存の処理（`onSave`）が、成功した場合だけ true を返すこと。`revision` を渡すこと（保存の間と、破棄の後の新しい変更を確認の対象に戻すため）。いつまでも応答しない保存を、時間切れとして `failed` か `unknown` で終わらせること（確認は「移動をやめる」で閉じられるが、保存ボタンは保存中のままになる）。
 - 裏で安全に続けられる処理かどうかの判断。
 - 下書きの永続化、保存の時期、機密の情報の除外、境界ごとのキー。
-- アプリの外への移動（beforeunload の対象）と、プレビューのような別のアプリの領域との境界。
+- アプリの外への移動（beforeunload の対象）と、同じ origin の別のアプリの部分との境界（ルーターの blocker で `confirmNavigation` を通す）。
+- 戻る・進むの履歴の項目への位置の記録と、移動を許可した後の印の解除（上の「ルーターとの接続」）。
 
 ## 実装例
 
@@ -195,6 +220,7 @@ useUnsavedChanges({
   saving: form.submitting,
   label: "会社の情報",
   canSave: form.canSubmit,
+  revision: form.revision, // 破棄と保存の後の新しい変更を、確認の対象に戻す
   onSave: () => save(), // 保存できた場合だけ true
   onDiscard: form.discard,
 })
@@ -223,4 +249,4 @@ const linkProps = (href: string) => ({
 </Sheet>
 ```
 
-プレビュー：`#/unsaved-changes`、`#/forms-app?page=settings`（2 つのフォーム）、`#/forms-app?page=customer-edit&id=cu-1&from=list`（ブラウザの戻る・進む）。
+プレビュー：`#/unsaved-changes`、`#/forms-app?page=settings`（2 つのフォーム）、`#/forms-app?page=customer-edit&id=cu-1&from=list`（ブラウザの戻る・進む）、`#/forms-checks?case=unsaved`（検品用の画面。保存して移動の一部の失敗、保存中の入力、移動の失敗の後の保護）。

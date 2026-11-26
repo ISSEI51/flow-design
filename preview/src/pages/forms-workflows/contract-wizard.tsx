@@ -6,12 +6,12 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { FormActions, SaveBlockerNotice, focusFormControl } from "@/patterns/form-layout"
-import { useFormState, type FormFields, submitOnEnter } from "@/patterns/form-state"
+import { FormSaveError, useFormState, type FormFields, submitOnEnter } from "@/patterns/form-state"
 import { useStepFlow, type StepDefinition, type StepFlowSnapshot } from "@/patterns/step-flow"
 import { Stepper } from "@/patterns/stepper"
 import { DiscardChangesAlert, useUnsavedChanges } from "@/patterns/unsaved-changes"
 
-import { deleteDraft, listCustomers, plans, readDraft, saveDraft, submitContract, customerName } from "../../data/forms-workflows/server"
+import { checkSeats, deleteDraft, listCustomers, plans, readDraft, saveDraft, submitContract, customerName } from "../../data/forms-workflows/server"
 
 // 契約の登録（複数のステップの例。製品側のコード）。
 // - 契約の種類で、後のステップが変わる（新規：顧客、契約の内容、支払い、確認。更新：更新する契約、契約の内容、確認）。
@@ -76,6 +76,9 @@ const fields: FormFields<ContractValues> = {
     label: "利用人数",
     required: true,
     validate: (v) => (/^[1-9]\d{0,2}$/.test(v) ? null : "利用人数は 1〜999 の整数で入力してください"),
+    // 利用人数の上限はプランで決まる。プランを変えると、人数が同じでも確かめ直す（asyncDeps）
+    validateAsync: (v, all, { signal }) => checkSeats(all.plan, v, { signal }),
+    asyncDeps: (all) => all.plan,
   },
   start: { label: "開始日", required: true, requiredMessage: "開始日を入力してください" },
   payment: {
@@ -152,7 +155,7 @@ export function ContractWizard({
     setResumeOffered(Boolean(d))
   }, [draftKey])
 
-  useUnsavedChanges({ dirty: form.isDirty && !doneId, saving: form.submitting || draftSaving, label: "契約の登録", onDiscard: form.discard })
+  useUnsavedChanges({ dirty: (form.isDirty || form.status === "unknown") && !doneId, saving: form.submitting || draftSaving, label: "契約の登録", revision: form.revision, onDiscard: form.discard })
 
   const stepBlockers = form.blockers.filter((b) => stepFields[current].includes(b.name))
   const noticeId = `${idPrefix}-step-notice`
@@ -187,9 +190,11 @@ export function ContractWizard({
         setDoneId(contractId)
         return { status: "success" }
       } catch (e) {
-        const message = e instanceof Error ? e.message : "契約を登録できませんでした"
+        // 確定した失敗だけをもう一度登録できる状態にする。それ以外（通信の例外など）は結果が不明として扱う
+        const failed = e instanceof FormSaveError && e.outcome === "failed"
+        const message = e instanceof Error && e instanceof FormSaveError ? e.message : "契約が登録されたかを確かめられていません。契約の一覧で確認してください。"
         setSubmitError(message)
-        return { status: "failed", formError: message }
+        return failed ? { status: "failed", formError: message } : { status: "unknown", formError: message }
       }
     },
     {
@@ -259,6 +264,7 @@ export function ContractWizard({
     return e ? <FieldError data-testid={`${id(name)}-error`}>{e}</FieldError> : null
   }
 
+  const seatsStatus = form.asyncStatus("seats")
   const stepLabel = steps.find((s) => s.id === current)?.label ?? ""
   const customer = listCustomers().find((c) => c.id === form.values.customerId)
 
@@ -300,7 +306,7 @@ export function ContractWizard({
           resume()
         }}
       />
-      <Stepper items={flow.items} total={flow.total} onSelect={(sid) => flow.goTo(sid)} layout={stepperLayout} aria-label="契約の登録の手順" data-testid={`${idPrefix}-stepper`} />
+      <Stepper items={flow.items} total={flow.total} onSelect={(sid) => flow.goTo(sid)} layout={stepperLayout} currentLabel="hidden" aria-label="契約の登録の手順" data-testid={`${idPrefix}-stepper`} />
 
       <form
         noValidate
@@ -359,13 +365,25 @@ export function ContractWizard({
               {select("plan", plans)}
               {err("plan")}
             </Field>
-            <Field invalid={!!form.error("seats")}>
+            <Field invalid={!!form.error("seats") || seatsStatus === "error"}>
               <FieldLabel>利用人数</FieldLabel>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Input {...form.inputProps("seats")} id={id("seats")} inputMode="numeric" className="max-w-32" />
                 <span className="text-body text-muted-foreground">人</span>
+                {seatsStatus === "error" && (
+                  // 確かめられなかった（通信の失敗、応答しない）：利用者の操作で確かめ直す
+                  <Button type="button" variant="secondary" size="sm" onClick={() => form.revalidate("seats")} data-testid={`${idPrefix}-seats-recheck`}>
+                    もう一度確かめる
+                  </Button>
+                )}
               </div>
-              {err("seats")}
+              {form.error("seats")
+                ? err("seats")
+                : seatsStatus === "error" && (
+                    <FieldDescription role="status" data-testid={`${idPrefix}-seats-status`}>
+                      {form.asyncMessage("seats") ?? "利用人数を確かめられませんでした"}
+                    </FieldDescription>
+                  )}
             </Field>
             <Field invalid={!!form.error("start")}>
               <FieldLabel>開始日</FieldLabel>
@@ -431,8 +449,8 @@ export function ContractWizard({
         )}
 
         {submitError && (
-          <Alert variant="destructive" role="alert">
-            <AlertTitle>登録できませんでした</AlertTitle>
+          <Alert variant={form.status === "unknown" ? "warning" : "destructive"} role="alert" data-testid={`${idPrefix}-submit-error`}>
+            <AlertTitle>{form.status === "unknown" ? "登録されたかを確かめられていません" : "登録できませんでした"}</AlertTitle>
             <AlertDescription>{submitError}</AlertDescription>
           </Alert>
         )}

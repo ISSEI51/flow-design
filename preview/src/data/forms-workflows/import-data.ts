@@ -3,7 +3,7 @@
 // 検証と登録は、模擬のサーバーの処理として、このページのメモリの上で行う。
 
 import type { ColumnMapping, ImportField } from "@/patterns/import-mapping"
-import type { ImportIssue, ImportResult } from "@/patterns/import-review"
+import type { ImportIssue } from "@/patterns/import-review"
 
 import { formsServer, listCustomers, wait } from "./server"
 
@@ -59,6 +59,8 @@ export function parseCsv(text: string) {
 }
 
 const failedOnce = new Set<number>()
+// サーバーが処理を終えた行（結果を返せなかった行を含む）。結果が不明の行の状態の確認で使う
+const processedRows = new Set<number>()
 
 export type DuplicatePolicy = "skip" | "update" | "create"
 export type ImportPlanRow = { row: number; values: Record<string, string>; state: "valid" | "review" | "error"; duplicateOf?: string }
@@ -113,21 +115,22 @@ export function planCounts(plan: ImportPlanRow[], policy: DuplicatePolicy) {
 }
 
 /**
- * 取り込みを実行する（模擬）。onProgress は処理した行の数を報告する（実際の進捗がわかる場合だけ）。
- * importMode：success（すべて成功）、partial（3 行が失敗）、fail（すべて失敗）、unknown（途中で通信が切れる）。
+ * 取り込みを実行する（模擬）。サーバーの応答の形（件数と、行ごとの結果）を返す。照合は呼び出し側が reconcileImportResult で行う。
+ * onProgress は処理した行の数を報告する（実際の進捗がわかる場合だけ）。
+ * importMode：success（すべて成功）、partial（3 行が失敗。再処理は成功）、fail（すべて失敗）、unknown（途中で通信が切れ、後半の行の結果がない）、
+ * throw（途中で通信の例外になり、応答がない。前半の行は登録済み）、
+ * inconsistent（同じ行の異なる結果、対象ではない行の結果、結果の不足、行の結果と合わない件数を含む）。
+ * unknown と throw では、応答を返せなかった行の一部（最初の 1 行、throw では前半）をサーバーは処理している。
  */
 export async function runImport(
   targets: ImportPlanRow[],
   { policy, clearBlanks = false, onProgress }: { policy: DuplicatePolicy; clearBlanks?: boolean; onProgress?: (done: number) => void }
-): Promise<{ result: ImportResult; failedRows: { row: number; reason: string }[]; unknownRows: ImportPlanRow[] }> {
+) {
   const mode = formsServer.importMode
   // 更新の空欄の扱い（clearBlanks）は、サーバーへの要求に含める（模擬のため、記録だけを残す）
-  formsServer.requests.push({ kind: "run-import", at: Date.now(), payload: { rows: targets.length, policy, clearBlanks } })
+  formsServer.requests.push({ kind: "run-import", at: Date.now(), payload: { rows: targets.map((t) => t.row), policy, clearBlanks } })
   const total = targets.length
-  const failedRows: { row: number; reason: string }[] = []
-  let created = 0
-  let updated = 0
-  let skipped = 0
+  const rows: { row: number; outcome: string; reason?: string }[] = []
   let done = 0
   const step = Math.max(1, Math.ceil(total / 5))
   for (const t of targets) {
@@ -135,31 +138,49 @@ export async function runImport(
       onProgress?.(done)
       await wait(formsServer.latency.import / 5)
     }
-    if (mode === "unknown" && done >= Math.floor(total / 2)) break
+    if ((mode === "unknown" || mode === "throw") && done >= Math.floor(total / 2)) {
+      // 通信が切れる直前の 1 行は、サーバーでは登録している（応答だけが届かない）
+      processedRows.add(t.row)
+      if (mode === "throw") throw new Error("通信が切れました")
+      break
+    }
     done++
-    // 一部失敗は、最初の試行だけ失敗させる（失敗した行の再処理は成功する）
-    if (mode === "fail" || (mode === "partial" && failedRows.length < 3 && t.row % 6 === 0 && !failedOnce.has(t.row))) {
-      if (mode === "partial") failedOnce.add(t.row)
-      failedRows.push({ row: t.row, reason: mode === "fail" ? "サーバーで処理できませんでした" : "同じ時刻に、ほかの利用者が同じ顧客コードを登録しました" })
+    if (mode === "throw") {
+      processedRows.add(t.row)
       continue
     }
-    if (t.state === "review") {
-      if (policy === "skip") skipped++
-      else if (policy === "update") updated++
-      else created++
-    } else created++
+    // 一部失敗は、最初の試行だけ失敗させる（失敗した行の再処理は成功する）
+    if (mode === "fail" || (mode === "partial" && rows.filter((r) => r.outcome === "failed").length < 3 && t.row % 6 === 0 && !failedOnce.has(t.row))) {
+      if (mode === "partial") failedOnce.add(t.row)
+      rows.push({ row: t.row, outcome: "failed", reason: mode === "fail" ? "サーバーで処理できませんでした" : "同じ時刻に、ほかの利用者が同じ顧客コードを登録しました" })
+      continue
+    }
+    const outcome = t.state === "review" ? (policy === "skip" ? "skipped" : policy === "update" ? "updated" : "created") : "created"
+    if (outcome !== "skipped") processedRows.add(t.row)
+    rows.push({ row: t.row, outcome })
   }
   onProgress?.(done)
+  if (mode === "inconsistent" && rows.length > 2) {
+    rows.push({ ...rows[0], outcome: rows[0].outcome === "failed" ? "created" : "failed" }) // 同じ行の異なる結果
+    rows.push({ row: 9999, outcome: "created" }) // 対象ではない行
+    rows.splice(1, 1) // 結果の不足
+  }
+  const n = (o: string) => rows.filter((r) => r.outcome === o).length
   return {
-    result: { created, updated, skipped, failed: failedRows.length, unknown: total - done, total },
-    failedRows,
-    // 結果を受け取れなかった行（通信が切れた後の行）
-    unknownRows: targets.slice(done),
+    created: mode === "inconsistent" ? n("created") + 1 : n("created"),
+    updated: n("updated"),
+    skipped: n("skipped"),
+    failed: n("failed"),
+    rows,
   }
 }
 
 /** 結果が不明な行が、登録されたかを確かめる（模擬。この画面では、通信が切れた後の行は登録されていない） */
+/** 結果が不明な行が、サーバーで登録されているかを確かめる（模擬）。登録済みの行と、登録されていない行に分ける */
 export async function checkImportStatus(rows: ImportPlanRow[]) {
   await wait(formsServer.latency.action)
-  return rows
+  return {
+    registered: rows.filter((r) => processedRows.has(r.row)),
+    notRegistered: rows.filter((r) => !processedRows.has(r.row)),
+  }
 }

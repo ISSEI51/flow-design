@@ -15,6 +15,7 @@ const modeOptions: Record<ModeKey, { legend: string; options: [string, string][]
       ["fail", "失敗"],
       ["invalid", "サーバー側の検証のエラー"],
       ["unknown", "結果が不明"],
+      ["throw", "予期しない例外"],
     ] satisfies [SaveMode, string][],
   },
   actionMode: {
@@ -22,6 +23,7 @@ const modeOptions: Record<ModeKey, { legend: string; options: [string, string][]
     options: [
       ["success", "成功"],
       ["fail", "失敗"],
+      ["unknown", "結果が不明"],
     ] satisfies [ActionMode, string][],
   },
   undoMode: {
@@ -29,6 +31,7 @@ const modeOptions: Record<ModeKey, { legend: string; options: [string, string][]
     options: [
       ["success", "成功"],
       ["fail", "失敗"],
+      ["unknown", "結果が不明"],
     ] satisfies [ActionMode, string][],
   },
   importMode: {
@@ -38,6 +41,8 @@ const modeOptions: Record<ModeKey, { legend: string; options: [string, string][]
       ["partial", "一部失敗"],
       ["fail", "すべて失敗"],
       ["unknown", "途中で通信が切れる"],
+      ["throw", "途中で通信の例外になる（応答がない）"],
+      ["inconsistent", "結果に矛盾がある"],
     ] satisfies [ImportMode, string][],
   },
 }

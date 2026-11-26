@@ -2,7 +2,7 @@
 
 異なる判断や処理を順に行う作業を、複数のステップに分ける。
 
-状態：初期実装 ・ 実装：[`registry/patterns/step-flow.ts`](../../../registry/patterns/step-flow.ts)、[`registry/patterns/stepper.tsx`](../../../registry/patterns/stepper.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
+状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/step-flow.ts`](../../../registry/patterns/step-flow.ts)、[`registry/patterns/stepper.tsx`](../../../registry/patterns/stepper.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
 
 ## 目的
 
@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | ステップの状態 | `useStepFlow({ steps, isComplete, stepsKnown, initial })` | 現在地、到達したステップ、完了したステップ。入力の値は持たない |
 | 入力の値と検証 | `useFormState`（[create-and-edit.md](create-and-edit.md)） | すべてのステップの値を 1 つのフォームで持つ。ステップごとの完了は、そのステップの項目の `blockers` で判断する |
-| 現在地の表示 | `Stepper` | 上部の横型が標準 |
+| 現在地の表示 | `Stepper`（`items`、`total`、`onSelect`、`layout`、`currentLabel`） | 上部の横型が標準。簡易の表示の現在のステップの名前は `currentLabel` で決める |
 | ステップの見出し | h2 に `flow.headingRef` | 移動の後にフォーカスを移す |
 | 操作ボタン | `FormActions` | 次へ（Primary）、戻る（Secondary）、キャンセル（Ghost）、下書きを保存（Secondary、必要な場合だけ）、最終の確定（Primary、具体的な操作の名前） |
 | 次へ進めない理由 | `SaveBlockerNotice`（`goal="次へ進めます"`、確認のステップは `"登録できます"`） | 現在のステップの項目の理由だけ |
@@ -40,11 +40,23 @@
 | --- | --- | --- |
 | `horizontal` | 上部の横型。印（完了はチェック、要確認は警告の形、ほかは番号）とステップの名前 | 標準 |
 | `vertical` | 縦型 | ステップが多い、横に余裕がある |
-| `compact` | 「ステップ 2 / 4」と現在のステップの名前、「すべての手順」で一覧を開く | 狭い画面 |
+| `compact` | 「ステップ 2 / 4」と現在のステップの名前（`currentLabel="hidden"` では番号と総数だけ）、「すべての手順」で一覧を開く | 狭い画面 |
 | `auto`（既定） | 置かれた領域の幅が 36rem 以上（`@xl/stepper`）で横型、狭ければ簡易表示 | 画面の幅が変わる場合 |
 
 - Stepper は Tabs ではない。ステップは順序を持ち、未到達のステップへは移れない。Progress Bar でもない。ステップの数の割合を、処理の進捗率として扱わない。
 - 簡易表示でも、完了したステップへの直接の移動を削らない（一覧を開いて選ぶ。選ぶと一覧を閉じる）。
+
+### Stepper と見出し
+
+| `currentLabel` | 簡易の表示（`compact`、`auto` の狭い領域）の内容 | 使う場合 |
+| --- | --- | --- |
+| `"visible"`（既定） | ステップの番号と総数、現在のステップの名前、「すべての手順」 | Stepper をステップの見出しと離して置く場合 |
+| `"hidden"` | ステップの番号と総数（総数が決まっていない場合は番号だけ）、「すべての手順」 | Stepper の直後に、同じステップの名前の見出し（h2）が続く場合 |
+
+- `"hidden"` にしても、総数が決まっていない場合に架空の総数を示さない（「ステップ 1」）。
+- 横型と縦型の表示は、`currentLabel` で変わらない（ステップの名前を並べる）。
+- 現在地（`aria-current="step"`）と、移動の後のステップの見出しへのフォーカスは、どちらの値でも変わらない。
+- 例の契約の登録と取り込みは `"hidden"` を使う（狭い領域では「ステップ 2 / 5」と「すべての手順」の下に、見出し「顧客」が続く）。初期実装のレビューで、簡易の Stepper の現在のステップの名前と、ステップの見出しが続けて表示されることを指摘され、v0.1 で `currentLabel` を追加した。
 
 ### 分岐
 
@@ -71,7 +83,7 @@
 
 - 直接の移動で、必要な検証や前提条件を飛ばせない。後ろのステップへ移る場合は、通過したステップを完了として記録する（`canGoTo` で完了を確かめている）。
 - 移動の後は、ステップの見出しにフォーカスを移す（最初の表示では移さない）。見出しに `tabindex="-1"` を付ける。
-- Enter キーで次へを求めたが、現在のステップが完了していない場合は、そのステップの項目だけエラーを表示し（`form.reveal(stepFields[current])`）、最初の問題の項目へフォーカスを移す。「次へ」は無効の間 `aria-disabled` のため Enter の暗黙の送信が起きない。form の `onKeyDown` で `submitOnEnter` を使う。
+- 1 行の入力欄の Enter で次へを求めたが、現在のステップが完了していない場合は、そのステップの項目だけエラーを表示し（`form.reveal(stepFields[current])`）、最初の問題の項目へフォーカスを移す。「次へ」は無効の間 Focusable Disabled（`aria-disabled`）のため、Enter の暗黙の送信が起きない。form の `onKeyDown` で `submitOnEnter` を使う。送信にしない Enter（Select、日付、Textarea など）は [create-and-edit.md](create-and-edit.md#enter-による送信) の規則に従う。
 
 ### ステップの状態
 
@@ -88,6 +100,14 @@
 - 前のステップの変更で影響を受ける項目だけを、確かめ直す。無関係な入力を一律に消さない。
 - 後続のステップが完了でなくなった場合は、完了として扱わない（`needs-review`）。例：契約の内容でエンタープライズを選ぶと、支払いの方法は請求書だけになる。クレジットカードを選んでいた場合は、支払いのステップが要確認になり、「エンタープライズは請求書での支払いだけです。支払い方法を選び直してください」と理由を示す。ほかの入力は残す。
 - 値を捨てる必要がある場合は、理由を示す。
+
+### 前のステップの値に依存する非同期の検証
+
+前のステップの値で結果が変わる非同期の検証は、`asyncDeps` で依存する値を渡す（[create-and-edit.md](create-and-edit.md#非同期の検証)）。依存する値が変わると、対象の項目の値が同じでも以前の結果を使わず、確かめ直す。
+
+- 例：契約の登録の利用人数（`seats`）は、プランごとの上限をサーバーで確かめる（ライトは 10 人、スタンダードは 100 人まで）。`asyncDeps: (all) => all.plan` を指定するため、利用人数を 12 人にしたままプランをライトに変えると、確かめ直して「ライト（月額 9,800円）の利用人数は 10 人までです。プランか人数を変えてください」を示し、次へ進めない。スタンダードに変えると、次へ進める（`#/multi-step` の「提供を終えたプランを含む下書きを用意する」から確かめられる）。
+- 利用人数を確かめられなかった場合（通信の失敗、応答しない）は、次へ進めない。項目に理由（`asyncMessage("seats")`）と「もう一度確かめる」（`revalidate("seats")`）を示し、操作の近くに「利用人数を確かめられませんでした。確かめ直すと次へ進めます」を示す。
+- 確かめられなかった場合（通信の失敗、期限切れ）は、`asyncFailure` の既定（`"block"`）により次へ進めない。
 
 ### 条件で現在のステップが不要になった場合
 
@@ -111,7 +131,7 @@
 
 - 原則として、正式な登録は最後のステップで行う。途中のステップの完了と、正式な登録の完了を分ける（次へで進むことは登録ではない）。
 - 本人確認やファイルのアップロードなど、途中で処理を確定する必要がある場合は、そのステップの完了と正式な登録の完了を分けて示し、確定したことを戻る操作で取り消せるように見せない。例：取り込みでは、「内容の確認」のステップで取り込みを実行し、実行中と実行の後は Stepper から別のステップへ移れない（[import-and-export.md](import-and-export.md)）。
-- 二重の実行を防ぐ（`handleSubmit`）。最終の処理が失敗したら、入力を残し、原因を示す（「登録できませんでした」の Alert）。
+- 二重の実行を防ぐ（`handleSubmit`）。最終の処理が失敗したら、入力を残し、原因を示す（「登録できませんでした」の Alert）。確定した失敗（`FormSaveError` の `failed`）だけを、もう一度登録できる状態にする。それ以外の例外は結果が不明として扱い、「登録されたかを確かめられていません」（warning）を示し、再び登録させない（[create-and-edit.md](create-and-edit.md#保存の結果)）。
 - 重要な手続きの完了は、専用の完了の表示にしてよい（「契約を登録しました」、契約番号、「続けて契約を登録」「契約の一覧へ」）。完了の見出しにフォーカスを移す。
 
 ### 途中の離脱と下書き
@@ -122,7 +142,7 @@
 
 ### モバイル
 
-- 現在のステップの名前と、決まっている場合は総数（「ステップ 2 / 4」）を優先する（簡易表示）。
+- 現在のステップの番号と、決まっている場合は総数（「ステップ 2 / 4」）を優先する（簡易表示）。ステップの名前は、直後の見出しが示す場合は Stepper に重ねない（`currentLabel="hidden"`）。
 - 必要に応じて、ステップの一覧を開けるようにする（「すべての手順」）。
 - 完了したステップへの直接の移動など、必要な操作を削らない。
 
@@ -143,6 +163,8 @@
 | 戻るとキャンセルを同じ見た目と言葉にする | 全体をやめてしまう | 戻るは Secondary、キャンセルは Ghost |
 | 状態を色だけで示す | 色を区別できない利用者に伝わらない | 形と文字（チェック、警告、「要確認」） |
 | 狭い画面でステップへの直接の移動を削る | 完了したステップへ戻れない | 簡易表示の一覧 |
+| 簡易の Stepper と直後の見出しに、同じステップの名前を続けて示す | 同じ情報を繰り返し、狭い画面で内容が下がる | `currentLabel="hidden"` |
+| 前のステップの値に依存する検証の結果を、その値が変わった後も使う | 現在の条件で確かめていない値で登録される | `asyncDeps` |
 
 ## 状態管理
 
@@ -164,7 +186,7 @@
 - Stepper は `nav`（既定の名前「手順」、`aria-label` で変える）の中の `ol`。現在のステップの `li` に `aria-current="step"` を付ける。
 - 状態の名前を文字で伝える（「（完了）」「（現在のステップ）」「（未完了）」は読み上げ用の文字、要確認は見える文字「要確認」）。色だけで区別しない。
 - 直接移動できるステップだけをボタンにする。それ以外は文字だけで、押せる形にしない。横型の印のボタンは `tabIndex={-1}` と `aria-hidden` で、支援技術にはラベルのボタンだけを示す（重複させない）。押せる範囲は高さ 40px 以上（`min-h-10`）。
-- 簡易表示の「すべての手順」は `aria-expanded` と `aria-controls` を持つ。
+- 簡易表示の「すべての手順」は `aria-expanded` と `aria-controls` を持つ。`currentLabel="visible"` では、現在のステップの名前に読み上げ用の「（現在のステップ）」を添える。`"hidden"` では、現在のステップの名前は直後の見出しで伝える（移動の後に見出しへフォーカスを移す）。
 - 移動の後は、ステップの見出しにフォーカスを移し、現在のステップを伝える。
 - 次へと確定のボタンは、無効の間も Tab で移れ（`focusableWhenDisabled`）、`aria-describedby` で進めない理由を説明にする。
 
@@ -183,6 +205,16 @@ const stepFields: Record<StepId, (keyof ContractValues)[]> = {
   type: ["contractType"], customer: ["customerId"], renewal: ["renewalOf"],
   terms: ["plan", "seats", "start"], payment: ["payment", "billingEmail", "cardHolder"], review: [],
 }
+const fields: FormFields<ContractValues> = {
+  // …
+  seats: {
+    label: "利用人数",
+    required: true,
+    validate: (v) => (/^[1-9]\d{0,2}$/.test(v) ? null : "利用人数は 1〜999 の整数で入力してください"),
+    validateAsync: (v, all, { signal }) => api.checkSeats(all.plan, v, { signal }), // 上限はプランで決まる
+    asyncDeps: (all) => all.plan, // プランを変えると、人数が同じでも確かめ直す
+  },
+}
 
 const form = useFormState<ContractValues>({ initialValues: emptyContract, fields }) // customerId、payment は active: isNew
 const steps = stepsFor(form.values) // 新規：type, customer, terms, payment, review。更新：type, renewal, terms, review。未選択：type
@@ -197,12 +229,14 @@ const submit = form.handleSubmit((values) => api.submitContract(values), {
   onBlocked: () => { const target = flow.firstIncomplete(); if (target) flow.goTo(target) },
 })
 
-<Stepper items={flow.items} total={flow.total} onSelect={(id) => flow.goTo(id)} aria-label="契約の登録の手順" />
-<form noValidate onSubmit={(e) => {
-  e.preventDefault()
+// 次へ、または確認のステップでは登録。完了していない場合は、このステップの項目だけエラーを示す
+const advance = () => {
   if (current === "review") void submit()
   else if (!flow.next()) form.reveal(stepFields[current])
-}}>
+}
+
+<Stepper items={flow.items} total={flow.total} onSelect={(id) => flow.goTo(id)} currentLabel="hidden" aria-label="契約の登録の手順" />
+<form noValidate onSubmit={(e) => { e.preventDefault(); advance() }} onKeyDown={(e) => submitOnEnter(e, advance)}>
   <h2 ref={flow.headingRef} className="text-section outline-none">{steps.find((s) => s.id === current)?.label}</h2>
   …
   <FormActions notice={<SaveBlockerNotice id="contract-notice" blockers={form.blockers.filter((b) => stepFields[current].includes(b.name))} goal={current === "review" ? "登録できます" : "次へ進めます"} />}>

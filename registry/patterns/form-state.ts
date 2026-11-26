@@ -11,20 +11,31 @@ import * as React from "react"
 //   入力の妥当性                … 描画のたびに、現在の値から同期の検証を計算する（Blur を待たない）
 //   エラーの表示（shown）       … 入力を終えた（Blur した）項目、選択を確定した項目、保存を試みた後のすべての項目
 //   未保存の変更（isDirty）     … 最後に保存した値（baseline）と現在の値の比較。normalize した値で比べる
-//   非同期の検証（async）       … 値ごとの結果。古い値の応答は、現在の値の結果として使わない
+//   非同期の検証（async）       … 検証のキー（値、依存する値、スコープ）ごとの結果。古いキーの応答は使わない
 //   保存の処理（status）        … idle、submitting、succeeded、failed、unknown（保存されたかわからない）
 //
 // 保存の可否（canSubmit）とエラーの表示は分ける。
 // - canSubmit は、表示に関係なく、表示中のすべての項目（active）の検証が成功したときだけ true。
 //   最後の項目からフォーカスを外さなくても、正しい値を入力した時点で保存できる。
 // - エラーは、入力を終えるまで表示しない。入力中の不完全な値（「yamada@」など）をエラーとして見せない。
-// - IME で変換中の項目がある間は、保存できない（確定していない値を検証しない）。
-// - 送信の処理（handleSubmit）でも条件を確かめる。ボタンの disabled だけに頼らない（Enter、requestSubmit）。
+// - IME で変換中の項目がある間、非同期の検証の結果を待つ間、保存中、保存の結果が不明な間は、保存できない。
+// - 編集のフォーム（requireChanges）では、変更がなければ保存しない。
+// - 送信の処理（handleSubmit）でも同じ条件を確かめる。ボタンの disabled だけに頼らない（Enter、requestSubmit）。
 //   保存ボタンを focusableWhenDisabled で無効にしている間は、Enter の暗黙の送信が起きないため、submitOnEnter で受け取る。
-// - 保存されたかわからない（unknown）場合は、製品が状態を確かめるまで保存できない（無条件に再実行しない）。
+//
+// スコープと世代
+// - scopeKey（アカウント、ワークスペース、レコード）が変わる、reset を呼ぶ、アンマウントすると、世代を進める。
+//   それより前に始めた非同期の検証、保存、自動補完の結果は、新しい状態（値、基準値、エラー、通知）を変えない。
+//   AbortSignal を無視する処理でも、結果を世代で照合する。
+// - AbortSignal はクライアントの待機の中止であり、サーバーでの処理の取り消しを保証しない。
+//
+// 値の前提
+// - 値は不変のデータとして扱う（変えるときは新しいオブジェクトや配列を渡す）。hook は値を複製しない。
+// - 比較（stableKey）が扱うのは、文字列、数値、真偽値、null、undefined、Date、配列、プレーンなオブジェクト。
+//   Map、Set、クラスのインスタンス、関数は扱わない。必要な場合は normalize で上の形にする。
 //
 // この hook が持たないもの（製品の責務）
-// - 検証の規則の中身、サーバー側の検証、保存の API、保存の後の移動、Toast。
+// - 検証の規則の中身、サーバー側の検証、保存の API と冪等性、保存の後の移動、Toast。
 // - 入力欄の id とフォーカスの移動（blockers の項目名から、製品が入力欄を探す）。
 // - 特定のフォームのライブラリへの依存。値は製品の型（V）のまま持つ。
 
@@ -43,9 +54,23 @@ export type FieldConfig<V extends FormValues, K extends keyof V = keyof V> = {
   validate?: (value: V[K], values: V) => string | null
   /**
    * 非同期の検証（重複の確認など）。同期の検証が成功した値だけを、入力が止まってから確かめる。
-   * 結果は値ごとに持ち、古い値の応答は使わない。通信に失敗した場合は保存を止めない（保存時にサーバーが確かめる）
+   * 結果は検証のキー（この項目の値、asyncDeps の値、scopeKey）ごとに持ち、古いキーの応答は使わない。
+   * 例外、拒否、期限切れ（asyncTimeoutMs）は「検証できなかった」として扱う（asyncFailure）
    */
   validateAsync?: (value: V[K], values: V, context: { signal: AbortSignal }) => Promise<string | null>
+  /**
+   * 非同期の検証が依存するほかの項目の値（組織と顧客コード、国と郵便番号など）。
+   * 返した値が変わると、この項目の値が同じでも以前の結果を使わず、検証し直す
+   */
+  asyncDeps?: (values: V) => unknown
+  /**
+   * 非同期の検証ができなかった（通信の失敗、期限切れ、例外）場合の扱い。
+   * block（既定）：保存できない。revalidate で確かめ直す。
+   * allow：保存を止めない。保存の処理の中で、サーバーが必ず同じ検証を行う場合だけ選ぶ（権限、前提の条件の確認には使わない）
+   */
+  asyncFailure?: "block" | "allow"
+  /** 非同期の検証の期限（ms）。過ぎたら検証できなかったとして扱う。既定は 10000 */
+  asyncTimeoutMs?: number
   /**
    * 表示の条件。false の項目は、検証、保存の可否、送信する値、未保存の判定から除く。
    * 値は消さずに保持し、条件が戻ったときに再び表示する（利用者の入力を意図せず消さない）
@@ -57,7 +82,11 @@ export type FieldConfig<V extends FormValues, K extends keyof V = keyof V> = {
 
 export type FormFields<V extends FormValues> = { [K in keyof V]: FieldConfig<V, K> }
 
-export type AsyncCheckStatus = "idle" | "pending" | "validating" | "valid" | "invalid" | "unverified"
+/**
+ * pending：入力が止まるのを待っている。validating：確かめている。valid、invalid：結果。
+ * error：検証できなかった（保存を止める）。unverified：検証できなかったが asyncFailure が allow（保存を止めない）
+ */
+export type AsyncCheckStatus = "idle" | "pending" | "validating" | "valid" | "invalid" | "error" | "unverified"
 
 export type FormStatus = "idle" | "submitting" | "succeeded" | "failed" | "unknown"
 
@@ -67,12 +96,25 @@ export type FormSaveResult<V extends FormValues> =
   | { status: "success"; values?: Partial<V> }
   /** サーバー側の検証で保存できなかった（重複、権限の変更、同時の編集など）。入力は残す */
   | { status: "invalid"; fieldErrors?: Partial<Record<keyof V, string>>; formError?: string }
-  /** 保存されていない（通信の失敗、サーバーの障害） */
+  /** 保存されていないことが確かな失敗（サーバーが処理を拒否した、送信の前に失敗した） */
   | { status: "failed"; formError: string }
-  /** 保存されたかわからない（タイムアウト、応答の前の切断）。無条件に再実行させない */
+  /** 保存されたかわからない（タイムアウト、応答の前の切断、予期しない例外）。無条件に再実行させない */
   | { status: "unknown"; formError: string }
 
-export type FormBlockerKind = "missing" | "incomplete" | "invalid" | "checking"
+/**
+ * 保存の処理が投げる例外の種類を示す。failed は保存されていないことが確かな失敗。
+ * FormSaveError ではない例外（通信の例外など）は、サーバーで処理が終わっている可能性があるため unknown として扱う
+ */
+export class FormSaveError extends Error {
+  outcome: "failed" | "unknown"
+  constructor(message: string, outcome: "failed" | "unknown") {
+    super(message)
+    this.name = "FormSaveError"
+    this.outcome = outcome
+  }
+}
+
+export type FormBlockerKind = "missing" | "incomplete" | "invalid" | "checking" | "check-failed"
 
 /** 保存できない理由。項目ごと */
 export type FormBlocker<V extends FormValues> = {
@@ -80,7 +122,8 @@ export type FormBlocker<V extends FormValues> = {
   label: string
   /**
    * missing：必須の項目が空。incomplete：値はあるが、検証が成功していない（エラーはまだ表示していない）。
-   * invalid：エラーを表示している。checking：非同期の検証の結果を待っている
+   * invalid：エラーを表示している。checking：非同期の検証の結果を待っている。
+   * check-failed：非同期の検証ができなかった（revalidate で確かめ直す）
    */
   kind: FormBlockerKind
   message: string | null
@@ -97,26 +140,38 @@ type State<V extends FormValues> = {
   composing: ReadonlySet<keyof V>
   /** 利用者が値を変えた回数。遅れて届いた自動補完の結果で、利用者の修正を上書きしないために使う */
   edits: Readonly<Partial<Record<keyof V, number>>>
+  /** 自動補完で値を入れた回数。古い自動補完の応答で、新しい自動補完の値を上書きしないために使う */
+  fills: Readonly<Partial<Record<keyof V, number>>>
+  /** 確かめ直しを求めた回数（検証のキーに含める） */
+  rechecks: Readonly<Partial<Record<keyof V, number>>>
   async: Readonly<Partial<Record<keyof V, AsyncEntry>>>
   server: Readonly<Partial<Record<keyof V, ServerError>>>
   formError: string | null
   status: FormStatus
-  /** 送信中の値（送信した時点で確定する） */
+  /** 送信中の値（送信した時点で確定する）。結果が不明の場合は、その保存で送信した値を残す */
   submitted: V | null
+  /** 送信した項目（送信した時点で表示していた項目） */
+  submittedFields: readonly (keyof V)[]
+  /** reset とスコープの変更の回数。非同期の検証を、同じキーでも始め直すために使う */
+  epoch: number
 }
 
-const emptyState = <V extends FormValues>(values: V): State<V> => ({
+const emptyState = <V extends FormValues>(values: V, epoch = 0): State<V> => ({
+  epoch,
   values,
   baseline: values,
   interacted: new Set(),
   shown: new Set(),
   composing: new Set(),
   edits: {} as State<V>["edits"],
+  fills: {} as State<V>["fills"],
+  rechecks: {} as State<V>["rechecks"],
   async: {} as State<V>["async"],
   server: {} as State<V>["server"],
   formError: null,
   status: "idle",
   submitted: null,
+  submittedFields: [],
 })
 
 function defaultIsEmpty(value: unknown) {
@@ -126,9 +181,13 @@ function defaultIsEmpty(value: unknown) {
   return false
 }
 
-/** 構造の比較のためのキー。配列は順序を含めて比べる。順序に意味がない場合は normalize で並べる */
+/**
+ * 構造の比較のためのキー。扱う値：文字列、数値、真偽値、null、undefined、Date、配列（順序を含めて比べる）、プレーンなオブジェクト（キーの順序は問わない）。
+ * Map、Set、クラスのインスタンスは扱わない（プレーンなオブジェクトと同じように列挙できるプロパティだけを比べる）。必要な場合は normalize で変換する
+ */
 export function stableKey(value: unknown): string {
   if (value === undefined) return "u"
+  if (typeof value === "number" && !Number.isFinite(value)) return `n${String(value)}`
   if (value instanceof Date) return `d${value.getTime()}`
   if (Array.isArray(value)) return `[${value.map(stableKey).join(",")}]`
   if (value && typeof value === "object") {
@@ -155,16 +214,36 @@ const remove = <T,>(set: ReadonlySet<T>, item: T) => {
 
 type StringKeys<V> = { [K in keyof V]: V[K] extends string ? K : never }[keyof V] & string
 
+/** 自動補完を始めた時点の記録（captureEdits の戻り値） */
+export type AutofillToken<V extends FormValues> = {
+  generation: number
+  edits: Partial<Record<keyof V, number>>
+  fills: Partial<Record<keyof V, number>>
+}
+
+type AsyncJob = { key: string; timer: number; generation: number; controller?: AbortController; deadline?: number }
+
+const UNKNOWN_MESSAGE = "保存されたかを確かめられていません。状態を確かめてから、必要な場合だけもう一度保存してください。"
+
 export function useFormState<V extends FormValues>({
   initialValues,
   fields,
   asyncDebounceMs = 400,
+  scopeKey,
+  requireChanges = false,
 }: {
   /** 最後に保存した値（基準値）。登録は初期値、編集は読み込んだ値。変えるときは reset を呼ぶ */
   initialValues: V
   fields: FormFields<V>
   /** 非同期の検証を始めるまでの、入力が止まってからの時間（ms） */
   asyncDebounceMs?: number
+  /**
+   * アカウント、ワークスペース、レコードなど。変わったら、非同期の検証の結果、サーバーのエラー、保存の状態を捨て、
+   * 実行中の処理の結果を使わない。値と基準値は変えない（新しいスコープの値は、製品が reset で渡す）
+   */
+  scopeKey?: string
+  /** 編集のフォーム。変更がない間は保存しない（Button、Enter、requestSubmit、handleSubmit のすべて） */
+  requireChanges?: boolean
 }) {
   const [state, setState] = React.useState<State<V>>(() => emptyState(initialValues))
   const stateRef = React.useRef(state)
@@ -172,6 +251,12 @@ export function useFormState<V extends FormValues>({
   const fieldsRef = React.useRef(fields)
   fieldsRef.current = fields
   const names = React.useMemo(() => Object.keys(fields) as (keyof V & string)[], [fields])
+  // 世代。reset、スコープの変更、アンマウントで進める。古い世代の処理の結果は使わない
+  const generation = React.useRef(0)
+  const scopeRef = React.useRef(scopeKey)
+  const submittingRef = React.useRef(false)
+  const optionsRef = React.useRef({ requireChanges })
+  optionsRef.current = { requireChanges }
 
   const update = React.useCallback((fn: (s: State<V>) => State<V>) => {
     setState((s) => {
@@ -182,16 +267,13 @@ export function useFormState<V extends FormValues>({
   }, [])
 
   // ---------------------------------------------------------------- 計算（描画のたびに現在の値から）
-  const normalizeOf = React.useCallback(
-    (name: keyof V, value: unknown) => {
-      const n = fieldsRef.current[name]?.normalize as ((v: unknown) => unknown) | undefined
-      return stableKey(n ? n(value) : value)
-    },
-    []
-  )
+  const normalizeOf = React.useCallback((name: keyof V, value: unknown) => {
+    const n = fieldsRef.current[name]?.normalize as ((v: unknown) => unknown) | undefined
+    return stableKey(n ? n(value) : value)
+  }, [])
 
   const evaluate = React.useCallback(
-    (s: State<V>) => {
+    (s: State<V>, scope: string | undefined) => {
       const f = fieldsRef.current
       const active = (name: keyof V) => f[name].active?.(s.values) ?? true
       const required = (name: keyof V) => {
@@ -205,8 +287,12 @@ export function useFormState<V extends FormValues>({
         if (empty(name)) return required(name) ? (f[name].requiredMessage ?? `${f[name].label}を入力してください`) : null
         return (f[name].validate as ((v: unknown, all: V) => string | null) | undefined)?.(s.values[name], s.values) ?? null
       }
-      const asyncKey = (name: keyof V) =>
-        f[name].validateAsync && active(name) && !empty(name) && syncError(name) === null ? normalizeOf(name, s.values[name]) : null
+      // 検証のキー：値、依存する値、スコープ、確かめ直しの回数
+      const asyncKey = (name: keyof V) => {
+        if (!f[name].validateAsync || !active(name) || empty(name) || syncError(name) !== null) return null
+        const deps = f[name].asyncDeps?.(s.values)
+        return stableKey([normalizeOf(name, s.values[name]), deps === undefined ? null : stableKey(deps), scope ?? null, s.rechecks[name] ?? 0])
+      }
       const asyncEntry = (name: keyof V) => {
         const key = asyncKey(name)
         if (key === null) return null
@@ -232,44 +318,85 @@ export function useFormState<V extends FormValues>({
     [normalizeOf]
   )
 
-  const ev = evaluate(state)
+  const listBlockers = React.useCallback(
+    (s: State<V>, scope: string | undefined, revealed: boolean): FormBlocker<V>[] => {
+      const e = evaluate(s, scope)
+      const out: FormBlocker<V>[] = []
+      for (const name of Object.keys(fieldsRef.current) as (keyof V & string)[]) {
+        if (!e.active(name)) continue
+        const label = fieldsRef.current[name].label
+        const error = e.currentError(name)
+        if (error) {
+          const kind: FormBlockerKind =
+            e.empty(name) && e.required(name) ? "missing" : revealed || s.shown.has(name) || e.serverError(name) ? "invalid" : "incomplete"
+          out.push({ name, label, kind, message: kind === "invalid" ? error : null })
+          continue
+        }
+        const entry = e.asyncEntry(name)
+        if (entry && (entry.status === "pending" || entry.status === "validating")) out.push({ name, label, kind: "checking", message: null })
+        else if (entry?.status === "error") out.push({ name, label, kind: "check-failed", message: entry.message })
+      }
+      return out
+    },
+    [evaluate]
+  )
 
-  const blockers: FormBlocker<V>[] = []
-  for (const name of names) {
-    if (!ev.active(name)) continue
-    const label = fields[name].label
-    const error = ev.currentError(name)
-    if (error) {
-      const kind: FormBlockerKind =
-        ev.empty(name) && ev.required(name) ? "missing" : state.shown.has(name) || ev.serverError(name) ? "invalid" : "incomplete"
-      blockers.push({ name, label, kind, message: kind === "invalid" ? error : null })
-      continue
-    }
-    const entry = ev.asyncEntry(name)
-    if (entry && (entry.status === "pending" || entry.status === "validating")) blockers.push({ name, label, kind: "checking", message: null })
-  }
+  const ev = evaluate(state, scopeKey)
+  const blockers = listBlockers(state, scopeKey, false)
 
+  const dirtyOf = React.useCallback(
+    (s: State<V>, scope: string | undefined) => {
+      const e = evaluate(s, scope)
+      return (Object.keys(fieldsRef.current) as (keyof V & string)[]).filter(
+        (name) => e.active(name) && normalizeOf(name, s.values[name]) !== normalizeOf(name, s.baseline[name])
+      )
+    },
+    [evaluate, normalizeOf]
+  )
+  const dirtyFields = dirtyOf(state, scopeKey)
+  const isDirty = dirtyFields.length > 0
   const composing = state.composing.size > 0
   const submitting = state.status === "submitting"
-  // 保存されたかわからない（unknown）間は、もう一度保存しない。製品が状態を確かめ、clearFormError か markSaved を呼ぶまで止める
   const unknownResult = state.status === "unknown"
-  const canSubmit = !submitting && !composing && !unknownResult && blockers.length === 0
-
-  const dirtyFields = names.filter(
-    (name) => ev.active(name) && normalizeOf(name, state.values[name]) !== normalizeOf(name, state.baseline[name])
-  )
-  const isDirty = dirtyFields.length > 0
+  const unchanged = requireChanges && !isDirty
+  const canSubmit = !submitting && !composing && !unknownResult && !unchanged && blockers.length === 0
 
   // ---------------------------------------------------------------- 非同期の検証
-  // 項目ごとに、検証する値のキーが変わったときだけ始める。前の値の検証は取り消し、応答はキーで照合する。
-  const timers = React.useRef(new Map<keyof V, { key: string; timer: number; controller?: AbortController }>())
-  const asyncKeys = names.map((name) => [name, state.composing.has(name) ? null : ev.asyncKey(name)] as const)
-  const asyncSignature = JSON.stringify(asyncKeys)
+  // 項目ごとに、検証のキーが変わったときだけ始める。前のキーの検証は取り消し、応答はキーと世代で照合する。
+  const jobs = React.useRef(new Map<keyof V, AsyncJob>())
+  const cancelJobs = React.useCallback(() => {
+    for (const job of jobs.current.values()) {
+      window.clearTimeout(job.timer)
+      job.controller?.abort()
+    }
+    jobs.current.clear()
+  }, [])
+  // スコープの変更：古いスコープの処理の結果を使わず、エラーと保存の状態を捨てる（非同期の検証の effect より先に実行する）
   React.useEffect(() => {
-    const running = timers.current
+    if (scopeRef.current === scopeKey) return
+    scopeRef.current = scopeKey
+    generation.current++
+    cancelJobs()
+    submittingRef.current = false
+    update((s) => ({
+      ...s,
+      async: {} as State<V>["async"],
+      server: {} as State<V>["server"],
+      formError: null,
+      status: "idle",
+      submitted: null,
+      epoch: s.epoch + 1,
+    }))
+  }, [scopeKey, cancelJobs, update])
+
+  const asyncKeys = names.map((name) => [name, state.composing.has(name) ? null : ev.asyncKey(name)] as const)
+  // epoch を含める：reset とスコープの変更の後は、同じキーでも検証を始め直す（取り消した検証の結果を待ち続けない）
+  const asyncSignature = JSON.stringify([state.epoch, asyncKeys])
+  React.useEffect(() => {
+    const running = jobs.current
     for (const [name, key] of asyncKeys) {
       const current = running.get(name)
-      if (current && current.key === key) continue
+      if (current && current.key === key && current.generation === generation.current) continue
       if (current) {
         window.clearTimeout(current.timer)
         current.controller?.abort()
@@ -278,50 +405,58 @@ export function useFormState<V extends FormValues>({
       if (key === null) continue
       const settled = stateRef.current.async[name]
       if (settled && settled.key === key && settled.status !== "pending" && settled.status !== "validating") continue
-      const job: { key: string; timer: number; controller?: AbortController } = { key, timer: 0 }
+      const job: AsyncJob = { key, timer: 0, generation: generation.current }
+      const isCurrent = () => running.get(name) === job && job.generation === generation.current
+      const settle = (status: AsyncCheckStatus, message: string | null) => {
+        if (!isCurrent()) return
+        running.delete(name)
+        window.clearTimeout(job.timer)
+        job.controller?.abort()
+        update((prev) => ({ ...prev, async: { ...prev.async, [name]: { key, status, message } } }))
+      }
+      const failed = (reason: "error" | "timeout") => {
+        const config = fieldsRef.current[name]
+        const label = config.label
+        const message =
+          reason === "timeout"
+            ? `${label}の確認が時間内に終わりませんでした。もう一度確かめてください`
+            : `${label}を確かめられませんでした。通信の状態を確認して、もう一度確かめてください`
+        settle(config.asyncFailure === "allow" ? "unverified" : "error", message)
+      }
       job.timer = window.setTimeout(() => {
+        if (!isCurrent()) return
         const controller = new AbortController()
         job.controller = controller
         const s = stateRef.current
+        const config = fieldsRef.current[name]
         update((prev) => ({ ...prev, async: { ...prev.async, [name]: { key, status: "validating", message: null } } }))
-        const validator = fieldsRef.current[name].validateAsync as
-          | ((v: unknown, all: V, c: { signal: AbortSignal }) => Promise<string | null>)
-          | undefined
-        if (!validator) return
-        validator(s.values[name], s.values, { signal: controller.signal }).then(
-          (message) => {
-            if (controller.signal.aborted) return
-            running.delete(name)
-            update((prev) =>
-              normalizeOf(name, prev.values[name]) !== key
-                ? prev
-                : { ...prev, async: { ...prev.async, [name]: { key, status: message ? "invalid" : "valid", message } } }
-            )
-          },
-          () => {
-            if (controller.signal.aborted) return
-            running.delete(name)
-            update((prev) =>
-              normalizeOf(name, prev.values[name]) !== key
-                ? prev
-                : { ...prev, async: { ...prev.async, [name]: { key, status: "unverified", message: null } } }
-            )
-          }
-        )
+        // 期限。AbortSignal を無視する検証でも、期限を過ぎた結果は使わない
+        job.timer = window.setTimeout(() => failed("timeout"), config.asyncTimeoutMs ?? 10_000)
+        const validator = config.validateAsync as ((v: unknown, all: V, c: { signal: AbortSignal }) => Promise<string | null>) | undefined
+        // 同期の例外も、検証できなかったとして扱う
+        Promise.resolve()
+          .then(() => validator?.(s.values[name], s.values, { signal: controller.signal }) ?? null)
+          .then(
+            (message) => {
+              if (typeof message !== "string" && message !== null) return failed("error")
+              settle(message ? "invalid" : "valid", message)
+            },
+            () => failed("error")
+          )
       }, asyncDebounceMs)
       running.set(name, job)
     }
     // asyncKeys は asyncSignature で表す（毎回の描画で新しい配列になるため）
-  }, [asyncSignature, asyncDebounceMs, update, normalizeOf])
+  }, [asyncSignature, asyncDebounceMs, update])
+
+
   React.useEffect(
     () => () => {
-      for (const job of timers.current.values()) {
-        window.clearTimeout(job.timer)
-        job.controller?.abort()
-      }
-      timers.current.clear()
+      // アンマウント：実行中の処理の結果を使わない
+      generation.current++
+      cancelJobs()
     },
-    []
+    [cancelJobs]
   )
 
   // ---------------------------------------------------------------- 操作
@@ -335,7 +470,7 @@ export function useFormState<V extends FormValues>({
         composing: options.composing ? add(s.composing, name) : remove(s.composing, name),
         // 選択式の項目（Select、Checkbox、日付の選択）は、選んだ時点で入力を終えたとみなす
         shown: options.commit ? add(s.shown, name) : s.shown,
-        status: s.status === "submitting" ? s.status : s.status === "succeeded" ? "idle" : s.status,
+        status: s.status === "succeeded" ? "idle" : s.status,
       }))
     },
     [update]
@@ -349,59 +484,68 @@ export function useFormState<V extends FormValues>({
     [update]
   )
 
-  const compositionStart = React.useCallback(
-    (name: keyof V) => update((s) => ({ ...s, composing: add(s.composing, name) })),
-    [update]
-  )
+  const compositionStart = React.useCallback((name: keyof V) => update((s) => ({ ...s, composing: add(s.composing, name) })), [update])
 
   /** 指定した項目のエラーを表示する（複数のステップの、表示中のステップだけ、など） */
-  const reveal = React.useCallback(
-    (fieldNames: (keyof V)[]) => update((s) => ({ ...s, shown: add(s.shown, ...fieldNames) })),
-    [update]
-  )
+  const reveal = React.useCallback((fieldNames: (keyof V)[]) => update((s) => ({ ...s, shown: add(s.shown, ...fieldNames) })), [update])
 
   /** すべての項目のエラーを表示する（保存を試みたとき） */
   const revealAll = React.useCallback(() => reveal(Object.keys(fieldsRef.current) as (keyof V)[]), [reveal])
 
-  /** 値と基準値を置き換え、操作の履歴、エラー、保存の状態を消す（別のレコードを開いた、連続して登録する） */
-  const reset = React.useCallback(
-    (values?: V) => {
-      for (const job of timers.current.values()) {
-        window.clearTimeout(job.timer)
-        job.controller?.abort()
-      }
-      timers.current.clear()
-      update((s) => emptyState(values ?? s.baseline))
-    },
+  /** 非同期の検証をやり直す（検証できなかった、結果が古い可能性がある） */
+  const revalidate = React.useCallback(
+    (name: keyof V) => update((s) => ({ ...s, rechecks: { ...s.rechecks, [name]: (s.rechecks[name] ?? 0) + 1 } })),
     [update]
   )
 
+  /**
+   * 値と基準値を置き換え、操作の履歴、エラー、保存の状態を消す（別のレコードを開いた、連続して登録する）。
+   * 世代を進めるため、それまでに始めた保存、検証、自動補完の結果は、新しい状態を変えない
+   */
+  const reset = React.useCallback(
+    (values?: V) => {
+      generation.current++
+      cancelJobs()
+      submittingRef.current = false
+      update((s) => emptyState(values ?? s.baseline, s.epoch + 1))
+    },
+    [cancelJobs, update]
+  )
+
   /** 値を最後に保存した値（基準値）に戻す。未保存の変更の破棄に使う */
-  const discard = React.useCallback(() => {
-    update((s) => emptyState(s.baseline))
-  }, [update])
+  const discard = React.useCallback(() => reset(), [reset])
 
   /**
-   * 自動補完を始める時点の、利用者の編集の回数を記録する。応答が届いたら applyAutofill に渡す。
-   * その間に利用者が変えた項目は、応答で上書きしない。
+   * 自動補完を始める時点の記録。応答が届いたら applyAutofill に渡す。
+   * その間に利用者が変えた項目、ほかの自動補完が値を入れた項目、reset やスコープの変更の後の応答は、値を変えない
    */
-  const captureEdits = React.useCallback((fieldNames: (keyof V)[]) => {
+  const captureEdits = React.useCallback((fieldNames: (keyof V)[]): AutofillToken<V> => {
     const s = stateRef.current
-    return Object.fromEntries(fieldNames.map((n) => [n, s.edits[n] ?? 0])) as Partial<Record<keyof V, number>>
+    return {
+      generation: generation.current,
+      edits: Object.fromEntries(fieldNames.map((n) => [n, s.edits[n] ?? 0])) as Partial<Record<keyof V, number>>,
+      fills: Object.fromEntries(fieldNames.map((n) => [n, s.fills[n] ?? 0])) as Partial<Record<keyof V, number>>,
+    }
   }, [])
 
   const applyAutofill = React.useCallback(
-    (token: Partial<Record<keyof V, number>>, patch: Partial<V>) => {
+    (token: AutofillToken<V>, patch: Partial<V>) => {
+      if (token.generation !== generation.current) return [] as (keyof V)[]
       // 入れる項目は、最新の状態で同期に決める（更新の関数は副作用を持たない）
-      const current = stateRef.current
-      const applied = (Object.keys(patch) as (keyof V)[]).filter((key) => (current.edits[key] ?? 0) === (token[key] ?? 0))
+      const ok = (s: State<V>, key: keyof V) => (s.edits[key] ?? 0) === (token.edits[key] ?? 0) && (s.fills[key] ?? 0) === (token.fills[key] ?? 0)
+      const applied = (Object.keys(patch) as (keyof V)[]).filter((key) => key in token.edits && ok(stateRef.current, key))
       if (!applied.length) return applied
       update((s) => {
+        const keys = applied.filter((key) => ok(s, key))
+        if (!keys.length) return s
         const values = { ...s.values }
-        const keys = applied.filter((key) => (s.edits[key] ?? 0) === (token[key] ?? 0))
-        for (const key of keys) values[key] = patch[key] as V[keyof V]
+        const fills: Partial<Record<keyof V, number>> = { ...s.fills }
+        for (const key of keys) {
+          values[key] = patch[key] as V[keyof V]
+          fills[key] = (fills[key] ?? 0) + 1
+        }
         // 自動で入れた値は入力を終えた値として扱い、問題があればすぐに示す。編集の回数は増やさない
-        return keys.length ? { ...s, values, shown: add(s.shown, ...keys) } : s
+        return { ...s, values, fills, shown: add(s.shown, ...keys) }
       })
       return applied
     },
@@ -411,46 +555,19 @@ export function useFormState<V extends FormValues>({
   /** 送信する値。表示していない（active が false の）項目は含めない */
   const getSubmitValues = React.useCallback((): Partial<V> => {
     const s = stateRef.current
-    const e = evaluate(s)
+    const e = evaluate(s, scopeRef.current)
     const out: Partial<V> = {}
     for (const name of Object.keys(fieldsRef.current) as (keyof V)[]) if (e.active(name)) out[name] = s.values[name]
     return out
   }, [evaluate])
 
-  /** 最新の状態で、保存の可否を確かめる（送信の処理の中で使う。描画の前の値で判断しない） */
-  const check = React.useCallback(() => {
-    const s = stateRef.current
-    const e = evaluate(s)
-    const f = Object.keys(fieldsRef.current) as (keyof V)[]
-    const blocked = f.some((name) => {
-      if (!e.active(name)) return false
-      if (e.currentError(name)) return true
-      const entry = e.asyncEntry(name)
-      return Boolean(entry && (entry.status === "pending" || entry.status === "validating"))
-    })
-    return {
-      ok: s.status !== "submitting" && s.status !== "unknown" && s.composing.size === 0 && !blocked,
-      composing: s.composing.size > 0,
-      submitting: s.status === "submitting",
-      unknown: s.status === "unknown",
-    }
-  }, [evaluate])
-
-  const submittingRef = React.useRef(false)
-  const mounted = React.useRef(true)
-  React.useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
-
   /**
-   * 送信の処理を作る。form の onSubmit に渡すか、ボタンから呼ぶ。
-   * - 保存できない状態（未入力、エラー、確認中、変換中）、保存中の場合は、保存の処理を呼ばない。
-   *   変換中と保存中は何もしない。それ以外はすべての項目のエラーを表示し、onBlocked を呼ぶ（最初の項目へのフォーカスなど）。
+   * 送信の処理を作る。form の onSubmit に渡すか、ボタンから呼ぶ。返す Promise は、保存できた場合だけ true になる。
+   * - 何もしない（false）：保存中、変換中、保存の結果が不明、変更のない編集（requireChanges）、非同期の検証を待っている間。
+   * - 保存できない（未入力、エラー、検証できなかった）：すべての項目のエラーを表示し、onBlocked を呼ぶ（最初の項目へのフォーカスなど）。
    * - 送信した時点の値を確定し、保存の処理に渡す。保存中に入力した値は、保存した値として扱わない。
-   * 返す Promise は、保存できた場合だけ true になる（「保存して移動」などで使う）。
+   * - 保存の処理の例外：FormSaveError はその outcome。それ以外の例外は、サーバーで処理が終わっている可能性があるため unknown。
+   * - 保存の間に reset、スコープの変更、アンマウントがあった場合は、結果で状態を変えず、onSuccess を呼ばない（false）。
    */
   const handleSubmit = React.useCallback(
     (
@@ -463,49 +580,50 @@ export function useFormState<V extends FormValues>({
     ) =>
       async (event?: { preventDefault: () => void }): Promise<boolean> => {
         event?.preventDefault()
-        const result = check()
-        if (submittingRef.current || result.submitting || result.composing || result.unknown) return false
-        if (!result.ok) {
+        const s = stateRef.current
+        const scope = scopeRef.current
+        if (submittingRef.current || s.status === "submitting" || s.status === "unknown" || s.composing.size > 0) return false
+        if (optionsRef.current.requireChanges && dirtyOf(s, scope).length === 0) return false
+        const found = listBlockers(s, scope, true)
+        if (found.length > 0) {
+          // 非同期の検証の結果を待っているだけなら、エラーを出さずに何もしない
+          if (found.every((b) => b.kind === "checking")) return false
           revealAll()
-          // エラーの表示を反映した後の blockers を渡す
-          const s = stateRef.current
-          const e = evaluate(s)
-          const list: FormBlocker<V>[] = (Object.keys(fieldsRef.current) as (keyof V & string)[]).flatMap((name) => {
-            if (!e.active(name)) return []
-            const error = e.currentError(name)
-            const label = fieldsRef.current[name].label
-            if (error) return [{ name, label, kind: e.empty(name) && e.required(name) ? "missing" : "invalid", message: error } as FormBlocker<V>]
-            const entry = e.asyncEntry(name)
-            return entry && (entry.status === "pending" || entry.status === "validating") ? [{ name, label, kind: "checking", message: null } as FormBlocker<V>] : []
-          })
-          options.onBlocked?.(list)
+          options.onBlocked?.(found.filter((b) => b.kind !== "checking"))
           return false
         }
         submittingRef.current = true
-        const snapshot = stateRef.current.values
+        const gen = generation.current
+        const snapshot = s.values
         const submitValues = getSubmitValues()
-        update((s) => ({ ...s, status: "submitting", submitted: snapshot, formError: null, server: {} as State<V>["server"] }))
+        const sentFields = Object.keys(submitValues) as (keyof V)[]
+        update((prev) => ({ ...prev, status: "submitting", submitted: snapshot, submittedFields: sentFields, formError: null, server: {} as State<V>["server"] }))
         let outcome: FormSaveResult<V>
         try {
           outcome = await save(submitValues, { values: snapshot })
-        } catch {
-          outcome = { status: "failed", formError: "保存できませんでした。入力した内容は残っています。時間をおいて、もう一度保存してください。" }
+        } catch (error) {
+          outcome =
+            error instanceof FormSaveError && error.outcome === "failed"
+              ? { status: "failed", formError: error.message }
+              : { status: "unknown", formError: error instanceof FormSaveError ? error.message : UNKNOWN_MESSAGE }
         }
+        // 古い世代の結果は使わない（別のレコード、別のスコープ、アンマウントの後）
+        if (gen !== generation.current) return false
         submittingRef.current = false
-        if (!mounted.current) return outcome.status === "success"
         if (outcome.status === "success") {
-          const savedValues = { ...snapshot, ...(outcome.values ?? {}) } as V
-          const latest = stateRef.current.values
+          const latest = stateRef.current
+          // 基準値：送信した項目はサーバーが保存した値、送信していない（非表示の）項目は以前の基準値のまま
+          const savedValues = { ...latest.baseline, ...submitValues, ...(outcome.values ?? {}) } as V
           const changedWhileSaving = (Object.keys(fieldsRef.current) as (keyof V)[]).some(
-            (key) => normalizeOf(key, latest[key]) !== normalizeOf(key, snapshot[key])
+            (key) => key in submitValues && normalizeOf(key, latest.values[key]) !== normalizeOf(key, snapshot[key])
           )
-          update((s) => {
+          update((prev) => {
             // 保存中に変えていない項目だけ、サーバーが保存した値（正規化した値）にそろえる
-            const values = { ...s.values }
-            for (const key of Object.keys(savedValues) as (keyof V)[]) {
-              if (normalizeOf(key, s.values[key]) === normalizeOf(key, snapshot[key])) values[key] = savedValues[key]
+            const values = { ...prev.values }
+            for (const key of Object.keys(outcome.values ?? {}) as (keyof V)[]) {
+              if (normalizeOf(key, prev.values[key]) === normalizeOf(key, snapshot[key])) values[key] = savedValues[key]
             }
-            return { ...s, values, baseline: savedValues, status: "succeeded", submitted: null, formError: null }
+            return { ...prev, values, baseline: savedValues, status: "succeeded", submitted: null, formError: null }
           })
           options.onSuccess?.(savedValues, { changedWhileSaving })
           return true
@@ -516,33 +634,44 @@ export function useFormState<V extends FormValues>({
             const message = outcome.fieldErrors?.[key]
             if (message) server[key] = { message, key: normalizeOf(key, snapshot[key]) }
           }
-          update((s) => ({
-            ...s,
+          update((prev) => ({
+            ...prev,
             status: "failed",
             submitted: null,
             server,
-            shown: add(s.shown, ...(Object.keys(server) as (keyof V)[])),
+            shown: add(prev.shown, ...(Object.keys(server) as (keyof V)[])),
             formError: outcome.formError ?? null,
           }))
           return false
         }
         // 結果が不明な場合は、送信した値を残す（製品が、保存されたかを送信した値で確かめる）
-        update((s) => ({ ...s, status: outcome.status, submitted: outcome.status === "unknown" ? snapshot : null, formError: outcome.formError }))
+        update((prev) => ({ ...prev, status: outcome.status, submitted: outcome.status === "unknown" ? snapshot : null, formError: outcome.formError }))
         return false
       },
-    [check, evaluate, getSubmitValues, normalizeOf, revealAll, update]
+    [dirtyOf, getSubmitValues, listBlockers, normalizeOf, revealAll, update]
   )
 
-  /** 製品が別の経路で保存した値を、基準値にする（下書きの再開、保存されていたことを確かめた場合など） */
-  const markSaved = React.useCallback(
-    (values: V) =>
-      update((s) => ({
-        ...s,
-        baseline: values,
-        status: s.status === "unknown" ? "succeeded" : s.status,
-        submitted: s.status === "unknown" ? null : s.submitted,
-        formError: s.status === "unknown" ? null : s.formError,
-      })),
+  /** 製品が別の経路で保存した値を、基準値にする（下書きの再開、即時保存との組み合わせなど） */
+  const markSaved = React.useCallback((values: V) => update((s) => ({ ...s, baseline: values })), [update])
+
+  /**
+   * 保存の結果が不明な状態を、製品が確かめた結果で解く。メッセージを消すだけでは解かない（clearFormError では解けない）。
+   * saved：サーバーに保存されていた。values（既定は送信した値）を基準値にする。送信の後に変えた値は未保存のまま残る。
+   * not-saved：保存されていなかった。もう一度保存できる状態に戻す
+   */
+  const resolveUnknown = React.useCallback(
+    (result: { saved: true; values?: V } | { saved: false }) =>
+      update((s) => {
+        if (s.status !== "unknown") return s
+        if (result.saved) {
+          // 送信した項目だけを基準値にする（送信していない非表示の項目は、以前の基準値のまま）
+          const source = result.values ?? s.submitted ?? s.values
+          const baseline = { ...s.baseline }
+          for (const key of s.submittedFields) baseline[key] = source[key]
+          return { ...s, baseline, status: "succeeded", submitted: null, formError: null }
+        }
+        return { ...s, status: "idle", submitted: null, formError: null }
+      }),
     [update]
   )
 
@@ -567,6 +696,8 @@ export function useFormState<V extends FormValues>({
     return state.shown.has(name) ? ev.currentError(name) : null
   }
 
+  const revision = names.reduce((n, name) => n + (state.edits[name] ?? 0) + (state.fills[name] ?? 0), 0)
+
   return {
     values: state.values,
     baseline: state.baseline,
@@ -581,6 +712,10 @@ export function useFormState<V extends FormValues>({
     composing,
     isDirty,
     dirtyFields,
+    /** 変更がないため保存しない（requireChanges の編集のフォーム） */
+    unchanged,
+    /** 値の変更の回数（利用者の入力と自動補完）。未保存の変更の確認（useUnsavedChanges の revision）に渡す */
+    revision,
     error,
     /** 表示する項目か（active） */
     isActive: (name: keyof V) => ev.active(name),
@@ -588,22 +723,30 @@ export function useFormState<V extends FormValues>({
     /** 値を変えた項目か（操作の履歴） */
     isInteracted: (name: keyof V) => state.interacted.has(name),
     asyncStatus: (name: keyof V): AsyncCheckStatus => ev.asyncEntry(name)?.status ?? "idle",
+    /** 非同期の検証の文（検証できなかった理由など） */
+    asyncMessage: (name: keyof V) => ev.asyncEntry(name)?.message ?? null,
     setValue,
     blur,
     compositionStart,
     reveal,
     revealAll,
+    revalidate,
     reset,
     discard,
     markSaved,
+    resolveUnknown,
     captureEdits,
     applyAutofill,
     getSubmitValues,
     handleSubmit,
     inputProps,
-    /** フォーム全体のエラーを消す（利用者が閉じたとき） */
+    /**
+     * フォーム全体のエラーの文を消す（利用者が閉じたとき）。保存の結果が不明な状態は解かない（文だけを消し、保存できないまま。resolveUnknown で解く）
+     */
     clearFormError: () =>
-      update((s) => (s.status === "submitting" ? { ...s, formError: null } : { ...s, formError: null, status: "idle", submitted: null })),
+      update((s) =>
+        s.status === "unknown" || s.status === "submitting" ? { ...s, formError: null } : { ...s, formError: null, status: "idle" }
+      ),
   }
 }
 
@@ -612,15 +755,49 @@ export type FormState<V extends FormValues> = ReturnType<typeof useFormState<V>>
 /**
  * 1 行の入力欄での Enter を、送信の処理（handleSubmit の戻り値）に渡す。form の onKeyDown に指定する。
  * 保存ボタンを focusableWhenDisabled で無効にしている間、ブラウザの暗黙の送信（Enter）は Base UI がボタンへのクリックを
- * 止めるため submit にならない。この関数で送信の処理を呼び、保存できない場合はエラーの表示と最初の項目へのフォーカスを行う。
- * 変換中（IME）の Enter、Textarea、ボタンなどの Enter は対象にしない。
+ * 止めるため submit にならない。この関数で送信の処理を呼ぶ。保存の条件は handleSubmit が確かめる。
+ *
+ * 送信にしない Enter
+ * - IME の変換の確定（isComposing、keyCode 229）、修飾キー付き、押し続けによる連続の入力（repeat）、ほかの処理が止めた（defaultPrevented）
+ * - Textarea、contenteditable、ボタン、Checkbox、Radio、File、日付と時刻の入力欄
+ * - Combobox、Multi Select、Select、Date Picker、Dropdown Menu などの部品（role が combobox、listbox、menu、grid、
+ *   aria-haspopup、aria-expanded="true" の要素、それらの中の要素）
+ * - フォームの外の要素、フォームとは別の Dialog の中の要素（Dialog の中の独立した操作）、読み取り専用と無効の入力欄
+ * - data-submit-on-enter="false" を付けた要素とその中の要素
  */
+const textInputTypes = new Set(["text", "email", "tel", "url", "search", "number", "password", ""])
+const widgetSelector = "[role=combobox],[role=listbox],[role=menu],[role=grid],[role=tree],[aria-haspopup]:not([aria-haspopup=false]),[aria-expanded=true]"
+
+// 暗黙の送信（Enter）の対象になる入力欄の種類
+const implicitSubmitTypes = new Set([...textInputTypes, "date", "datetime-local", "month", "week", "time", "checkbox", "radio", "range", "color"])
+
 export function submitOnEnter(event: React.KeyboardEvent<HTMLFormElement>, submit: () => unknown) {
-  if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229) return
-  if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
+  if (event.key !== "Enter" || event.defaultPrevented) return
+  // 変換の確定の Enter では、ブラウザは送信しない。何もしない（変換を妨げない）
+  if (event.nativeEvent.isComposing || event.keyCode === 229) return
   const target = event.target
   if (!(target instanceof HTMLInputElement)) return
-  if (["button", "submit", "reset", "checkbox", "radio", "file", "image", "hidden"].includes(target.type)) return
+  const form = event.currentTarget
+  // フォームの外の要素（Portal で描画した Popover や、別の Dialog）での Enter には触れない
+  if (!form.contains(target)) return
+  const excluded =
+    event.repeat ||
+    event.shiftKey ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    !textInputTypes.has(target.type) ||
+    target.readOnly ||
+    target.disabled ||
+    Boolean(target.closest(widgetSelector)) ||
+    Boolean(target.closest("[data-submit-on-enter=false]")) ||
+    target.closest("[role=dialog],[role=alertdialog]") !== form.closest("[role=dialog],[role=alertdialog]")
+  if (excluded) {
+    // 送信にしない Enter でも、保存ボタンが押せる間は、ブラウザの暗黙の送信が起きる。それを止める
+    // （部品の Enter の処理（Combobox の選択など）は、この前に要素の側で終わっている）
+    if (implicitSubmitTypes.has(target.type) && !target.closest(widgetSelector)) event.preventDefault()
+    return
+  }
   event.preventDefault()
   void submit()
 }

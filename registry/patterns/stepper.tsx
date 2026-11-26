@@ -16,6 +16,7 @@ import type { StepItem } from "@/patterns/step-flow"
 // - layout：horizontal（上部の横型。標準）、vertical（縦型。ステップが多い、横に余裕がある）、
 //   compact（現在のステップの名前と「ステップ 2 / 4」。一覧を開ける）、auto（置かれた領域が 36rem 以上で horizontal、狭ければ compact）。
 // - 総数が決まっていない場合（total が null）は、総数を示さず、後のステップが決まっていないことを文字で示す。
+// - currentLabel="hidden"：簡易の表示で、現在のステップの名前を省く（ページの見出しが同じ名前を示す場合）。
 
 const statusText = { complete: "完了", current: "現在のステップ", "needs-review": "要確認", upcoming: "未完了" } as const
 
@@ -167,20 +168,34 @@ function VerticalSteps<Id extends string>({ items, onSelect, total }: { items: S
   )
 }
 
-function CompactSteps<Id extends string>({ items, onSelect, total }: { items: StepItem<Id>[]; onSelect?: (id: Id) => void; total: number | null }) {
+function CompactSteps<Id extends string>({
+  items,
+  onSelect,
+  total,
+  currentLabel,
+}: {
+  items: StepItem<Id>[]
+  onSelect?: (id: Id) => void
+  total: number | null
+  currentLabel: "visible" | "hidden"
+}) {
   const [open, setOpen] = React.useState(false)
   const listId = React.useId()
   const current = items.find((i) => i.status === "current")
   const position = current ? current.index + 1 : 0
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <div className="flex min-w-0 items-start justify-between gap-4">
+      <div className={cn("flex min-w-0 justify-between gap-4", currentLabel === "visible" ? "items-start" : "items-center")}>
         <p className="flex min-w-0 flex-col gap-0.5" data-slot="stepper-current">
           <span className="text-caption text-muted-foreground tabular-nums">
             {total === null ? `ステップ ${position}` : `ステップ ${position} / ${total}`}
           </span>
-          <span className="text-ui font-semibold [overflow-wrap:anywhere] [word-break:auto-phrase]">{current?.label}</span>
-          <span className="sr-only">（現在のステップ）</span>
+          {currentLabel === "visible" && (
+            <>
+              <span className="text-ui font-semibold [overflow-wrap:anywhere] [word-break:auto-phrase]">{current?.label}</span>
+              <span className="sr-only">（現在のステップ）</span>
+            </>
+          )}
         </p>
         <button
           type="button"
@@ -215,6 +230,7 @@ function Stepper<Id extends string>({
   total,
   onSelect,
   layout = "auto",
+  currentLabel = "visible",
   "aria-label": label = "手順",
   className,
   ...props
@@ -225,19 +241,25 @@ function Stepper<Id extends string>({
   /** 直接移動できるステップを押した */
   onSelect?: (id: Id) => void
   layout?: "auto" | "horizontal" | "vertical" | "compact"
+  /**
+   * 簡易の表示（compact、auto の狭い領域）で、現在のステップの名前を示すか。
+   * ページの中にステップの名前の見出しがすぐ続く場合は hidden にし、同じ名前を続けて示さない（番号と総数、手順の一覧の入口は残す）。
+   * Stepper を見出しと離して置く場合は visible（既定）
+   */
+  currentLabel?: "visible" | "hidden"
 }) {
   return (
     <nav data-slot="stepper" data-layout={layout} aria-label={label} className={cn("@container/stepper w-full min-w-0", className)} {...props}>
       {layout === "horizontal" && <HorizontalSteps items={items} onSelect={onSelect} total={total} />}
       {layout === "vertical" && <VerticalSteps items={items} onSelect={onSelect} total={total} />}
-      {layout === "compact" && <CompactSteps items={items} onSelect={onSelect} total={total} />}
+      {layout === "compact" && <CompactSteps items={items} onSelect={onSelect} total={total} currentLabel={currentLabel} />}
       {layout === "auto" && (
         <>
           <div data-slot="stepper-wide" className="hidden @xl/stepper:block">
             <HorizontalSteps items={items} onSelect={onSelect} total={total} />
           </div>
           <div data-slot="stepper-narrow" className="@xl/stepper:hidden">
-            <CompactSteps items={items} onSelect={onSelect} total={total} />
+            <CompactSteps items={items} onSelect={onSelect} total={total} currentLabel={currentLabel} />
           </div>
         </>
       )}

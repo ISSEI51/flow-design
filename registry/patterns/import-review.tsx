@@ -9,7 +9,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
-import { importOutcome, type ColumnMapping, type ImportColumn, type ImportField, type ImportResult, type MappingIssues } from "@/patterns/import-mapping"
+import { importOutcome, type ColumnMapping, type ImportColumn, type ImportField, type ImportIntegrity, type ImportResult, type MappingIssues } from "@/patterns/import-mapping"
 
 // Flow Design Import Review（Patterns / Forms & Workflows / Import & Export）
 // インポートの対応付け、データの検証の結果、処理の結果の表示。定義は docs/web/patterns/import-and-export.md を参照。
@@ -232,6 +232,7 @@ function ImportIssueTable({ issues, caption, className }: { issues: readonly Imp
  */
 function ImportResultSummary({
   result,
+  integrity,
   onRetryFailed,
   onDownloadFailed,
   onCheckStatus,
@@ -239,13 +240,17 @@ function ImportResultSummary({
   className,
 }: {
   result: ImportResult
+  /** reconcileImportResult の照合の結果。矛盾がある場合は、成功として示さず、件数に含めなかった結果と理由を示す */
+  integrity?: ImportIntegrity
   onRetryFailed?: () => void
   onDownloadFailed?: () => void
   onCheckStatus?: () => void
   retrying?: boolean
   className?: string
 }) {
-  const outcome = importOutcome(result)
+  const counted = importOutcome(result)
+  // 照合で矛盾が見つかった場合は、件数の上で成功していても、成功として示さない
+  const outcome = integrity && !integrity.complete && (counted === "success" || counted === "partial") ? "unknown" : counted
   const missing = result.total - (result.created + result.updated + result.skipped + result.failed + result.unknown)
   const title = {
     success: "取り込みが終わりました",
@@ -279,6 +284,15 @@ function ImportResultSummary({
             <dd className="font-medium text-foreground">{fmt(result.total)}件</dd>
           </div>
         </dl>
+        {integrity && !integrity.complete && (
+          <ul className="mt-2 list-disc pl-5" data-slot="import-integrity">
+            {integrity.missingRows.length > 0 && <li>{fmt(integrity.missingRows.length)}行の結果が返されませんでした（結果が不明として数えています）</li>}
+            {integrity.duplicateRows.length > 0 && <li>{fmt(integrity.duplicateRows.length)}行について、結果が重なって返されました（1 つとして数え、異なる結果は不明にしています）</li>}
+            {integrity.unexpectedRows.length > 0 && <li>取り込みの対象ではない {fmt(integrity.unexpectedRows.length)}行の結果が返されました（件数に含めていません）</li>}
+            {integrity.countsDisagree && <li>サーバーが返した件数が、行ごとの結果と一致しません（行ごとの結果で数えています）</li>}
+            {integrity.invalidCounts.length > 0 && <li>件数の形式が正しくない結果がありました</li>}
+          </ul>
+        )}
         {outcome === "unknown" && (
           <p className="mt-2">
             {result.unknown > 0

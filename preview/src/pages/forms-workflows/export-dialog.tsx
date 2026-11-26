@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldItem, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ConfirmActionDialog } from "@/patterns/confirm-action"
 import { defaultExportScope, escapeCsvCell, exportFileName, exportScopeLabel, type ExportOrigin, type ExportScope } from "@/patterns/export"
 
 import { downloadText } from "./import-wizard"
@@ -15,8 +16,11 @@ import { downloadText } from "./import-wizard"
 // - 件数がわからない範囲は、件数を示さない。
 // - 出力する列の初期値は、表に表示している列。権限のない列は選択肢に出さない（最終的な確認はサーバーが行う）。
 // - CSV は UTF-8。Excel で開く場合は BOM を付ける。
+// - 「選んだ行」を選んでいる間に選択がなくなった場合は、出力できないことを示す（検索結果のすべてに暗黙に広げない）。
+// - 個人情報の列（sensitive）を含む場合は、ダウンロードの前に ConfirmActionDialog で確かめる。
 
-export type ExportColumn = { id: string; label: string; visible: boolean }
+/** sensitive：個人情報など、出力の前に確かめる列 */
+export type ExportColumn = { id: string; label: string; visible: boolean; sensitive?: boolean }
 
 export function ExportDialog({
   open,
@@ -61,14 +65,27 @@ export function ExportDialog({
   const scopeName = { selected: "選択", page: "表示中のページ", results: "検索結果", all: "すべて" }[scope]
   const fileName = exportFileName({ kind, scope: scopeName, date: new Date(), extension: "csv" })
   const chosen = columns.filter((c) => selected.has(c.id))
+  const sensitive = chosen.filter((c) => c.sensitive)
+  const noSelection = scope === "selected" && (counts.selected ?? 0) === 0
+  const [confirmSensitive, setConfirmSensitive] = useState(false)
+
+  const request = () => {
+    if (pending || chosen.length === 0 || noSelection) return
+    if (sensitive.length) setConfirmSensitive(true)
+    else void run()
+  }
 
   const run = async () => {
-    if (pending || chosen.length === 0) return
+    if (pending || chosen.length === 0 || noSelection) return
     setPending(true)
     setError(null)
     try {
       const rows = await getRows(scope)
-      const lines = [chosen.map((c) => escapeCsvCell(c.label)).join(","), ...rows.map((r) => chosen.map((c) => escapeCsvCell(r[c.id])).join(","))]
+      // 表計算ソフトで開く形式は、式として解釈される値に ' を付ける（spreadsheet）。
+      // ほかのシステムへの取り込みの形式は、値を変えない（raw）。取り込む側が値を式として扱わないことを前提にする
+      const mode = format === "excel" ? "spreadsheet" : "raw"
+      const cell = (v: unknown) => escapeCsvCell(v, { mode })
+      const lines = [chosen.map((c) => cell(c.label)).join(","), ...rows.map((r) => chosen.map((c) => cell(r[c.id])).join(","))]
       downloadText(fileName, lines.join("\r\n"), { bom: format === "excel" })
       onOpenChange(false)
     } catch {
@@ -82,7 +99,9 @@ export function ExportDialog({
     { value: "excel", label: "CSV（Excel で開く。BOM 付きの UTF-8）" },
     { value: "utf8", label: "CSV（UTF-8。ほかのシステムへの取り込み）" },
   ]
-  const scopeItems = scopes.map((s) => ({ value: s, label: exportScopeLabel(s, counts[s] ?? null) }))
+  // 「選んだ行」を選んでいる間は、選択がなくなっても選択肢から外さない（ほかの範囲に変わったように見せない）
+  const shownScopes = scope === "selected" && !scopes.includes("selected") ? (["selected", ...scopes] as ExportScope[]) : scopes
+  const scopeItems = shownScopes.map((s) => ({ value: s, label: exportScopeLabel(s, counts[s] ?? null) }))
 
   return (
     <Dialog open={open} onOpenChange={(o) => !pending && onOpenChange(o)}>
@@ -149,6 +168,11 @@ export function ExportDialog({
               </Select>
               <FieldDescription>Excel で直接開くと、電話番号や郵便番号の先頭の 0 が消えることがあります</FieldDescription>
             </Field>
+            {noSelection && (
+              <Alert variant="warning" role="alert" data-testid="export-no-selection">
+                <AlertDescription>選んだ行がありません。一覧で行を選ぶか、対象を変えてください。</AlertDescription>
+              </Alert>
+            )}
             {error && (
               <Alert variant="destructive" role="alert">
                 <AlertDescription>{error}</AlertDescription>
@@ -160,10 +184,20 @@ export function ExportDialog({
           <Button variant="secondary" disabled={pending} onClick={() => onOpenChange(false)}>
             キャンセル
           </Button>
-          <Button loading={pending} disabled={chosen.length === 0} onClick={() => void run()} data-testid="export-run">
+          <Button loading={pending} disabled={chosen.length === 0 || noSelection} onClick={request} data-testid="export-run">
             ダウンロード
           </Button>
         </DialogFooter>
+        <ConfirmActionDialog
+          open={confirmSensitive}
+          onOpenChange={setConfirmSensitive}
+          title={`個人情報を含む${exportScopeLabel(scope, counts[scope] ?? null)}をダウンロードしますか？`}
+          description={`${sensitive.map((c) => `「${c.label}」`).join("")}を含みます。ダウンロードしたファイルは、社内の規程に従って管理してください。`}
+          confirmLabel="ダウンロード"
+          targetKey={JSON.stringify([scope, chosen.map((c) => c.id)])}
+          data-testid="export-sensitive-confirm"
+          onConfirm={() => run()}
+        />
       </DialogContent>
     </Dialog>
   )

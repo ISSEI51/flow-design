@@ -217,7 +217,7 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     await code.blur()
     await expect(page.getByTestId("ce-code-error")).toContainText("登録済み", { timeout: 5000 })
     await disabled(submit)
-    expect((await requests(page, "check-code")).map((r) => r.payload)).toContain("C-0001")
+    expect((await requests(page, "check-code")).map((r) => (r.payload as { code: string }).code)).toContain("C-0001")
   })
 
   test("IME composition is not validated and blocks saving until committed", async ({ page, browserName, isMobile }) => {
@@ -320,13 +320,13 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
   })
 
   test("instant save reverts on failure; autosave distinguishes unsaved, saving, saved and failed", async ({ page }) => {
-    await server(page, (s) => (s.instantFails = true))
+    await server(page, (s) => (s.instantMode = "fail"))
     const sw = page.getByTestId("instant-ce-notify").getByRole("switch")
     await expect(sw).toBeChecked()
     await sw.click()
     await expect(page.getByTestId("instant-ce-notify")).toContainText("元の設定に戻しました")
     await expect(sw).toBeChecked()
-    await server(page, (s) => (s.instantFails = false))
+    await server(page, (s) => (s.instantMode = "success"))
     await sw.click()
     await expect(page.getByTestId("instant-ce-notify")).toContainText("オフにしました")
     await expect(sw).not.toBeChecked()
@@ -338,10 +338,10 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     await expect(status).toHaveAttribute("data-status", "unsaved")
     await expect(status).toHaveAttribute("data-status", "saving", { timeout: 3000 })
     await expect(status).toHaveAttribute("data-status", "saved")
-    await server(page, (s) => (s.autosaveFails = true))
+    await server(page, (s) => (s.autosaveMode = "fail"))
     await memo.fill("失敗させる")
     await expect(status).toHaveAttribute("data-status", "failed", { timeout: 4000 })
-    await server(page, (s) => (s.autosaveFails = false))
+    await server(page, (s) => (s.autosaveMode = "success"))
     await page.getByRole("button", { name: "もう一度保存" }).click()
     await expect(status).toHaveAttribute("data-status", "saved")
   })
@@ -547,7 +547,9 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
     await dialog.getByRole("button", { name: "保存して移動" }).click()
     await dialog.getByRole("button", { name: "移動をやめる" }).click()
     await expect(dialog).toBeHidden()
-    await page.waitForTimeout(1800)
+    // 保存の応答を待つ（固定の時間に頼らない）
+    await expect.poll(() => server(page, (s) => s.settled.filter((k) => k === "settings-company").length)).toBe(1)
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
     await expect(page.getByTestId("forms-settings")).toBeVisible()
     await expect(page.getByTestId("settings-company")).not.toHaveAttribute("data-dirty")
   })
@@ -563,6 +565,20 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
     await expect(error).toBeHidden()
     await enabled(submitOf(page, "edit"))
     await expect(page.getByTestId("forms-customer-edit")).toBeVisible()
+  })
+
+  test("edit whose response was lost after the server saved: checking confirms every sent field and returns without a dialog", async ({ page }) => {
+    await openApp(page, "page=customer-edit&id=cu-1&from=list")
+    await page.locator("#edit-phone").fill("03-0000-9999")
+    await page.locator("#edit-note").fill("保存の確認")
+    await server(page, (s) => (s.saveMode = "throw"))
+    await submitOf(page, "edit").click()
+    const error = page.getByTestId("edit-form-error")
+    await expect(error).toContainText("保存されたかを確かめられていません")
+    await error.getByRole("button", { name: "保存されているか確認" }).click()
+    await expect(page.getByTestId("forms-customers")).toBeVisible()
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
+    await expect(page.locator("[data-slot=toast]", { hasText: "を保存しました" })).toBeVisible()
   })
 
   test("save and move is offered only when every unsaved form can be saved", async ({ page, isMobile }) => {
@@ -757,21 +773,30 @@ test.describe("Confirmation", { tag: "@webkit" }, () => {
     await expect(ex).toContainText("アーカイブ済み")
   })
 
-  test("bulk delete in the app: target change while confirming is shown and the displayed target is used; one request", async ({ page }) => {
+  test("bulk delete in the app (Data Table and the selection bar): a target change needs explicit re-confirmation; the dialog closes at start; one request", async ({ page }) => {
     await openApp(page, "page=customers")
     await page.evaluate(() => (window.__fdFormsChangeWhileConfirm = true))
-    for (const i of [0, 1, 2]) await page.getByTestId("customers-table").locator("tbody tr").nth(i).getByRole("checkbox").click()
+    const rows = page.getByTestId("forms-customers").locator("tbody tr[data-row-id]")
+    await expect(rows).toHaveCount(5)
+    for (const i of [0, 1, 2]) await rows.nth(i).getByRole("checkbox").click()
     await page.getByTestId("customers-delete-selected").click()
     const dialog = page.getByTestId("customers-delete-dialog")
     await expect(dialog).toContainText("3件の顧客を削除しますか？")
+    // 確認の表示中に、選んだ行の 1 件が選択から外れる：変わったことを示し、確かめるまで実行できない
     await expect(dialog.locator("[data-slot=confirm-action-changed]")).toBeVisible({ timeout: 4000 })
     await expect(dialog).toContainText("2件の顧客を削除しますか？")
-    await dialog.getByRole("button", { name: "2件を削除" }).dblclick()
+    const run = dialog.getByRole("button", { name: "2件を削除" })
+    await expect(run).toBeDisabled()
+    await dialog.getByRole("button", { name: "変更後の内容を確かめました" }).click()
+    await run.click()
+    // 一括の操作は、実行を始めた時点で確認を閉じ、進捗と結果を一覧の上に示す
     await expect(dialog).toBeHidden()
+    await expect(page.locator("[data-slot=toast]", { hasText: "2件の顧客を削除しました" })).toBeVisible()
     const reqs = await requests(page, "delete")
     expect(reqs).toHaveLength(1)
-    expect(reqs[0].payload).toEqual(["cu-2", "cu-3"])
+    expect(reqs[0].payload).toMatchObject({ ids: ["cu-2", "cu-3"], ws: "hq" })
   })
+
 })
 
 // ------------------------------------------------------------------ Multi-step Workflow
@@ -805,7 +830,11 @@ test.describe("Multi-step Workflow", { tag: "@webkit" }, () => {
     await next(page).click()
     await expect(heading(page)).toHaveText("顧客")
     await expect(heading(page)).toBeFocused()
-    await expect(stepper.locator("li[aria-current=step]:visible, [data-slot=stepper-current]:visible").first()).toContainText("顧客")
+    if (isMobile) {
+      // 狭い領域の簡易の表示は、番号と総数だけを示す（直後の見出しと同じ名前を重ねない。currentLabel="hidden"）
+      const current = stepper.locator("[data-slot=stepper-narrow] [data-slot=stepper-current]")
+      await expect(current).toHaveText("ステップ 2 / 5")
+    } else await expect(stepper.locator("[data-slot=stepper-wide] li[aria-current=step]")).toContainText("顧客")
   })
 
   test("back keeps values; completed steps are direct links, unreached ones are not", async ({ page, isMobile }) => {
@@ -891,6 +920,20 @@ test.describe("Multi-step Workflow", { tag: "@webkit" }, () => {
     await expect(page.getByRole("alertdialog")).toHaveCount(0)
   })
 
+  test("a failed seats check blocks the step and can be checked again", async ({ page }) => {
+    await toTerms(page)
+    await server(page, (s) => (s.checkMode = "fail"))
+    await choose(page, page.locator("#ms-plan"), /^ライト/)
+    await page.locator("#ms-seats").fill("8")
+    await expect(page.getByTestId("ms-seats-status")).toBeVisible()
+    await expect(page.getByTestId("ms-notice")).toContainText("利用人数を確かめられませんでした")
+    await expect(next(page)).toHaveAttribute("aria-disabled", "true")
+    await server(page, (s) => (s.checkMode = "success"))
+    await page.getByTestId("ms-seats-recheck").click()
+    await expect(page.getByTestId("ms-seats-status")).toHaveCount(0)
+    await expect(page.getByTestId("ms-notice")).not.toContainText("確かめられませんでした")
+  })
+
   test("draft: resume restores values and steps and re-validates against current options", async ({ page }) => {
     await page.getByTestId("ms-seed-draft").click()
     const draft = page.getByTestId("ms-draft")
@@ -900,7 +943,10 @@ test.describe("Multi-step Workflow", { tag: "@webkit" }, () => {
     await expect(page.locator("#ms-seats")).toHaveValue("12")
     await expect(page.getByTestId("ms-plan-error")).toContainText("提供を終了しました")
     await disabled(next(page))
+    // ライトの上限（10 人）を超えるため、プランに依存する利用人数の確認がエラーになる
     await choose(page, page.locator("#ms-plan"), /^ライト/)
+    await disabled(next(page))
+    await choose(page, page.locator("#ms-plan"), /^スタンダード/)
     await enabled(next(page))
   })
 })
@@ -1067,6 +1113,35 @@ test.describe("Import & Export", () => {
     await result.getByRole("button", { name: "状態を確認" }).click()
     await expect(result).toHaveAttribute("data-outcome", /partial|failed/, { timeout: 5000 })
     await expect(result.getByRole("button", { name: /だけを再処理/ })).toBeVisible()
+  })
+
+  test("an exception without a response: every row is unknown; the status check keeps registered rows out of the retry", async ({ page }) => {
+    await server(page, (s) => (s.importMode = "throw"))
+    await loadSample(page)
+    await resolveMapping(page)
+    await page.getByTestId("ie-next").click()
+    await page.getByTestId("ie-validate").click()
+    await page.getByTestId("ie-next").click()
+    await page.getByTestId("ie-run").click()
+    const result = ie(page).locator("[data-slot=import-result]")
+    await expect(result).toHaveAttribute("data-outcome", "unknown", { timeout: 5000 })
+    await expect(result.getByRole("button", { name: /再処理/ })).toHaveCount(0)
+    await server(page, (s) => (s.importMode = "success"))
+    await result.getByRole("button", { name: "状態を確認" }).click()
+    // サーバーで登録されていた前半の行は成功、登録されていなかった行だけが再処理の対象になる
+    await expect(result).toHaveAttribute("data-outcome", "partial", { timeout: 5000 })
+    await expect(result).toContainText(/新規登録\d+件/)
+    const retry = result.getByRole("button", { name: /だけを再処理/ })
+    await expect(retry).toBeVisible()
+    const label = (await retry.textContent()) ?? ""
+    const failedCount = Number(label.match(/(\d+)件/)?.[1])
+    expect(failedCount).toBeGreaterThan(0)
+    expect(failedCount).toBeLessThan(37)
+    await retry.click()
+    await expect(result).toHaveAttribute("data-outcome", "success", { timeout: 5000 })
+    // 再処理の要求には、登録済みの行を含めない
+    const runs = await requests(page, "run-import")
+    expect((runs.at(-1)!.payload as { rows: number[] }).rows).toHaveLength(failedCount)
   })
 
   test("export: defaults by origin, unknown counts, visible columns, file name and download", async ({ page, isMobile }) => {

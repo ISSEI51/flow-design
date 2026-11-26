@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button"
 // - 未保存かどうかは、保存の単位が判断する（useFormState の isDirty など。触れただけでは未保存にしない）。
 // - 確認は「編集を続ける」（初期フォーカス、Escape）と「変更を破棄」の 2 択。すべての対象が保存できる場合だけ
 //   「保存して移動」を加える。保存がすべて成功した場合だけ移動し、失敗したら移動せず、入力を残す。
-// - 確認中に別の移動の要求が来た場合は、最後の要求だけを残す（前の要求は onCancel で取り消す）。
+// - 確認中、保存を待つ間、保存して移動の途中に別の移動の要求が来た場合は、最後の要求だけを残す（前の要求は onCancel で取り消す）。
 // - 破棄、または保存して移動した対象は、移動の処理の間は確認の対象から外す（確認が繰り返されない）。
 //   dirty が false になると、再び対象に戻る。
 // - 保存中に移動を求めた場合は、保存が終わるまで待つ。成功して未保存の変更がなければ移動し、失敗したら確認に切り替える。
@@ -50,8 +50,13 @@ type Entry = {
   canSave: boolean
   save?: () => Promise<boolean>
   discard?: () => void
-  /** 破棄、または保存して移動した。dirty が false になるまで確認の対象から外す */
-  released: boolean
+  /** 値の変更の回数（useFormState の revision）。破棄や保存の後に変更があったかを確かめる */
+  revision?: number | string
+  /**
+   * 破棄、または保存して移動した時点の revision。移動の処理の間だけ、確認の対象から外す。
+   * revision が変わる（新しい変更がある）、dirty が false になる、移動の処理が終わる（次のタスク）のいずれかで解除する
+   */
+  released: { revision: number | string | undefined } | null
 }
 
 type NavigationRequest = {
@@ -107,13 +112,27 @@ function UnsavedChangesProvider({
   const bump = React.useCallback(() => setVersion((v) => v + 1), [])
 
   const active = () => [...entries.current.values()]
-  const blocking = () => active().filter((e) => e.dirty && !e.released)
-  const blockingIds = () => [...entries.current.entries()].filter(([, e]) => e.dirty && !e.released).map(([id]) => id)
+  const isReleased = (e: Entry) => e.released !== null && e.released.revision === e.revision
+  const blocking = () => active().filter((e) => e.dirty && !isReleased(e))
+  const blockingIds = () => [...entries.current.entries()].filter(([, e]) => e.dirty && !isReleased(e)).map(([id]) => id)
+  // 移動の処理（proceed）の後に、確認を省く印を解除する。移動が失敗した（画面が残った）場合も、未保存の変更を守る
+  const releaseLater = React.useCallback(() => {
+    window.setTimeout(() => {
+      let changed = false
+      for (const e of entries.current.values()) {
+        if (e.released) {
+          e.released = null
+          changed = true
+        }
+      }
+      if (changed) bump()
+    }, 0)
+  }, [bump])
   const anySaving = () => active().some((e) => e.saving)
 
   const register = React.useCallback(
     (id: string, entry: Omit<Entry, "released">) => {
-      entries.current.set(id, { ...entry, released: false })
+      entries.current.set(id, { ...entry, released: null })
       bump()
     },
     [bump]
@@ -122,8 +141,14 @@ function UnsavedChangesProvider({
     (id: string, entry: Omit<Entry, "released">) => {
       const prev = entries.current.get(id)
       if (!prev) return
-      const released = prev.released && entry.dirty
-      const changed = prev.dirty !== entry.dirty || prev.saving !== entry.saving || prev.canSave !== entry.canSave || prev.label !== entry.label || prev.released !== released
+      const released = prev.released && entry.dirty && prev.released.revision === entry.revision ? prev.released : null
+      const changed =
+        prev.dirty !== entry.dirty ||
+        prev.saving !== entry.saving ||
+        prev.canSave !== entry.canSave ||
+        prev.label !== entry.label ||
+        prev.revision !== entry.revision ||
+        prev.released !== released
       entries.current.set(id, { ...entry, released })
       if (changed) bump()
     },
@@ -144,9 +169,10 @@ function UnsavedChangesProvider({
       }
       // 確認中の要求は、新しい要求に置き換える
       const previous = requestRef.current
-      if (previous && previous.phase !== "saving") previous.onCancel?.()
+      if (previous) previous.onCancel?.()
       if (previous?.phase === "saving") {
-        options.onCancel?.()
+        // 保存して移動の途中：保存は続け、終わった後の移動先を最新の要求に置き換える
+        setRequest({ ...previous, proceed, onCancel: options.onCancel })
         return false
       }
       setRequest({ proceed, onCancel: options.onCancel, phase: anySaving() ? "waiting" : "confirm" })
@@ -192,12 +218,13 @@ function UnsavedChangesProvider({
     const r = requestRef.current
     if (!r) return
     for (const e of blocking()) {
-      e.released = true
+      e.released = { revision: e.revision }
       e.discard?.()
     }
     setRequest(null)
     bump()
     r.proceed()
+    releaseLater()
   }
 
   const targets = blocking()
@@ -210,20 +237,33 @@ function UnsavedChangesProvider({
     let ok = true
     for (const id of blockingIds()) {
       // 1 つでも失敗したら、残りを保存せずに止める（移動しない）。登録は保存の間に置き換わるため、id で引き直す
+      const before = entries.current.get(id)?.revision
       ok = Boolean(await entries.current.get(id)?.save?.().catch(() => false))
       if (!ok) break
       const current = entries.current.get(id)
-      if (current) current.released = true
+      // 保存を始めた時点の revision で印を付ける。保存の間に入力があれば、revision が変わり、確認の対象に戻る
+      if (current) current.released = { revision: before }
     }
-    // 保存の間に「移動をやめる」を押した場合は、移動しない
-    if (requestRef.current?.proceed !== r.proceed) {
+    // 保存の結果をフォームが反映し、登録が更新されるのを待つ
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+    // 保存の間に「移動をやめる」を押した場合は、移動しない。別の移動を求めた場合は、最新の要求で移動する
+    const latest = requestRef.current
+    if (!latest) {
+      bump()
+      return
+    }
+    if (ok && blocking().length > 0) {
+      // 保存の間に新しい入力があった：移動せずに、もう一度確かめる
+      setRequest({ ...latest, phase: "confirm" })
       bump()
       return
     }
     setRequest(null)
     bump()
-    if (ok) r.proceed()
-    else r.onCancel?.()
+    if (ok) {
+      latest.proceed()
+      releaseLater()
+    } else latest.onCancel?.()
   }
 
   const actions = React.useMemo<RegistryActions>(() => ({ register, update, unregister, confirmNavigation }), [register, update, unregister, confirmNavigation])
@@ -287,6 +327,7 @@ function useUnsavedChanges({
   saving = false,
   label,
   canSave = true,
+  revision,
   onSave,
   onDiscard,
 }: {
@@ -295,6 +336,8 @@ function useUnsavedChanges({
   /** 確認の文に示す名前（「請求先」など）。保存の単位が 1 つだけの画面では省略してよい */
   label?: string
   canSave?: boolean
+  /** 値の変更の回数（useFormState の revision）。破棄や保存の後の新しい変更を、確認の対象に戻すために使う */
+  revision?: number | string
   onSave?: () => Promise<boolean>
   onDiscard?: () => void
 }) {
@@ -307,25 +350,23 @@ function useUnsavedChanges({
       label,
       dirty,
       saving,
+      revision,
       canSave: canSave && Boolean(onSave),
       save: onSave ? () => handlers.current.onSave?.() ?? Promise.resolve(false) : undefined,
       discard: () => handlers.current.onDiscard?.(),
     }),
-    [label, dirty, saving, canSave, onSave]
+    [label, dirty, saving, revision, canSave, onSave]
   )
-  const registered = React.useRef(false)
+  const entryRef = React.useRef(entry)
+  entryRef.current = entry
   React.useEffect(() => {
     if (!registry) return
-    registry.register(id, entry)
-    registered.current = true
-    return () => {
-      registered.current = false
-      registry.unregister(id)
-    }
-    // 登録と解除はマウントとアンマウントだけで行う（entry は含めない）。値の変化は次の effect で反映する
+    // 登録と解除は、マウントとアンマウントだけで行う（registry の関数は変わらない）
+    registry.register(id, entryRef.current)
+    return () => registry.unregister(id)
   }, [registry, id])
   React.useEffect(() => {
-    if (registry && registered.current) registry.update(id, entry)
+    registry?.update(id, entry)
   }, [registry, id, entry])
 }
 

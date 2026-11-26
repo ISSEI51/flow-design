@@ -218,25 +218,39 @@ def form_validation_states():
     # 補足
     ny = y2 + h + 40
     section(d, 0, ny, "検証を待つ・行わない場合")
-    lbox(d, 0, ny + 28, 440, hh(1), "IME の変換中は検証しない", ["確定した文字だけを検証の対象にする"], dashed=True, stroke=LINE)
-    lbox(d, 460, ny + 28, 440, hh(1), "非同期の確認中（重複の確認など）", ["結果が出るまで確認中であることを示す"],
-         dashed=True, stroke=LINE)
+    lbox(d, 0, ny + 28, 900, hh(1), "IME の変換中は検証しない", ["確定した文字だけを検証の対象にする"], dashed=True, stroke=LINE)
+    ay = ny + 28 + hh(1) + 24
+    ah = hh(1)
+    lbox(d, 0, ay + (2 * ah + 16 - ah) / 2, 260, ah, "確認中", ["入力が止まってから確かめる"], dashed=True, stroke=LINE)
+    for k, (t, subs) in enumerate([("結果：正しい／不正", ["不正ならエラーを表示する"]),
+                                   ("確かめられなかった（通信の失敗、期限切れ、例外）",
+                                    ["保存できない。もう一度確かめる"])]):
+        y = ay + k * (ah + 16)
+        lbox(d, 330, y, 570, ah, t, subs, dashed=True, stroke=LINE)
+        d.line([(266, ay + ah + 8), (324, y + ah / 2)])
+    note(d, 0, ay + 2 * ah + 16 + 16, 900, "依存する項目（組織など）が変わったら確かめ直す", h=44)
     # 保存ボタン
-    sy = ny + 28 + hh(1) + 44
+    sy = ay + 2 * ah + 16 + 16 + 44 + 40
     section(d, 0, sy, "保存ボタン")
     ry = sy + 28
     rh, step = 76, 92
+    dh = hh(2)
     for k, (cond, title, sub, en) in enumerate([
-            ("必須の未入力・エラー・確認中・変換中がある", "保存ボタンは無効", "理由をボタンの近くに示す", False),
+            (None, "保存ボタンは無効", "理由をボタンの近くに示す", False),
             ("すべての検証が成功", "保存ボタンは有効", "最後の項目からフォーカスを外さなくてよい", True)]):
-        y = ry + k * step
-        state(d, 0, y, 420, rh, cond)
-        d.line([(426, y + rh / 2), (454, y + rh / 2)])
-        d.rect(460, y, 440, rh, fill=ACCENT_SURFACE if en else SURFACE, stroke=ACCENT if en else "none", r=12, sw=1.2)
-        T(d, 482, y + 15, 300, title, 16, TEXT, bold=True, step=24)
-        T(d, 482, y + 41, 304, sub, S_SUB, MUTED)
-        button(d, 460 + 440 - 22 - 84, y + (rh - 32) / 2, 84, 32, "保存", en)
-    y = ry + 2 * step
+        h_ = dh if k == 0 else rh
+        y = ry if k == 0 else ry + dh + 16
+        if cond is None:
+            state(d, 0, y, 420, h_, "次のどれかに当てはまる",
+                  ["必須の未入力・エラー・確認中・確かめられなかった", "変換中・保存中・保存の結果が不明・変更のない編集"])
+        else:
+            state(d, 0, y, 420, h_, cond)
+        d.line([(426, y + h_ / 2), (454, y + h_ / 2)])
+        d.rect(460, y, 440, h_, fill=ACCENT_SURFACE if en else SURFACE, stroke=ACCENT if en else "none", r=12, sw=1.2)
+        T(d, 482, y + h_ / 2 - 23, 300, title, 16, TEXT, bold=True, step=24)
+        T(d, 482, y + h_ / 2 + 3, 304, sub, S_SUB, MUTED)
+        button(d, 460 + 440 - 22 - 84, y + (h_ - 32) / 2, 84, 32, "保存", en)
+    y = ry + dh + 16 + rh + 16
     ws = [(0, 220), (270, 320), (640, 260)]
     for (x, w), t in zip(ws, ["保存時", "送信の処理でも条件を確かめる", "サーバー側の検証"]):
         state(d, x, y, w, rh, t, fill=SURFACE)
@@ -321,20 +335,25 @@ def unsaved_navigation():
     dy = 170
     d.line([(440, h + 6), (440, dy - 6)])
     alabel(d, 472, 116, 40, "はい", align="left")
-    d.rect(0, dy, 540, 370, fill=WHITE, stroke=LINE, r=16, sw=1.5)
+    hs = [76, hh(2), hh(3)]
+    ys = [dy + 92, dy + 92 + hs[0] + 16, dy + 92 + hs[0] + hs[1] + 32]
+    dlg_h = ys[2] + hs[2] + 24 - dy
+    d.rect(0, dy, 540, dlg_h, fill=WHITE, stroke=LINE, r=16, sw=1.5)
     T(d, 24, dy + 18, 400, "Alert Dialog", S_NAME, TEXT, bold=True)
     T(d, 24, dy + 48, 400, "「変更を破棄しますか？」", S_SUB, TEXT)
-    opts = [("編集を続ける", "初期フォーカス、Escape", ACCENT_SURFACE, ACCENT),
-            ("変更を破棄", "現在の変更を捨てる", SURFACE, "none"),
-            ("保存して移動", "すべて保存できる場合だけ表示する", SURFACE, "none")]
-    outs = [("留まる", []), ("移動", ["再び確認しない"]), ("成功：移動する", ["失敗：留まり、入力を残す"])]
-    for k, ((t, s, f, st), (ot, os_)) in enumerate(zip(opts, outs)):
-        y = dy + 92 + k * 92
-        lbox(d, 24, y, 492, 76, t, [s], fill=f, stroke=st)
-        d.line([(522, y + 38), (614, y + 38)])
-        state(d, 620, y, 280, 76, ot, os_)
+    opts = [("編集を続ける", ["初期フォーカス、Escape"], ACCENT_SURFACE, ACCENT),
+            ("変更を破棄", ["現在の変更を捨てる"], SURFACE, "none"),
+            ("保存して移動", ["すべて保存できる場合だけ表示する", "1 つでも失敗したら残りを保存せずに止め、留まる",
+                         "保存の間に新しい入力があれば、移動せずにもう一度確かめる"], SURFACE, "none")]
+    outs = [("留まる", []),
+            ("移動", ["この移動の処理の間だけ確認しない", "新しい変更は確認の対象"]),
+            ("成功：移動する", ["失敗：留まり、入力を残す"])]
+    for (t, subs, f, st), (ot, os_), y, hk in zip(opts, outs, ys, hs):
+        lbox(d, 24, y, 492, hk, t, subs, fill=f, stroke=st)
+        d.line([(522, y + hk / 2), (614, y + hk / 2)])
+        state(d, 620, y, 280, hk, ot, os_)
     # ほかの移動
-    ly = dy + 370 + 36
+    ly = dy + dlg_h + 36
     section(d, 0, ly, "ほかの移動")
     for k, (a, b, bs) in enumerate([("保存中", "保存が終わるまで待つ", "「移動をやめる」で取り消せる"),
                                     ("再読み込み・タブを閉じる", "beforeunload", "ブラウザの標準の確認。文言は指定できない")]):

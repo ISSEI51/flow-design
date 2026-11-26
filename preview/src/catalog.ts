@@ -15,6 +15,7 @@ import { DataStatesPage } from "./pages/data-browsing/data-states-page"
 import { ListDetailPage } from "./pages/data-browsing/list-detail-page"
 import { SearchFilterPage } from "./pages/data-browsing/search-filter-page"
 import { ViewSwitchingPage } from "./pages/data-browsing/view-switching-page"
+import { FormsChecksPage } from "./pages/forms-workflows/checks-page"
 import { ConfirmationPage } from "./pages/forms-workflows/confirmation-page"
 import { CreateEditPage } from "./pages/forms-workflows/create-edit-page"
 import { FormLayoutPage } from "./pages/forms-workflows/form-layout-page"
@@ -147,4 +148,5 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "multi-step", name: "Multi-step Workflow", page: MultiStepPage, category: "forms-workflows" },
   { id: "import-export", name: "Import & Export", page: ImportExportPage, category: "forms-workflows" },
   { id: "forms-app", name: "営業管理の検証画面（Forms & Workflows）", page: FormsApp, fullscreen: true, category: "forms-workflows" },
+  { id: "forms-checks", name: "Forms & Workflows の検品", page: FormsChecksPage, fullscreen: true, category: "forms-workflows", hidden: true },
 ]

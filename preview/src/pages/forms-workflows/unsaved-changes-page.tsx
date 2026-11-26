@@ -25,7 +25,7 @@ function SmallForm({ kind, title, initial, testId }: { kind: string; title: stri
   const [f] = useState(() => fields)
   const form = useFormState<One>({ initialValues: { value: initial }, fields: f })
   const save = form.handleSubmit((v) => saveSettingsForm<One>(kind, v))
-  useUnsavedChanges({ dirty: form.isDirty, saving: form.submitting, label: title, canSave: form.canSubmit, onSave: () => save(), onDiscard: form.discard })
+  useUnsavedChanges({ dirty: form.isDirty, saving: form.submitting, label: title, revision: form.revision, canSave: form.canSubmit, onSave: () => save(), onDiscard: form.discard })
   return (
     <form noValidate onSubmit={(e) => void save(e)} onKeyDown={(e) => submitOnEnter(e, save)} className="flex flex-col gap-4" data-testid={testId} data-dirty={form.isDirty || undefined}>
       <Field invalid={!!form.error("value")}>
