@@ -8,6 +8,12 @@ import { SectionLayoutPage } from "./pages/app-structure/section-layout-page"
 import { ShellExamples } from "./pages/app-structure/shell-examples"
 import { StructureApp } from "./pages/app-structure/structure-app"
 import { CalendarPage } from "./pages/advanced/calendar-page"
+import { BrowsingApp } from "./pages/data-browsing/browsing-app"
+import { BulkActionsPage } from "./pages/data-browsing/bulk-actions-page"
+import { DataStatesPage } from "./pages/data-browsing/data-states-page"
+import { ListDetailPage } from "./pages/data-browsing/list-detail-page"
+import { SearchFilterPage } from "./pages/data-browsing/search-filter-page"
+import { ViewSwitchingPage } from "./pages/data-browsing/view-switching-page"
 import { ComboboxPage } from "./pages/advanced/combobox-page"
 import { CommandPage } from "./pages/advanced/command-page"
 import { CsvImportPage } from "./pages/advanced/csv-import-page"
@@ -56,11 +62,12 @@ import { SheetPage } from "./pages/overlays/sheet-page"
 // コンポーネントを追加するときは、ページを作ってここに 1 行足す。
 // fullscreen のページは、プレビューの見出しを付けずに画面全体で表示する。
 // category は Patterns の分類。省略したページは Components。
-export type CatalogCategory = "components" | "app-structure"
+export type CatalogCategory = "components" | "app-structure" | "data-browsing"
 
 export const categories: { id: CatalogCategory; name: string }[] = [
   { id: "components", name: "Components" },
   { id: "app-structure", name: "Patterns：App Structure" },
+  { id: "data-browsing", name: "Patterns：Data Browsing" },
 ]
 
 export const catalog: { id: string; name: string; page: ComponentType; fullscreen?: boolean; category?: CatalogCategory }[] = [
@@ -116,4 +123,10 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "section-layout", name: "Section Layout", page: SectionLayoutPage, category: "app-structure" },
   { id: "structure-app", name: "営業管理の検証画面", page: StructureApp, fullscreen: true, category: "app-structure" },
   { id: "shell-examples", name: "Shell の例", page: ShellExamples, fullscreen: true, category: "app-structure" },
+  { id: "search-filter", name: "Search & Filter", page: SearchFilterPage, category: "data-browsing" },
+  { id: "list-detail", name: "List & Detail", page: ListDetailPage, category: "data-browsing" },
+  { id: "bulk-actions", name: "Bulk Actions", page: BulkActionsPage, category: "data-browsing" },
+  { id: "view-switching", name: "View Switching", page: ViewSwitchingPage, category: "data-browsing" },
+  { id: "data-states", name: "Data States", page: DataStatesPage, category: "data-browsing" },
+  { id: "browsing-app", name: "営業管理の検証画面（Data Browsing）", page: BrowsingApp, fullscreen: true, category: "data-browsing" },
 ]

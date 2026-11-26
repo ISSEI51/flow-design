@@ -547,13 +547,17 @@ type DataTableSelectionBarProps = {
    * サーバー側のページ送りでは、読み込んでいない行を ID で選べないため、「全データを選択中」の状態を製品が持つ。
    */
   selectAll?: {
-    /** 検索条件に一致する全データの件数 */
-    matchingCount: number
+    /** 検索条件に一致する全データの件数。正確な件数がわからない場合は省略する（件数を表示しない） */
+    matchingCount?: number
     /** ページ内のすべての行を選んでいる */
     pageAllSelected: boolean
     /** 検索条件に一致する全データを選択中 */
     allSelected: boolean
     onSelectAll: () => void
+    /** 全データの選択から外した件数（全データを選択した後に、個別に選択を外した行） */
+    excludedCount?: number
+    /** matchingCount を省略した場合に、表示中のページの外にもデータがあるか。既定は true */
+    hasMore?: boolean
   }
   /** 一括操作のボタン */
   children?: React.ReactNode
@@ -582,7 +586,25 @@ function DataTableSelectionBar({
 }: DataTableSelectionBarProps) {
   if (selectedCount === 0 && !selectAll?.allSelected) return null
   const all = selectAll?.allSelected
-  const count = all ? selectAll!.matchingCount : selectedCount
+  const matching = selectAll?.matchingCount
+  const excluded = selectAll?.excludedCount ?? 0
+  // 全データの選択の文。件数がわからない場合は、架空の件数を示さない。
+  let allText = ""
+  if (all) {
+    if (matching === undefined) {
+      allText = excluded > 0 ? `検索条件に一致するすべてのデータを選択中（${countFormat.format(excluded)}件を除く）` : "検索条件に一致するすべてのデータを選択中"
+    } else {
+      allText =
+        excluded > 0
+          ? `検索条件に一致する ${countFormat.format(matching)}件のうち ${countFormat.format(Math.max(0, matching - excluded))}件を選択中`
+          : `検索条件に一致する ${countFormat.format(matching)}件をすべて選択中`
+    }
+  }
+  const offerAll =
+    selectAll !== undefined &&
+    selectAll.pageAllSelected &&
+    !all &&
+    (matching === undefined ? (selectAll.hasMore ?? true) : matching > selectedCount)
   return (
     <div
       role="region"
@@ -591,14 +613,14 @@ function DataTableSelectionBar({
       className={cn("flex min-h-12 flex-wrap items-center gap-x-3 gap-y-2 sm:gap-x-4", className)}
     >
       <p aria-live="polite" className="text-ui font-medium tabular-nums">
-        {all ? `検索条件に一致する ${countFormat.format(count)}件をすべて選択中` : `${countFormat.format(count)}件を選択中`}
+        {all ? allText : `${countFormat.format(selectedCount)}件を選択中`}
         {!all && hiddenCount > 0 && (
           <span className="font-normal text-muted-foreground">（表示していない {countFormat.format(hiddenCount)}件を含む）</span>
         )}
       </p>
-      {selectAll && selectAll.pageAllSelected && !all && selectAll.matchingCount > selectedCount && (
+      {offerAll && (
         <Button variant="link" size="sm" disabled={disabled} onClick={selectAll.onSelectAll}>
-          検索条件に一致する {countFormat.format(selectAll.matchingCount)}件をすべて選択
+          {matching === undefined ? "検索条件に一致するすべてのデータを選択" : `検索条件に一致する ${countFormat.format(matching)}件をすべて選択`}
         </Button>
       )}
       <Button variant="ghost" size="sm" onClick={onClearSelection} className="max-sm:px-2">
