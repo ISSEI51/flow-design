@@ -2,7 +2,7 @@
 
 操作の前に確かめるか、実行した後に取り消せるようにするかを決める。
 
-状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/confirm-action.tsx`](../../../registry/patterns/confirm-action.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/confirm-action.tsx`](../../../registry/patterns/confirm-action.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
 
 ## 目的
 

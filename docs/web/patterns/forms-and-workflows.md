@@ -2,7 +2,7 @@
 
 利用者が情報を入力し、保存し、手続きを終えるまでを扱う Patterns のグループ。Form Layout、Create & Edit、Unsaved Changes、Confirmation、Multi-step Workflow、Import & Export の 6 種類からなる。
 
-状態：v0.1 確定候補（最終レビュー前。初期実装 `be6972b` のレビューの後に最終調整を行った）
+状態：v0.1 確定候補（初期実装 `be6972b` のレビューの後に最終調整を行った。設計と実装の方針は `def0934` の後に条件付きで承認され、条件の 2 回連続の全件の検品を満たした。横断の検品は Patterns Integration Review で行う）
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/forms-workflows-dark.svg">
@@ -267,7 +267,7 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 | Components の資料 | 初期実装：`docs/web/components/forms.md` の「5. 検証のタイミング」に、保存ボタンの有効と無効は Create & Edit で定めることを示す 1 段落を加えた。v0.1：`button.md` の「状態」に Focusable Disabled の行と説明（「Focusable Disabled」）を追記した。`forms.md` の 5 の段落を、Enter による送信の規則と Focusable Disabled にそろえた | 既存の記述（button.md の「無効」の行を含む）と図は変えていない |
 | App Structure（`registry/patterns/` の 6 ファイル、資料、検証画面） | 変更なし | `PageLayout`、`Section`、`SectionStack`、`AppShellMain` の `pageKey`、`scrollOnNavigate`、`focusOnNavigate`、`useAppShell().mainRef` を使う |
 | Data Browsing（`registry/patterns/` の 7 ファイル、資料、検証画面） | 変更なし | 検証画面の顧客の一覧で、`useBrowseQuery`、`useBrowseData`、`useBulkSelection`、`useBulkAction`、`BulkRequestError`、`isBulkFullySucceeded`、`BulkRunStatus`、`BulkResultAlert`、`captureListPosition`、`useListPositionRestore`、`TableScrollArea` を使う |
-| README | 初期実装：進捗の表、Patterns の表、資料と図の生成の案内に Forms & Workflows を加えた。v0.1：状態を「v0.1 確定候補」にした | |
+| README | 初期実装：進捗の表、Patterns の表、資料と図の生成の案内に Forms & Workflows を加えた。v0.1：状態を「v0.1 確定候補」にし、方針の承認の後に「方針は承認済み」を加えた | |
 | プレビュー | 初期実装：`catalog.ts` に分類「Patterns：Forms & Workflows」と 7 ページ（資料の 6 ページと検証画面）を追加した。`package.json` の `test:patterns` に `forms-workflows` を追加した。v0.1：`catalog.ts` に検品用の画面（`forms-checks`、`hidden`）を追加した | 既存のページの id と URL は変わらない |
 | 図の生成 | 初期実装：`scripts/diagrams/build.sh` に `gen_forms_workflows.py` を追加した。v0.1：変更なし | 既存の図の生成は変わらない |
 | 既存の検品 | 初期実装：`preview/tests/button.spec.ts` の Tab を押す回数の上限を、ページのフォーカスできる要素の数にした（「初期実装の検証の結果」）。v0.1：`preview/tests/data-browsing.spec.ts`、`preview/src/data/data-browsing/company-server.ts`、`preview/tests/forms.spec.ts`、`preview/playwright.config.ts` を、PR #3（`694c8f6`）の版と同じ内容にした（`5a8f777`）。この 4 ファイルと `button.spec.ts` は、PR #4（共通の検品の修正）の内容とも同じである。下の注を参照 | 判定と期待する値は変えていない |
@@ -420,6 +420,21 @@ v0.1 の設計と実装の方針の条件付きの承認（`def0934`）の後に
 - 推測（未確認）：ふたが閉じ、画面が消えた DarkWake の状態では、WebKit の画面の座標と要素の判定が正しく行われない。PR #3 の資料に記録のある、座標が NaN のイベントの事象とは症状が異なる（例外は記録されていない）。
 - Node.js の LTS 版での異常：lts1〜lts4 で、Vite のサーバーの V8 の致命的なエラー（`Lazy deopt after a fast API call with return value is unsupported`）、ワーカーの異常終了（`SIGABRT`）、接続の拒否は 0 件だった。ただし、この異常は 26.10.0 で、4 ワーカー以上と高い負荷（負荷の平均 28〜88）の場合に起きていた。今回は 3 ワーカーで負荷が低いため、条件が同じではない。26.13.1 は 26.10.0 と同じ V8（14.6.202.34）を使う。LTS 版で異常が起きないとは確かめられていない（推測：異常が起きなかった主な理由は、ワーカーの数と負荷が少ないことである）。
 - 判定：`5a8f777` で条件を満たして成功した回は lts2 と lts4 の 2 回である。間に環境の異常で失敗した lts3 がある。どちらも、最新の `origin/main`（PR #4 の統合の後）を取り込む前の検品であるため、最終の統合候補の検品として扱わない。
+
+### 最終の統合候補での全件の検品（2026-11-27）
+
+PR #4（共通の検品の修正）が main に統合された（`a132344`、2026-11-27 07:31Z）後に、`origin/main` を作業ブランチに取り込んだ（`46da27f`、競合なし）。PR #4 と共通の 8 ファイル（`company-server.ts`、`data-browsing.spec.ts`、`forms.spec.ts`、`button.spec.ts`、`playwright.config.ts`、`data-display.spec.ts`、`overlays.spec.ts`、`ssr-core.spec.ts`）は、取り込みの後に main と同じ内容である（Data Browsing の検品の修正の重複はない）。条件は上の「検品環境の改善と再検品」と同じ（Node.js 26.13.1、3 ワーカー、回ごとのポートと出力先）。各回は、ほかの作業ツリーの Playwright のワーカーが 3 分続けて 0 になってから始めた。
+
+| 回 | 時刻 | 条件 | typecheck、preview:build、test:tokens | test:ssr | test:patterns | test:components | 判定 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| final1 | 16:34〜（中断） | 16:41:41 にふたが閉じられ（`Clamshell Sleep`）、16:52 から電池で動き、本体がスリープした | 成功 | 96 件成功 | 828 件成功、1 件失敗 | 1777 件目で止まり、それまでに 11 件失敗。2 時間の上限で停止した | 数えない（下の注） |
+| final2 | — | final1 と同じコマンドの中で、final1 の停止により始まらなかった | — | — | — | — | 結果なし |
+| final3 | 19:24〜19:48 | AC 電源、ふたは開いている、ほかの作業ツリーのワーカー 0、負荷の平均は最大 8.25 | 成功 | 96 件成功 | 829 件成功、107 件 skip、失敗 0 | 2340 件成功、256 件 skip、失敗 0 | **成功** |
+| final4 | 19:51〜20:17 | 同じ。負荷の平均は最大 11.56 | 成功 | 96 件成功 | 829 件成功、107 件 skip、失敗 0 | 2340 件成功、256 件 skip、失敗 0 | **成功** |
+
+- final1 の test:patterns の 1 件（webkit-mobile、`forms-workflows.spec.ts` の「unknown total before the branch; next disabled until complete; heading focus after moving」）は、16:41:09 に記録され、ふたが閉じられた時刻（16:41:41）より前である。契約の種類を選んで「次へ」を押した後、5 秒の間に見出しが「顧客」に変わらなかった（「契約の種類」のまま）。原因は特定できていない。同じテストを、webkit-mobile で 3 ワーカー 60 回、8 ワーカー 160 回、`forms-workflows.spec.ts` の全件（mobile と webkit-mobile）を 8 ワーカーで 5 回（595 件）繰り返したが、再現しなかった。失敗した時点のページの記録（error-context）には、見出しの要素しか残っていない。未解決の事項として記録する。
+- final3 と final4 の両方で、製品の例外とコンソールのエラーは 0 件、V8 の致命的なエラー、ワーカーの異常終了、接続の拒否、依存の再最適化、全体の再読み込みは 0 件。各回の開始と終了で HEAD は `46da27f`、作業ツリーの変更は 0 件だった。
+- 結論：**最終の統合候補（`46da27f`）で、6 つの確認を 2 回連続（final3、final4）で失敗 0 件で終えた。** 統合の条件を満たした。この後の変更は、この資料と README と 6 つの資料の状態の行だけである（検品の対象のコードとテストは変えていない）。
 
 ### v0.1 の独立したレビュー
 

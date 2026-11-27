@@ -2,7 +2,7 @@
 
 異なる判断や処理を順に行う作業を、複数のステップに分ける。
 
-状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/step-flow.ts`](../../../registry/patterns/step-flow.ts)、[`registry/patterns/stepper.tsx`](../../../registry/patterns/stepper.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/step-flow.ts`](../../../registry/patterns/step-flow.ts)、[`registry/patterns/stepper.tsx`](../../../registry/patterns/stepper.tsx) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
 
 ## 目的
 

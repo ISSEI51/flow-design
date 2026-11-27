@@ -2,7 +2,7 @@
 
 ファイルからデータを取り込み、データをファイルに書き出す。
 
-状態：v0.1 確定候補（最終レビュー前） ・ 実装：[`registry/patterns/import-mapping.ts`](../../../registry/patterns/import-mapping.ts)、[`registry/patterns/import-review.tsx`](../../../registry/patterns/import-review.tsx)、[`registry/patterns/export.ts`](../../../registry/patterns/export.ts) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/import-mapping.ts`](../../../registry/patterns/import-mapping.ts)、[`registry/patterns/import-review.tsx`](../../../registry/patterns/import-review.tsx)、[`registry/patterns/export.ts`](../../../registry/patterns/export.ts) ・ 全体：[Forms & Workflows](forms-and-workflows.md)
 
 ## 目的
 
