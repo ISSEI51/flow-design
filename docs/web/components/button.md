@@ -122,9 +122,32 @@ Link は、周りの文章と色だけで区別しないように、常に下線
 | 押下 | ホバーよりさらに面を変える。位置や大きさは変えない |
 | フォーカス | キーボードで移動したときだけ `focus-ring` を表示する |
 | 無効 | `disabled`。透明度 50%、ポインターは `not-allowed`。フォーカスできない |
+| Focusable Disabled | `disabled` と `focusableWhenDisabled`。見た目は無効と同じ（透明度 50%、ポインターは `not-allowed`）。`aria-disabled="true"` を付け、フォーカスできる。押せない。キーボードで移動したときは `focus-ring` を表示する |
 | 処理中 | `loading`。ラベルを透明にし、同じ位置にスピナーを表示する。押せないが、フォーカスは保つ |
 
 無効にする場合は、押せない理由を近くの文字で示す。理由を示せない場合は、押せる状態のままにして、押したときに理由を示す方がよい。
+
+#### Focusable Disabled
+
+フォーカスと実行の可否で、次の 4 つを区別する。
+
+| 状態 | フォーカス | 実行 |
+| --- | --- | --- |
+| 通常 | できる | できる |
+| 無効（Disabled） | できない | できない |
+| Focusable Disabled | できる | できない |
+| 処理中（Loading） | 保つ | 二重に実行できない |
+
+- 操作できない理由を、キーボードや支援技術の利用者に伝える必要がある場合に使う。例：フォームの保存ボタン（必須の項目がそろい、検証が成功するまで押せない。[Create & Edit](../patterns/create-and-edit.md#focusable-disabled)）。Tab で移ったときに、押せない理由を説明として聞ける。
+- 次を設定する。
+  - `disabled` と `focusableWhenDisabled`（Button が `aria-disabled="true"` を付ける。ネイティブの `disabled` は付けない）。
+  - `aria-describedby`：押せない理由の文の id。理由がない間も参照先の要素を残す。
+  - フォーカスの表示：Button の `focus-visible:focus-ring` をそのまま使う（消さない）。
+- クリック、Enter、Space では実行されない（Base UI がクリックを取り消す）。フォームの送信のボタンに使う場合は、送信の処理の側でも条件を確かめる。`form.requestSubmit()` などのボタンを経由しない送信は、Button では防げないためである。
+- 1 行の入力欄での Enter（ブラウザの暗黙の送信）も、ボタンへのクリックが取り消されるため送信にならない。Enter で送信する場合は、製品がフォームの `onKeyDown` で扱う（Patterns の `submitOnEnter`）。
+- 理由の文を示せない場合は使わない。押せない理由がわからないまま、フォーカスだけが止まる。
+- 無効（Disabled）の仕様は変わらない。理由を伝える必要がない無効のボタンは、これまでどおり `disabled` だけを指定する。
+- Focusable Disabled は、Forms & Workflows v0.1 の最終調整で、この表に追記した。
 
 ## 5. Behavior
 

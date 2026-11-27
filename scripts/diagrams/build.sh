@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$ROOT/docs/diagrams"
 DRAWIO="${DRAWIO:-/Applications/draw.io.app/Contents/MacOS/draw.io}"
-for g in gen.py gen_advanced.py gen_data_display.py gen_app_structure.py gen_data_browsing.py gen_system_account.py; do
+for g in gen.py gen_advanced.py gen_data_display.py gen_app_structure.py gen_data_browsing.py gen_forms_workflows.py gen_data_analysis.py gen_system_account.py; do
   python3 -I "$ROOT/scripts/diagrams/$g" "$OUT"
 done
 if [ "$#" -eq 0 ]; then

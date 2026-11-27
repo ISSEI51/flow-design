@@ -45,6 +45,17 @@ async function hitInside(page: Page, x: number, y: number, target: Locator) {
   return page.evaluate(([x, y, el]) => !!el && (el as Element).contains(document.elementFromPoint(x as number, y as number)), [x, y, handle] as const)
 }
 
+// 背景の要素を、画面の高さの中央までスクロールし、確かめる点（左端から 4px、高さの中央）を返す。
+// 画面の外の点では elementFromPoint が null を返し、hitInside の結果が背景の操作の可否を表さない。プレビューの上部のページの一覧が
+// 増えると、背景の行が画面の外に出るため、位置を固定の前提にしない。scroll: false は、スクロールを止めている間（モーダル）に使う。
+async function pointInView(page: Page, target: Locator, { scroll = true } = {}) {
+  if (scroll) await target.evaluate((el) => el.scrollIntoView({ block: "center" }))
+  const b = await box(target)
+  const vh = page.viewportSize()!.height
+  expect(b.y >= 0 && b.y + b.height <= vh, "確かめる背景の要素が画面の中にある").toBe(true)
+  return { x: b.x + 4, y: b.y + b.height / 2 }
+}
+
 // 開く動きが終わるまで待つ。寸法は動きの途中（拡大やスライドの途中）で測らない。
 async function settle(l: Locator) {
   await expect(l).toBeVisible()
@@ -738,8 +749,8 @@ test.describe("Sheet", { tag: "@webkit" }, () => {
     await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(0)
     if (isMobile) return
     // 背景の一覧を操作できる。開いたまま別の顧客を選ぶと、表示が切り替わる
-    const rb = await box(row2)
-    expect(await hitInside(page, rb.x + 4, rb.y + rb.height / 2, row2)).toBe(true)
+    const p = await pointInView(page, row2)
+    expect(await hitInside(page, p.x, p.y, row2)).toBe(true)
     await row2.click()
     await settle(sheet)
     await expect(sheet).toHaveAccessibleName("佐藤製作所")
@@ -761,13 +772,15 @@ test.describe("Sheet", { tag: "@webkit" }, () => {
     await open(page, "sheet")
     await page.getByTestId("sheet-row-C-0012").click()
     const sheet = page.getByTestId("sheet-customer")
+    const row2 = page.getByTestId("sheet-row-C-0015")
+    // 閲覧（スクロールできる間）に、背景の行を画面の中に入れる
+    if (!isMobile) await pointInView(page, row2)
     await page.getByTestId("sheet-edit").click()
     await expect(sheet).toHaveAttribute("data-mode", "edit")
     await expectOverlay(page, "sheet-overlay")
     const name = page.getByTestId("sheet-field-name")
     if (!isMobile) await expect(name).toBeFocused()
     // 背景の一覧は押せない
-    const row2 = page.getByTestId("sheet-row-C-0015")
     const rb = await box(row2)
     expect(await hitInside(page, rb.x + 4, rb.y + rb.height / 2, row2)).toBe(false)
     // Tab で移動しても Sheet の外に出ない
@@ -871,6 +884,15 @@ async function touchDrag(page: Page, x: number, y: number, dy: number) {
   }
   await send("touchEnd", y + dy)
   await cdp.detach()
+}
+
+// 閉じるスワイプの距離。Base UI の Drawer は、指を離した時点で、速さが 0.5px/ms 以上か、移動の距離が面の高さの半分を超えると閉じる。
+// 速さは操作を送る速さ（CDP の応答の時間、実行環境の負荷）で変わるため、距離だけで閉じる条件を満たす（面の高さの半分 + 24px）。
+// 始点から画面の下端の手前までに収まらない場合は、検品の前提が成り立たないため失敗にする。
+async function closingSwipeDistance(page: Page, popup: Locator, startY: number) {
+  const dy = Math.ceil((await box(popup)).height / 2) + 24
+  expect(startY + dy, "閉じるスワイプの終点が画面の中に収まる").toBeLessThan(page.viewportSize()!.height - 1)
+  return dy
 }
 
 test.describe("Drawer", { tag: "@webkit" }, () => {
@@ -977,7 +999,7 @@ test.describe("Drawer", { tag: "@webkit" }, () => {
     // 上端に達してから下へスワイプすると閉じる
     await body.evaluate((el) => el.scrollTo(0, 0))
     expect(await settledScrollTop(body)).toBe(0)
-    await touchDrag(page, bb.x + bb.width / 2, bb.y + 40, 400)
+    await touchDrag(page, bb.x + bb.width / 2, bb.y + 40, await closingSwipeDistance(page, long, bb.y + 40))
     await expect(long).toBeHidden()
 
     // 未保存の変更があるときは、スワイプでは閉じずに破棄を確かめる
@@ -987,7 +1009,7 @@ test.describe("Drawer", { tag: "@webkit" }, () => {
     await page.getByTestId("drawer-note-field").fill("メモ")
     await page.getByTestId("drawer-note-field").blur()
     const nb = await box(note)
-    await touchDrag(page, nb.x + nb.width / 2, nb.y + 12, 400)
+    await touchDrag(page, nb.x + nb.width / 2, nb.y + 12, await closingSwipeDistance(page, note, nb.y + 12))
     await expect(page.getByTestId("drawer-discard")).toBeVisible()
     await expect(note).toBeVisible()
     // スワイプした面は元の位置に戻る
@@ -1278,19 +1300,21 @@ test.describe("Sheet mode and modal", { tag: "@webkit" }, () => {
     await settle(sheet)
     const row2 = page.getByTestId("sheet-row-C-0015")
     for (const round of [1, 2]) {
+      // 閲覧（スクロールできる間）に、背景の行を画面の中に入れる
+      await pointInView(page, row2)
       // 閲覧 → 編集
       await page.getByTestId("sheet-edit").click()
       await expect(sheet).toHaveAttribute("data-modal", "true")
       await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(1)
-      const rb = await box(row2)
-      expect(await hitInside(page, rb.x + 4, rb.y + rb.height / 2, row2), `round ${round}`).toBe(false)
+      const p = await pointInView(page, row2, { scroll: false })
+      expect(await hitInside(page, p.x, p.y, row2), `round ${round}`).toBe(false)
       await tabInside(page, sheet, 4)
       // 編集 → 閲覧（変更なしでキャンセル）
       await page.getByTestId("sheet-cancel").click()
       await expect(sheet).toHaveAttribute("data-modal", "false")
       await expect(page.locator("[data-slot=sheet-overlay]")).toHaveCount(0)
-      const rb2 = await box(row2)
-      expect(await hitInside(page, rb2.x + 4, rb2.y + rb2.height / 2, row2)).toBe(true)
+      const p2 = await pointInView(page, row2, { scroll: false })
+      expect(await hitInside(page, p2.x, p2.y, row2)).toBe(true)
       // 背景の要素への aria-hidden、スクロールの固定が外れている
       expect(await page.locator("#root").getAttribute("aria-hidden")).toBeNull()
       const before = await page.evaluate(() => window.scrollY)
@@ -1686,8 +1710,8 @@ test.describe("stacking with feedback components", { tag: "@webkit" }, () => {
       .toEqual({ inert: 0, hidden: 0, popups: 0, overflow: "visible,visible" })
     // 背景の要素を押せる
     const row = page.getByTestId("sheet-row-C-0015")
-    const rb = await box(row)
-    expect(await hitInside(page, rb.x + 4, rb.y + rb.height / 2, row)).toBe(true)
+    const p = await pointInView(page, row)
+    expect(await hitInside(page, p.x, p.y, row)).toBe(true)
   })
 
   test("floating elements (z-50) stay above modal surfaces (z-40)", async ({ page }) => {

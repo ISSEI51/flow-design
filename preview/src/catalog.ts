@@ -15,6 +15,20 @@ import { DataStatesPage } from "./pages/data-browsing/data-states-page"
 import { ListDetailPage } from "./pages/data-browsing/list-detail-page"
 import { SearchFilterPage } from "./pages/data-browsing/search-filter-page"
 import { ViewSwitchingPage } from "./pages/data-browsing/view-switching-page"
+import { FormsChecksPage } from "./pages/forms-workflows/checks-page"
+import { ConfirmationPage } from "./pages/forms-workflows/confirmation-page"
+import { CreateEditPage } from "./pages/forms-workflows/create-edit-page"
+import { FormLayoutPage } from "./pages/forms-workflows/form-layout-page"
+import { FormsApp } from "./pages/forms-workflows/forms-app"
+import { ImportExportPage } from "./pages/forms-workflows/import-export-page"
+import { MultiStepPage } from "./pages/forms-workflows/multi-step-page"
+import { UnsavedChangesPage } from "./pages/forms-workflows/unsaved-changes-page"
+import { AnalysisApp } from "./pages/data-analysis/analysis-app"
+import { AnalysisFiltersPage } from "./pages/data-analysis/analysis-filters-page"
+import { DashboardLayoutPage } from "./pages/data-analysis/dashboard-layout-page"
+import { DrillDownPage } from "./pages/data-analysis/drill-down-page"
+import { MetricOverviewPage } from "./pages/data-analysis/metric-overview-page"
+import { PeriodComparisonPage } from "./pages/data-analysis/period-comparison-page"
 import { AccountApp } from "./pages/system-account/account-app"
 import { AuthenticationPage } from "./pages/system-account/authentication-page"
 import { NotificationsPage } from "./pages/system-account/notifications-page"
@@ -70,12 +84,14 @@ import { SheetPage } from "./pages/overlays/sheet-page"
 // コンポーネントを追加するときは、ページを作ってここに 1 行足す。
 // fullscreen のページは、プレビューの見出しを付けずに画面全体で表示する。
 // category は Patterns の分類。省略したページは Components。
-export type CatalogCategory = "components" | "app-structure" | "data-browsing" | "system-account"
+export type CatalogCategory = "components" | "app-structure" | "data-browsing" | "forms-workflows" | "data-analysis" | "system-account"
 
 export const categories: { id: CatalogCategory; name: string }[] = [
   { id: "components", name: "Components" },
   { id: "app-structure", name: "Patterns：App Structure" },
   { id: "data-browsing", name: "Patterns：Data Browsing" },
+  { id: "forms-workflows", name: "Patterns：Forms & Workflows" },
+  { id: "data-analysis", name: "Patterns：Data Analysis" },
   { id: "system-account", name: "Patterns：System & Account" },
 ]
 
@@ -140,6 +156,20 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "view-switching", name: "View Switching", page: ViewSwitchingPage, category: "data-browsing" },
   { id: "data-states", name: "Data States", page: DataStatesPage, category: "data-browsing" },
   { id: "browsing-app", name: "営業管理の検証画面（Data Browsing）", page: BrowsingApp, fullscreen: true, category: "data-browsing" },
+  { id: "form-layout", name: "Form Layout", page: FormLayoutPage, category: "forms-workflows" },
+  { id: "create-edit", name: "Create & Edit", page: CreateEditPage, category: "forms-workflows" },
+  { id: "unsaved-changes", name: "Unsaved Changes", page: UnsavedChangesPage, category: "forms-workflows" },
+  { id: "confirmation", name: "Confirmation", page: ConfirmationPage, category: "forms-workflows" },
+  { id: "multi-step", name: "Multi-step Workflow", page: MultiStepPage, category: "forms-workflows" },
+  { id: "import-export", name: "Import & Export", page: ImportExportPage, category: "forms-workflows" },
+  { id: "forms-app", name: "営業管理の検証画面（Forms & Workflows）", page: FormsApp, fullscreen: true, category: "forms-workflows" },
+  { id: "forms-checks", name: "Forms & Workflows の検品", page: FormsChecksPage, fullscreen: true, category: "forms-workflows", hidden: true },
+  { id: "metric-overview", name: "Metric Overview", page: MetricOverviewPage, category: "data-analysis" },
+  { id: "dashboard-layout", name: "Dashboard Layout", page: DashboardLayoutPage, category: "data-analysis" },
+  { id: "analysis-filters", name: "Analysis Filters", page: AnalysisFiltersPage, category: "data-analysis" },
+  { id: "period-comparison", name: "Period Comparison", page: PeriodComparisonPage, category: "data-analysis" },
+  { id: "drill-down", name: "Drill-down", page: DrillDownPage, category: "data-analysis" },
+  { id: "analysis-app", name: "営業管理の検証画面（Data Analysis）", page: AnalysisApp, fullscreen: true, category: "data-analysis" },
   { id: "authentication", name: "Authentication", page: AuthenticationPage, category: "system-account" },
   { id: "settings", name: "Settings", page: SettingsPatternPage, category: "system-account" },
   { id: "onboarding", name: "Onboarding", page: OnboardingPage, category: "system-account" },
