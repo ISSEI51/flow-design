@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { escapeCsvCell, exportFileName, exportScopeLabel, defaultExportScope } from "../../registry/patterns/export"
 import { autoMapColumns, createImportColumns, getMappingIssues, importOutcome } from "../../registry/patterns/import-mapping"
+import type { HeldFilter, HoldKind } from "../src/data/forms-workflows/server"
 import { collectPageErrors } from "./page-errors"
 
 // Patterns / Forms & Workflows（Form Layout、Create & Edit、Unsaved Changes、Confirmation、Multi-step Workflow、Import & Export）の検品。
@@ -17,6 +18,12 @@ const server = <T,>(page: Page, fn: (s: Server) => T) =>
   page.evaluate((src) => new Function("s", `return (${src})(s)`)(window.__fdFormsServer), fn.toString()) as Promise<T>
 const requests = (page: Page, kind: string) => server(page, (s) => s.requests).then((r) => r.filter((x) => x.kind === kind))
 const fast = (page: Page) => server(page, (s) => Object.assign(s.latency, { save: 150, check: 120, autofill: 150, action: 120, import: 240, draft: 60 }))
+// 応答の保留と解放（Data Browsing の検品と同じ方式）。順序が結果を決める検品は、応答の時間や操作の速さを前提にせず、テストの側で順序を決める。
+// hold の間に受け付けた要求は、release まで応答しない（AbortSignal も無視する）。release は、応答を受け取った処理と描画が終わってから戻る。
+const hold = (page: Page, kind: HoldKind, on = true) => page.evaluate(([k, v]) => void (window.__fdFormsServer!.hold[k] = v), [kind, on] as const)
+const heldCount = (page: Page, filter: HeldFilter = {}) =>
+  page.evaluate((f) => window.__fdFormsServer!.held.filter((h) => (f.kind === undefined || h.kind === f.kind) && (f.key === undefined || h.key === f.key)).length, filter)
+const release = (page: Page, filter: HeldFilter = {}) => page.evaluate((f) => window.__fdFormsServer!.release(f), filter)
 
 async function openApp(page: Page, query: string) {
   await page.goto(`/#/forms-app?${query}`)
@@ -198,18 +205,23 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
 
   test("async duplicate check: disabled while checking; stale responses are ignored", async ({ page }) => {
     await fillCustomer(page, "ce", { skip: "code" })
-    await server(page, (s) => (s.latency.check = 600))
+    await hold(page, "check")
     const code = page.locator("#ce-code")
     const submit = submitOf(page, "ce")
     await code.fill("C-0001")
-    // 入力が止まってから（400ms）確かめ始める。結果が届くまで保存できない
-    await page.waitForTimeout(450)
+    // 入力が止まってから（400ms）確かめ始める。結果が届くまで保存できない（応答を保留している間に確かめる）
+    await expect.poll(() => heldCount(page, { kind: "check", key: "C-0001" })).toBe(1)
     await expect(page.getByTestId("ce-code-status")).toContainText("確かめています")
     await disabled(submit)
     // 確認の途中で値を変える。古い値（C-0001）の結果を使わない
     await code.fill("C-0098")
-    await expect(page.getByTestId("ce-code-status")).toHaveText("このコードは使えます", { timeout: 5000 })
-    await page.waitForTimeout(700)
+    await expect.poll(() => heldCount(page, { kind: "check", key: "C-0098" })).toBe(1)
+    await hold(page, "check", false)
+    expect(await release(page, { kind: "check", key: "C-0098" })).toBe(1)
+    await expect(page.getByTestId("ce-code-status")).toHaveText("このコードは使えます")
+    // 古い C-0001（登録済み）の応答が後から届いても、エラーにしない
+    expect(await release(page, { kind: "check", key: "C-0001" })).toBe(1)
+    await expect(page.getByTestId("ce-code-status")).toHaveText("このコードは使えます")
     await expect(page.getByTestId("ce-code-error")).toHaveCount(0)
     await enabled(submit)
     // 登録済みのコードは、入力を終えるとエラーになる
@@ -331,12 +343,16 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     await expect(page.getByTestId("instant-ce-notify")).toContainText("オフにしました")
     await expect(sw).not.toBeChecked()
 
-    await server(page, (s) => (s.latency.save = 600))
+    await hold(page, "save")
     const memo = page.getByTestId("autosave-memo")
     const status = page.getByTestId("autosave-status")
     await memo.fill("更新の確認は第 2 営業日")
     await expect(status).toHaveAttribute("data-status", "unsaved")
-    await expect(status).toHaveAttribute("data-status", "saving", { timeout: 3000 })
+    // 保存の応答を保留している間は、保存中を示す
+    await expect.poll(() => heldCount(page, { kind: "save", key: "setting-memo" })).toBe(1)
+    await expect(status).toHaveAttribute("data-status", "saving")
+    await hold(page, "save", false)
+    expect(await release(page, { kind: "save", key: "setting-memo" })).toBe(1)
     await expect(status).toHaveAttribute("data-status", "saved")
     await server(page, (s) => (s.autosaveMode = "fail"))
     await memo.fill("失敗させる")
@@ -388,14 +404,18 @@ test.describe("Create & Edit in the app", () => {
 
   test("edit from the list returns to the list; edits during saving stay unsaved", async ({ page }) => {
     await openApp(page, "page=customer-edit&id=cu-2&from=detail")
-    await server(page, (s) => (s.latency.save = 800))
+    await hold(page, "save")
     await page.locator("#edit-phone").fill("06-9999-0000")
     await submitOf(page, "edit").click()
-    // 保存中に別の項目を変える
+    // 保存中（応答を保留している間）に別の項目を変える
+    await expect.poll(() => heldCount(page, { kind: "save", key: "update-customer" })).toBe(1)
     await page.locator("#edit-note").fill("保存中の変更")
+    await expect(page.locator("#edit-note")).toHaveValue("保存中の変更")
+    await hold(page, "save", false)
+    expect(await release(page, { kind: "save", key: "update-customer" })).toBe(1)
     // 詳細から開いた編集は、詳細に戻るが、保存中に変えた内容が残るため確認が出る
     // 保存中に変えた内容が残るため、保存の後に移動せず、未保存であることを示す（移動の確認で破棄させない）
-    await expect(page.getByTestId("customer-edit-form")).toContainText("保存中に変えた内容は、まだ保存していません", { timeout: 4000 })
+    await expect(page.getByTestId("customer-edit-form")).toContainText("保存中に変えた内容は、まだ保存していません")
     await expect(page.getByTestId("forms-customer-edit")).toBeVisible()
     await expect(page.getByRole("alertdialog")).toHaveCount(0)
     await expect(page.locator("#edit-note")).toHaveValue("保存中の変更")
@@ -540,16 +560,19 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
 
   test("save and move can be stopped while saving; the form keeps its input", async ({ page, isMobile }) => {
     await openApp(page, "page=settings")
-    await server(page, (s) => (s.latency.save = 1500))
+    await hold(page, "save")
     await page.locator("#settings-company-name").fill("移動をやめる")
     await goSidebar(page, "顧客", isMobile)
     const dialog = page.getByRole("alertdialog")
     await dialog.getByRole("button", { name: "保存して移動" }).click()
+    // 保存中（応答を保留している間）に、移動をやめる
+    await expect.poll(() => heldCount(page, { kind: "save", key: "settings-company" })).toBe(1)
     await dialog.getByRole("button", { name: "移動をやめる" }).click()
     await expect(dialog).toBeHidden()
-    // 保存の応答を待つ（固定の時間に頼らない）
-    await expect.poll(() => server(page, (s) => s.settled.filter((k) => k === "settings-company").length)).toBe(1)
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+    // 移動をやめた後で、保存の応答（成功）を返す
+    await hold(page, "save", false)
+    expect(await release(page, { kind: "save", key: "settings-company" })).toBe(1)
+    expect(await server(page, (s) => s.settled.filter((k) => k === "settings-company").length)).toBe(1)
     await expect(page.getByTestId("forms-settings")).toBeVisible()
     await expect(page.getByTestId("settings-company")).not.toHaveAttribute("data-dirty")
   })
@@ -632,14 +655,20 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
 
   test("navigation during saving waits for the save, then moves", async ({ page, isMobile }) => {
     await openApp(page, "page=settings")
-    await server(page, (s) => (s.latency.save = 900))
+    await hold(page, "save")
     await page.locator("#settings-company-name").fill("保存中に移動")
     await page.getByTestId("settings-company-save").click()
+    await expect.poll(() => heldCount(page, { kind: "save", key: "settings-company" })).toBe(1)
+    // 保存中（応答を保留している間）に移動を求める
     await goSidebar(page, "顧客", isMobile)
     const dialog = page.getByRole("alertdialog")
     await expect(dialog).toContainText("保存しています")
     await expect(dialog.getByRole("button", { name: "移動をやめる" })).toBeVisible()
-    await expect(page.getByTestId("forms-customers")).toBeVisible({ timeout: 4000 })
+    await expect(page.getByTestId("forms-settings")).toBeVisible()
+    // 保存が終わると移動する
+    await hold(page, "save", false)
+    expect(await release(page, { kind: "save", key: "settings-company" })).toBe(1)
+    await expect(page.getByTestId("forms-customers")).toBeVisible()
   })
 
   test("beforeunload is registered only while there are unsaved changes", async ({ page }) => {

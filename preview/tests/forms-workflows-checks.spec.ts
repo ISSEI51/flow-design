@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test"
 
 import { escapeCsvCell } from "../../registry/patterns/export"
 import { importOutcome, reconcileImportResult, sanitizeMapping, createImportColumns } from "../../registry/patterns/import-mapping"
+import type { HeldFilter } from "../src/data/forms-workflows/server"
 import { collectPageErrors } from "./page-errors"
 
 // Forms & Workflows v0.1 の境界の条件の検品（#/forms-checks）。
@@ -588,6 +589,10 @@ async function openApp(page: Page, query: string) {
   await server(page, (s) => Object.assign(s.latency, { save: 150, check: 120, autofill: 150, action: 120, import: 240, draft: 60, list: 60 }))
 }
 /** サーバーが応答を返し、画面がその応答を処理した後まで待つ（固定の時間に頼らない） */
+// 模擬のサーバー（window.__fdFormsServer）の保存の応答の保留と解放。release は、応答を受け取った処理と描画が終わってから戻る
+const holdSave = (page: Page, on = true) => page.evaluate((v) => void (window.__fdFormsServer!.hold.save = v), on)
+const heldSaves = (page: Page, key: string) => page.evaluate((k) => window.__fdFormsServer!.held.filter((h) => h.kind === "save" && h.key === k).length, key)
+const releaseHeld = (page: Page, filter: HeldFilter) => page.evaluate((f) => window.__fdFormsServer!.release(f), filter)
 async function waitSettled(page: Page, kind: string) {
   await expect.poll(() => page.evaluate((k) => window.__fdFormsServer!.settled.filter((x) => x === k).length, kind)).toBeGreaterThan(0)
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
@@ -684,7 +689,6 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
 
   test("an old save does not navigate or notify after the workspace changed", async ({ page }) => {
     await openApp(page, "page=customer-new")
-    await server(page, (s) => (s.latency.save = 800))
     const f = (n: string) => page.locator(`#new-${n}`)
     await f("company").fill("株式会社テスト")
     await f("lastName").fill("山田")
@@ -695,9 +699,16 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
     await page.getByRole("listbox").getByRole("option", { name: /^ライト/ }).click()
     await f("start").fill("2026-12-01")
     await expect(page.getByTestId("new-code-status")).toHaveText("このコードは使えます")
+    await holdSave(page)
     await page.getByTestId("new-submit").click()
+    // 保存中（応答を保留している間）に、ワークスペースを切り替える
+    await expect.poll(() => heldSaves(page, "create-customer")).toBe(1)
     await page.locator("[data-testid=forms-verify] summary").click()
     await page.getByTestId("external-ws-kyushu").click()
+    await expect(page.getByTestId("forms-main")).toHaveAttribute("data-ws", "kyushu")
+    // 切り替えの後で、本社への登録の応答（成功）を返す
+    await holdSave(page, false)
+    expect(await releaseHeld(page, { kind: "save", key: "create-customer" })).toBe(1)
     await waitSettled(page, "create-customer")
     await expect(page.getByTestId("forms-customer-new")).toBeVisible()
     await expect(page.locator("[data-slot=toast]", { hasText: "を登録しました" })).toHaveCount(0)
@@ -705,11 +716,17 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
 
   test("settings: a save finishing after the workspace changed does not notify or change the new workspace's form", async ({ page }) => {
     await openApp(page, "page=settings")
-    await server(page, (s) => (s.latency.save = 800))
+    await holdSave(page)
     await page.locator("#settings-company-name").fill("保存中に切り替え")
     await page.getByTestId("settings-company-save").click()
+    // 保存中（応答を保留している間）に、ワークスペースを切り替える
+    await expect.poll(() => heldSaves(page, "settings-company")).toBe(1)
     await page.locator("[data-testid=forms-verify] summary").click()
     await page.getByTestId("external-ws-kyushu").click()
+    await expect(page.getByTestId("forms-main")).toHaveAttribute("data-ws", "kyushu")
+    // 切り替えの後で、本社の設定の保存の応答（成功）を返す
+    await holdSave(page, false)
+    expect(await releaseHeld(page, { kind: "save", key: "settings-company" })).toBe(1)
     await waitSettled(page, "settings-company")
     await expect(page.locator("[data-slot=toast]", { hasText: "会社の情報を保存しました" })).toHaveCount(0)
     await expect(page.locator("#settings-company-name")).toHaveValue("株式会社フロー")

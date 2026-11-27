@@ -33,6 +33,12 @@ export type Customer = {
 
 export type ServerRequest = { kind: string; at: number; payload?: unknown }
 
+/** 保留できる応答の種類（検品用）。save は保存の要求、check は顧客コードの重複の確認 */
+export type HoldKind = "save" | "check"
+/** 保留した応答（検品用）。release() を呼ぶまで応答しない。key は要求の種類（save）または確かめた値（check） */
+export type HeldResponse = { kind: HoldKind; key: string; release: () => void }
+export type HeldFilter = Partial<Pick<HeldResponse, "kind" | "key">>
+
 export const workspaces = [
   { id: "hq", name: "本社営業部" },
   { id: "kyushu", name: "九州支店" },
@@ -55,6 +61,31 @@ export const formsServer = {
   requests: [] as ServerRequest[],
   /** サーバーが応答を返した要求の種類（検品が、固定の時間ではなく応答を待つため） */
   settled: [] as string[],
+  /**
+   * 応答を保留する種類（検品用）。true の種類の要求は、応答の時間（latency）を使わず、release() を呼ぶまで応答しない。
+   * 保留した要求は AbortSignal を無視する（中止を無視して処理を続け、後から応答を返すサーバーを再現する）。
+   * 順序が結果を決める検品は、応答の時間や操作の速さを前提にせず、テストの側で解放の順序を決める
+   * （Data Browsing の模擬サーバー（company-server.ts）の hold と同じ方式）。
+   */
+  hold: {} as Partial<Record<HoldKind, boolean>>,
+  /** 保留中の応答（受け付けた順） */
+  held: [] as HeldResponse[],
+  release: (filter?: HeldFilter) => releaseHeld(filter),
+}
+
+/**
+ * 保留中の応答のうち、条件に一致するもの（指定がなければすべて）を受け付けた順に返す（検品用）。返した件数を返す。
+ * 応答を受け取った処理（Promise の後続）と、その結果の描画が終わってから解決する（固定の待機時間を使わない）：
+ * タスクを 1 つ待って Promise の後続を終わらせ、描画のフレームを 2 つ待って React の反映を終わらせる。
+ */
+async function releaseHeld(filter: HeldFilter = {}) {
+  const match = (h: HeldResponse) => (filter.kind === undefined || h.kind === filter.kind) && (filter.key === undefined || h.key === filter.key)
+  const released = formsServer.held.filter(match)
+  formsServer.held = formsServer.held.filter((h) => !match(h))
+  for (const h of released) h.release()
+  await new Promise((r) => setTimeout(r, 0))
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+  return released.length
 }
 
 declare global {
@@ -66,8 +97,13 @@ if (typeof window !== "undefined") window.__fdFormsServer = formsServer
 
 const log = (kind: string, payload?: unknown) => formsServer.requests.push({ kind, at: Date.now(), payload })
 
-export function wait(ms: number, signal?: AbortSignal) {
+/** 応答を待つ。hold を指定し、その種類の保留が有効な場合は、release() まで応答しない（AbortSignal も無視する） */
+export function wait(ms: number, signal?: AbortSignal, hold?: { kind: HoldKind; key: string }) {
   return new Promise<void>((resolve, reject) => {
+    if (hold && formsServer.hold[hold.kind]) {
+      formsServer.held.push({ ...hold, release: () => resolve() })
+      return
+    }
     if (signal?.aborted) return reject(new DOMException("aborted", "AbortError"))
     const t = window.setTimeout(resolve, ms)
     signal?.addEventListener("abort", () => {
@@ -143,6 +179,8 @@ export function resetFormsServer() {
   settings.clear()
   formsServer.requests.length = 0
   formsServer.settled.length = 0
+  formsServer.held = []
+  formsServer.hold = {}
   Object.assign(formsServer, {
     saveMode: "success",
     actionMode: "success",
@@ -180,7 +218,7 @@ export async function checkCustomerCode(code: string, { signal, exceptId, ws = "
   const mode = formsServer.checkMode
   if (mode === "timeout") return new Promise<string | null>(() => undefined)
   // 中止を無視する検証：signal を渡さずに待ち、遅れて応答する
-  await wait(mode === "ignore-abort" ? formsServer.latency.check * 3 : formsServer.latency.check, mode === "ignore-abort" ? undefined : signal)
+  await wait(mode === "ignore-abort" ? formsServer.latency.check * 3 : formsServer.latency.check, mode === "ignore-abort" ? undefined : signal, { kind: "check", key: code })
   if (mode === "fail") throw new Error("サーバーに接続できませんでした")
   return db(ws).customers.some((c) => c.code === code && c.id !== exceptId) ? `顧客コード「${code}」は登録済みです。別のコードを入力してください` : null
 }
@@ -235,7 +273,7 @@ function saveOutcome<V extends Record<string, unknown>>(values: Partial<V>, dupl
 
 export async function createCustomer(values: CustomerInput, ws = "hq"): Promise<FormSaveResult<CustomerInput> & { id?: string }> {
   log("create-customer", { ws, values })
-  await wait(formsServer.latency.save)
+  await wait(formsServer.latency.save, undefined, { kind: "save", key: "create-customer" })
   formsServer.settled.push("create-customer")
   const store = db(ws)
   const mode = formsServer.saveMode
@@ -252,7 +290,7 @@ export async function createCustomer(values: CustomerInput, ws = "hq"): Promise<
 
 export async function updateCustomer(id: string, values: CustomerInput, ws = "hq"): Promise<FormSaveResult<CustomerInput>> {
   log("update-customer", { ws, id, values })
-  await wait(formsServer.latency.save)
+  await wait(formsServer.latency.save, undefined, { kind: "save", key: "update-customer" })
   formsServer.settled.push("update-customer")
   // 予期しない例外（throw）：サーバーは保存したが、応答が届かない（登録の場合と同じ）。unknown は保存しない
   if (formsServer.saveMode === "throw") {
@@ -302,7 +340,7 @@ function normalize(v: CustomerInput, id: string): Customer {
 /** 単一の項目の保存（Inline の編集） */
 export async function patchCustomer(id: string, patch: CustomerInput, ws = "hq") {
   log("patch-customer", { ws, id, patch })
-  await wait(formsServer.latency.save)
+  await wait(formsServer.latency.save, undefined, { kind: "save", key: "patch-customer" })
   if (formsServer.saveMode === "fail") throw new FormSaveError("サーバーが保存を受け付けませんでした", "failed")
   const store = db(ws)
   const i = store.customers.findIndex((c) => c.id === id)
@@ -316,7 +354,7 @@ export const readSetting = <T,>(ws: string, kind: string, fallback: T) => (setti
 
 export async function saveSetting(kind: string, payload: unknown, { mode = "success", ws = "hq" }: { mode?: ActionMode; ws?: string } = {}) {
   log(`setting-${kind}`, { ws, payload })
-  await wait(formsServer.latency.save)
+  await wait(formsServer.latency.save, undefined, { kind: "save", key: `setting-${kind}` })
   if (mode === "fail") throw new FormSaveError("保存できませんでした", "failed")
   settings.set(`${ws}:${kind}`, payload)
   if (mode === "unknown") throw new FormSaveError("保存されたかを確かめられていません", "unknown")
@@ -331,7 +369,7 @@ export async function fetchSetting<T>(kind: string, fallback: T, ws = "hq") {
 
 export async function saveSettingsForm<V extends Record<string, unknown>>(kind: string, values: Partial<V>, ws = "hq"): Promise<FormSaveResult<V>> {
   log(`settings-${kind}`, { ws, values })
-  await wait(formsServer.latency.save)
+  await wait(formsServer.latency.save, undefined, { kind: "save", key: `settings-${kind}` })
   formsServer.settled.push(`settings-${kind}`)
   // 成功と、結果が不明（応答だけが届かない）の場合は、サーバーに反映する。値はワークスペースごとに持つ
   if (formsServer.saveMode === "success" || formsServer.saveMode === "unknown" || formsServer.saveMode === "throw") {
@@ -405,7 +443,7 @@ export const deleteDraft = (key: string) => drafts.delete(key)
 
 export async function submitContract(payload: unknown) {
   log("submit-contract", payload)
-  await wait(formsServer.latency.save)
+  await wait(formsServer.latency.save, undefined, { kind: "save", key: "submit-contract" })
   if (formsServer.saveMode === "fail") throw new FormSaveError("契約を登録できませんでした。入力した内容は残っています。時間をおいて、もう一度登録してください。", "failed")
   if (formsServer.saveMode === "unknown" || formsServer.saveMode === "throw")
     throw new FormSaveError("契約が登録されたかを確かめられていません。契約の一覧で確認してから、必要な場合だけもう一度登録してください。", "unknown")
