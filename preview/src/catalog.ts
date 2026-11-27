@@ -29,6 +29,13 @@ import { DashboardLayoutPage } from "./pages/data-analysis/dashboard-layout-page
 import { DrillDownPage } from "./pages/data-analysis/drill-down-page"
 import { MetricOverviewPage } from "./pages/data-analysis/metric-overview-page"
 import { PeriodComparisonPage } from "./pages/data-analysis/period-comparison-page"
+import { AccountApp } from "./pages/system-account/account-app"
+import { AuthenticationPage } from "./pages/system-account/authentication-page"
+import { NotificationsPage } from "./pages/system-account/notifications-page"
+import { OnboardingPage } from "./pages/system-account/onboarding-page"
+import { PermissionStatesPage } from "./pages/system-account/permission-states-page"
+import { SettingsPatternPage } from "./pages/system-account/settings-page"
+import { SystemStatesPage } from "./pages/system-account/system-states-page"
 import { ComboboxPage } from "./pages/advanced/combobox-page"
 import { CommandPage } from "./pages/advanced/command-page"
 import { CsvImportPage } from "./pages/advanced/csv-import-page"
@@ -77,7 +84,7 @@ import { SheetPage } from "./pages/overlays/sheet-page"
 // コンポーネントを追加するときは、ページを作ってここに 1 行足す。
 // fullscreen のページは、プレビューの見出しを付けずに画面全体で表示する。
 // category は Patterns の分類。省略したページは Components。
-export type CatalogCategory = "components" | "app-structure" | "data-browsing" | "forms-workflows" | "data-analysis"
+export type CatalogCategory = "components" | "app-structure" | "data-browsing" | "forms-workflows" | "data-analysis" | "system-account"
 
 export const categories: { id: CatalogCategory; name: string }[] = [
   { id: "components", name: "Components" },
@@ -85,6 +92,7 @@ export const categories: { id: CatalogCategory; name: string }[] = [
   { id: "data-browsing", name: "Patterns：Data Browsing" },
   { id: "forms-workflows", name: "Patterns：Forms & Workflows" },
   { id: "data-analysis", name: "Patterns：Data Analysis" },
+  { id: "system-account", name: "Patterns：System & Account" },
 ]
 
 // hidden のページ（検品用の画面）は、プレビューの上部の一覧に表示しない。
@@ -162,4 +170,11 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "period-comparison", name: "Period Comparison", page: PeriodComparisonPage, category: "data-analysis" },
   { id: "drill-down", name: "Drill-down", page: DrillDownPage, category: "data-analysis" },
   { id: "analysis-app", name: "営業管理の検証画面（Data Analysis）", page: AnalysisApp, fullscreen: true, category: "data-analysis" },
+  { id: "authentication", name: "Authentication", page: AuthenticationPage, category: "system-account" },
+  { id: "settings", name: "Settings", page: SettingsPatternPage, category: "system-account" },
+  { id: "onboarding", name: "Onboarding", page: OnboardingPage, category: "system-account" },
+  { id: "permission-states", name: "Permission States", page: PermissionStatesPage, category: "system-account" },
+  { id: "system-states", name: "System States", page: SystemStatesPage, category: "system-account" },
+  { id: "notifications", name: "Notifications", page: NotificationsPage, category: "system-account" },
+  { id: "account-app", name: "営業管理の検証画面（System & Account）", page: AccountApp, fullscreen: true, category: "system-account" },
 ]
