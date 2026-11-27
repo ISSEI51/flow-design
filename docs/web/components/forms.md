@@ -97,6 +97,10 @@ Input、Textarea、Label、Select、Checkbox、Radio Group、Switch、Field に�
 - 選択式の項目は、開閉の操作でフォーカスが移るため、フォーカスが外れたときには検証しない。
 - 検証の規則は製品が持つ。コンポーネントは検証をしない。Base UI の Field の `validate` を使うか、製品の処理で `invalid` と `FieldError` を渡す。フォーム管理のライブラリには依存しない。
 
+保存ボタンの有効と無効は、Patterns の [Create & Edit](../patterns/create-and-edit.md) で定めている。業務のフォームの標準は、必須の項目がそろい、クライアント側の検証がすべて成功するまで保存ボタンを押せない状態にし、押せない理由をボタンの近くに示す方式である（[button.md](button.md) の「無効にする場合は、押せない理由を近くの文字で示す」に従う）。保存ボタンは Focusable Disabled（[button.md](button.md#focusable-disabled)。`focusableWhenDisabled`、`aria-disabled="true"`、`aria-describedby` で理由の文）にし、無効の間も Tab で移って理由を聞けるようにする。
+
+Enter による送信は、1 行の入力欄の Enter だけを送信にする（[Create & Edit の「Enter による送信」](../patterns/create-and-edit.md#enter-による送信)）。IME の変換を確定する Enter、修飾キー付きの Enter、Textarea、Select、Combobox、日付の入力欄などの Enter は送信にせず、エラーも表示しない。保存できない状態で明示的な送信（1 行の入力欄の Enter、`requestSubmit`）が行われた場合は、上の図の「送信したらすべて検証する」に従ってすべての項目のエラーを表示し、最初の問題の項目へフォーカスを移す。IME の変換中、保存中、保存の結果が不明な間、非同期の検証の結果を待っている項目だけが理由の間、変更のない編集のフォームでは、送信しても何もしない（保存せず、エラーも表示しない）。エラーの概要は、保存ボタンの近くの理由の表示（`SaveBlockerNotice`）が担う。このページの「フォームの例」（フォームの上に概要を出す方式）は、Components の段階の例として残している。
+
 ## 6. 押せる範囲
 
 Checkbox、Radio、Switch を Field（`orientation="horizontal"`）や `FieldItem` の中に置くと、行全体が押せる範囲になる。
