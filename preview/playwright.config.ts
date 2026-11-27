@@ -5,6 +5,9 @@ const port = Number(process.env.PREVIEW_TEST_PORT ?? 5174)
 export default defineConfig({
   testDir: "tests",
   outputDir: "test-results",
+  // registry/ のファイル（"@/..." の別名で読み込み合う）を Node.js の単体の検品で読み込めるよう、
+  // すべてのファイルに preview/tsconfig.json の paths を適用する（既定ではファイルごとに最も近い tsconfig を探す）。
+  tsconfig: "./tsconfig.json",
   reporter: [["list"]],
   use: { baseURL: `http://localhost:${port}` },
   projects: [

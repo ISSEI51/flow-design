@@ -23,6 +23,12 @@ import { FormsApp } from "./pages/forms-workflows/forms-app"
 import { ImportExportPage } from "./pages/forms-workflows/import-export-page"
 import { MultiStepPage } from "./pages/forms-workflows/multi-step-page"
 import { UnsavedChangesPage } from "./pages/forms-workflows/unsaved-changes-page"
+import { AnalysisApp } from "./pages/data-analysis/analysis-app"
+import { AnalysisFiltersPage } from "./pages/data-analysis/analysis-filters-page"
+import { DashboardLayoutPage } from "./pages/data-analysis/dashboard-layout-page"
+import { DrillDownPage } from "./pages/data-analysis/drill-down-page"
+import { MetricOverviewPage } from "./pages/data-analysis/metric-overview-page"
+import { PeriodComparisonPage } from "./pages/data-analysis/period-comparison-page"
 import { ComboboxPage } from "./pages/advanced/combobox-page"
 import { CommandPage } from "./pages/advanced/command-page"
 import { CsvImportPage } from "./pages/advanced/csv-import-page"
@@ -71,13 +77,14 @@ import { SheetPage } from "./pages/overlays/sheet-page"
 // コンポーネントを追加するときは、ページを作ってここに 1 行足す。
 // fullscreen のページは、プレビューの見出しを付けずに画面全体で表示する。
 // category は Patterns の分類。省略したページは Components。
-export type CatalogCategory = "components" | "app-structure" | "data-browsing" | "forms-workflows"
+export type CatalogCategory = "components" | "app-structure" | "data-browsing" | "forms-workflows" | "data-analysis"
 
 export const categories: { id: CatalogCategory; name: string }[] = [
   { id: "components", name: "Components" },
   { id: "app-structure", name: "Patterns：App Structure" },
   { id: "data-browsing", name: "Patterns：Data Browsing" },
   { id: "forms-workflows", name: "Patterns：Forms & Workflows" },
+  { id: "data-analysis", name: "Patterns：Data Analysis" },
 ]
 
 // hidden のページ（検品用の画面）は、プレビューの上部の一覧に表示しない。
@@ -149,4 +156,10 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "import-export", name: "Import & Export", page: ImportExportPage, category: "forms-workflows" },
   { id: "forms-app", name: "営業管理の検証画面（Forms & Workflows）", page: FormsApp, fullscreen: true, category: "forms-workflows" },
   { id: "forms-checks", name: "Forms & Workflows の検品", page: FormsChecksPage, fullscreen: true, category: "forms-workflows", hidden: true },
+  { id: "metric-overview", name: "Metric Overview", page: MetricOverviewPage, category: "data-analysis" },
+  { id: "dashboard-layout", name: "Dashboard Layout", page: DashboardLayoutPage, category: "data-analysis" },
+  { id: "analysis-filters", name: "Analysis Filters", page: AnalysisFiltersPage, category: "data-analysis" },
+  { id: "period-comparison", name: "Period Comparison", page: PeriodComparisonPage, category: "data-analysis" },
+  { id: "drill-down", name: "Drill-down", page: DrillDownPage, category: "data-analysis" },
+  { id: "analysis-app", name: "営業管理の検証画面（Data Analysis）", page: AnalysisApp, fullscreen: true, category: "data-analysis" },
 ]
