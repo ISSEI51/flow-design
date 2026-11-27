@@ -320,6 +320,59 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 スクリーンショット（Git の管理外）：最終調整の後に、検証画面と資料のページを Desktop（1280×900）、Pixel 7、320px で撮り、目視で確かめた。ページの例外は 0 件、ページ全体の横スクロールは 0。320px では表の続きの方向の端に影が出る。
 
+### 共通の検品の安定化の後の結果（29ee560）
+
+上の失敗の原因になった共通の検品の時間依存は、PR #4（`test/stabilize-shared-tests`）で取り除いた。PR #4 は次の 2 つからなり、この branch に統合した（29ee560）。
+
+- PR #3（694c8f6）の共通の検品の修正：Data Browsing の模擬のサーバーの応答の保留と解放、順序で結果が決まる 14 件の検品。ファイルの内容は 694c8f6 と同一で、System & Account の本体は含まない
+- 既存の 3 件（`data-display.spec.ts:68`、`overlays.spec.ts:961`、`ssr-core.spec.ts:99`）の時間依存の修正。原因と再現の結果は PR #4 に記録した
+
+`scripts/verify/full-pair.sh` の方式（下）で、29ee560 を 2 回続けて実行した結果（2026-11-27）。`origin/main` は aa7e664 のまま。
+
+| 確認 | 1 回目（15:09 開始） | 2 回目（15:31 開始） |
+| --- | --- | --- |
+| `npm run typecheck`、`npm run preview:build`、`npm run test:tokens` | 成功（exit 0） | 成功（exit 0） |
+| `npm run test:ssr` | 96 件成功 | 96 件成功 |
+| `npm run test:patterns` | 591 件成功、147 件 skip、失敗 0 件（4.2 分） | 591 件成功、147 件 skip、失敗 0 件（4.1 分） |
+| `npm run test:components` | 2102 件成功、296 件 skip、失敗 0 件（16.3 分） | 2102 件成功、296 件 skip、失敗 0 件（17.7 分） |
+
+- 両回とも電源に接続し、HEAD と作業ツリーは実行の前後で変わっていない。開始の前に、Forms & Workflows の worktree の Playwright の実行が終わるまで 14:07〜15:09 に待った。
+- Vite の標準出力に、再読み込みと依存の再最適化の記録はない。SSR の検品（Vite のサーバーを検品の中で起動するもの）で「Port 24678 is already in use」が各回 17〜18 回記録された。この記録のある検品は成功している。
+- この結果は、PR #1 の統合の前の候補での結果である。PR #1 の統合の後に、最新の `origin/main` を取り込んだ最終統合候補で、同じ方式で 2 回続けて実行する。
+
+### 検品の方式（`scripts/verify/full-pair.sh`）
+
+全件検品を 2 回続けて実行するスクリプト。Patterns Integration Review でも同じ方式で使う。
+
+```sh
+# 検品する worktree の中で（出力先とポートは worktree ごとに分ける）
+caffeinate -i -s scripts/verify/full-pair.sh /tmp/verify-$(git rev-parse --short HEAD) 5342
+```
+
+- 1 回 = typecheck → preview:build → test:tokens → test:ssr → test:patterns → test:components。Playwright は 3 ワーカー
+- `PREVIEW_TEST_PORT` を第 2 引数で分ける。テストの成果物は回と段階ごとに `<出力先>/results-run<回>-<段階>` に分ける
+- 各回の前に、電源の接続と、ほかの worktree の Playwright の実行がないことを 20 秒ごとに確かめ、満たすまで待つ。ほかのプロセスは終了しない
+- 実行の前後の HEAD と作業ツリーの変更の有無を `events.log` に記録する。検品中は対象の worktree を編集しない
+- Vite の標準出力は `playwright.config.ts` の `webServer.stdout: "pipe"` で各段階のログに残る
+- 判定：`summary.jsonl` の 12 行がすべて exit 0 で、`counts` に failed と flaky がないこと
+- 前提：macOS（`pmset`、`caffeinate`、`sysctl` を使う）。CI では使わない
+
+### 後続の課題（Patterns Integration Review などへの引き継ぎ）
+
+| 項目 | 状況 |
+| --- | --- |
+| Forms & Workflows との接続 | PR #1 の統合の後に、横断の検品で確かめる |
+| Permission States との接続 | 横断の検品で確かめる |
+| 集計値から推測できる非公開の情報 | 一覧の件数を隠しても、集計の指標との差からわかる。横断の検品で扱いを決める |
+| 再取得中の条件の文の全文をタッチの操作で確かめる UI | 現在は 1 行に省略し、`title` で全文を示すだけ。横断の検品で扱う |
+| System States との連携、接続の回復の後の再取得 | 横断の検品で確かめる |
+| worktree の間で共有する検品の排他ロック | `full-pair.sh` は、ほかの worktree の Playwright のプロセスを見て待つだけ。開始の時刻が重なると同時に始まりうる |
+| SSR の検品の Vite のサーバーの HMR のポート 24678 の競合 | 「Port 24678 is already in use」が記録される。検品は成功している |
+| Vite のキャッシュの分離 | 開発サーバーと一部の SSR の検品は、キャッシュの置き場所を分けている。worktree の間の分離は未確認 |
+| Node.js LTS での検証 | Node.js 26.10.0 だけで確かめている |
+| Select と Dialog を続けて操作した場合のフォーカスの競合 | `ssr-core.spec.ts` は、Select が閉じ終わるのを待つように直した。製品として、閉じ終わる前に Dialog を開いた場合の挙動は未対応 |
+| 実機（iOS Safari、Android）、VoiceOver、NVDA、Next.js での導入 | Registry & Gallery の公開の前の課題 |
+
 ### 独立したレビュー
 
 別のエージェント（Opus）が、実装の結論を渡さずに、指示書、差分、資料、テスト、デスクトップとモバイルのスクリーンショットを、8 つの設計原則と 8 つの美的基準、分析として誤った解釈を生じさせないかで確かめた。指摘は高 5 件、中 10 件、低 7 件、検品の弱点 3 件。
