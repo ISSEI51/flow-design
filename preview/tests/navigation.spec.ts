@@ -157,14 +157,17 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     const f = frame(page)
     const c = container(f)
     const inset = f.locator("[data-slot=sidebar-inset]")
-    const headerBefore = (await box(f.getByTestId("frame-title"))).y
+    // 縦の位置は、例の枠（frame）の上端からの距離で比べる。ウィンドウからの位置で比べると、メニューのボタンを押すときの
+    // ページのスクロール（プレビューの上部の一覧が長く、例が最初の表示の範囲の外にある場合）で値が変わる
+    const titleTop = async () => (await box(f.getByTestId("frame-title"))).y - (await box(f)).y
+    const headerBefore = await titleTop()
     expect(await css(c, "transition-duration")).toBe("0.32s")
     await f.getByRole("button", { name: "メニュー", exact: true }).click()
     await expect(f.getByTestId("frame-state")).toHaveText("折りたたみ（64px）")
     await expect.poll(async () => (await box(c)).width).toBe(64)
     // メインは Sidebar の右端から始まり、縦の位置は変わらない
     expect(Math.round((await box(inset)).x - (await box(f)).x)).toBe(64 + 1)
-    expect((await box(f.getByTestId("frame-title"))).y).toBe(headerBefore)
+    expect(await titleTop()).toBe(headerBefore)
     const nav = f.getByRole("navigation", { name: "メインメニュー" })
     for (const name of ["ホーム", "顧客", "商談", "請求書", "入金"]) {
       const link = nav.getByRole("link", { name, exact: true })

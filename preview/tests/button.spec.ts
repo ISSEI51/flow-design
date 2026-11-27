@@ -248,7 +248,10 @@ test.describe("buttonVariants on <a>", () => {
   test("keyboard focus and navigation", { tag: "@webkit" }, async ({ page, browserName }) => {
     const outline = page.getByTestId("link-outline")
     const key = browserName === "webkit" ? "Alt+Tab" : "Tab"
-    for (let i = 0; i < 120; i++) {
+    // Tab を押す回数の上限は、ページのフォーカスできる要素の数にする（プレビューの上部の一覧の項目が増えても届く。
+    // 上の「Tab reaches the button…」と同じ。固定の 120 回は、Patterns の追加で上部の一覧の項目が増え、届かなくなった）
+    const stops = await page.locator("a[href], button, input, select, textarea, [tabindex]").count()
+    for (let i = 0; i < stops + 1; i++) {
       await page.keyboard.press(key)
       if (await outline.evaluate((el) => el === document.activeElement)) break
     }
