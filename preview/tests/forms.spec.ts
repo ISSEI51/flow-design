@@ -219,8 +219,10 @@ test.describe("Select", { tag: "@webkit" }, () => {
     await page.getByTestId("select-industry").click()
     const list = page.getByRole("listbox")
     await expect(list).toBeVisible()
-    // 開く動き（180ms）が終わり、高さが決まるまで待つ
+    // 開く動き（180ms）が終わり、高さが決まるまで待つ。WebKit では、開く動きの間はフォーカスが一覧に移っておらず、
+    // その間に押した End が効かない。動きの終了（getAnimations の finished）を待ってから押す（固定の時間は待たない）
     await expect.poll(() => list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+    await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined))))
     await page.keyboard.press("End")
     await expect(page.getByRole("option", { name: /^公務/ })).toBeInViewport()
   })
