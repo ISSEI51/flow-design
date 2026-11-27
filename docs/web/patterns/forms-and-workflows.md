@@ -270,9 +270,15 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 | README | 初期実装：進捗の表、Patterns の表、資料と図の生成の案内に Forms & Workflows を加えた。v0.1：状態を「v0.1 確定候補」にした | |
 | プレビュー | 初期実装：`catalog.ts` に分類「Patterns：Forms & Workflows」と 7 ページ（資料の 6 ページと検証画面）を追加した。`package.json` の `test:patterns` に `forms-workflows` を追加した。v0.1：`catalog.ts` に検品用の画面（`forms-checks`、`hidden`）を追加した | 既存のページの id と URL は変わらない |
 | 図の生成 | 初期実装：`scripts/diagrams/build.sh` に `gen_forms_workflows.py` を追加した。v0.1：変更なし | 既存の図の生成は変わらない |
-| 既存の検品 | 初期実装：`preview/tests/button.spec.ts` の Tab を押す回数の上限を、ページのフォーカスできる要素の数にした（「初期実装の検証の結果」）。v0.1：`preview/tests/data-browsing.spec.ts` の 2 件（「a run started in A and finished after A → B → A …」「unmounting the list during a run …」）の模擬のサーバーの遅延（`latency.bulk`）を 1600 から 6400、1500 から 6000 にした。下の注を参照 | 判定と期待する値は変えていない |
+| 既存の検品 | 初期実装：`preview/tests/button.spec.ts` の Tab を押す回数の上限を、ページのフォーカスできる要素の数にした（「初期実装の検証の結果」）。v0.1：`preview/tests/data-browsing.spec.ts`、`preview/src/data/data-browsing/company-server.ts`、`preview/tests/forms.spec.ts`、`preview/playwright.config.ts` を、PR #3（`694c8f6`）の版と同じ内容にした（`5a8f777`）。この 4 ファイルと `button.spec.ts` は、PR #4（共通の検品の修正）の内容とも同じである。下の注を参照 | 判定と期待する値は変えていない |
 
-- `data-browsing.spec.ts` の 2 件の変更の理由：Data Browsing の模擬のサーバーは、一括の操作を `latency.bulk / 4` の間隔で 4 分の 1 ずつ処理する。2 件の検品は 1 行だけを選ぶため、処理は 1 回の間隔（400ms、375ms）で終わり、検品が前提にしていた 1600ms、1500ms より早く結果が届いていた。v0.1 の最終の統合の候補での全件の検品（4 ワーカー）で、ワークスペースの切り替えが 400ms を超えた場合に、切り替えの前に元のワークスペースで操作が完了し、「完了しました」の通知が出て失敗した（6 回の全件の検品のうち 3 回。8 ワーカーで 24 回の繰り返しでは 5 回）。製品のコード（`useBulkAction`）の不具合ではなく、検品の時間の前提の誤りである。1 回の間隔を検品が意図した時間にし、結果がスコープの変更とアンマウントの後に届くようにした。変更の後は、8 ワーカーで 16 回の繰り返しで失敗 0 件。Data Browsing の Registry、資料、検証画面は変えていない。
+- Data Browsing の既存の検品の修正の経緯（後続の PR が再利用するための記録）：
+  - 事象：`data-browsing.spec.ts` の 2 件（「a run started in A and finished after A → B → A …」「unmounting the list during a run …」）が、負荷が高いと失敗した（v0.1 の全件の検品の 6 回のうち 3 回。8 ワーカーで 24 回の繰り返しでは 5 回）。
+  - 原因：Data Browsing の模擬のサーバーは、一括の操作を `latency.bulk / 4` の間隔で 4 分の 1 ずつ処理する。2 件は 1 行だけを選ぶため、処理は 1 回の間隔（400ms、375ms）で終わり、ワークスペースの切り替えやアンマウントより前に結果が届くことがあった。製品のコード（`useBulkAction`）の不具合ではなく、検品が応答の時間を前提にしていたことによる。
+  - 最初の対処（`d4a302f`、取り消し済み）：遅延を 6400ms、6000ms に延ばした。この方式は応答の時間に依存したままのため、採用しない。
+  - 現在の対処（`5a8f777`）：PR #3（`694c8f6`）の `company-server.ts`（`hold`、`held`、`release()`）と `data-browsing.spec.ts`（14 件を、応答の保留と解放で順序を決める方式にしたもの）を、そのまま取り込んだ。同じ内容は PR #4 にも含まれる。PR #4 を main に統合した後は、PR #1、#2、#3 のどれもこの 2 ファイルを main と同じ内容で持つため、統合の際に競合しない。
+  - 後続の PR（#2、#3）での扱い：main（PR #4 の統合の後）の 2 ファイルをそのまま使う。遅延を延ばす変更を加えない。
+  - Data Browsing の Registry、資料、検証画面は変えていない。
 
 プレビューのページは、Data Browsing の資料のページの部品（`../data-browsing/doc-parts` の `Mock`、`AppLink`、`DemoFrame`、`Rules`、`DemoControls`、`Radio`）と、App Structure の `StructureSidebar`、`ProductMark`、`PlaceholderScreen`、`structureNav`、`structureLabels`、`structureSettingsItem`、`structureUser`、`../app-structure/parts` の `Bullets` を読み込んで使う（複製も変更もしない）。
 
@@ -343,6 +349,7 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 | Data Browsing との組み合わせ（v0.1） | 2 ページ目からの編集とキャンセルでの復元（ページと行のフォーカス）、Sidebar から一覧を開き直した場合に復元しないこと、検索結果からの詳細とブラウザの戻る（検索の復元）、選択のバーからのエクスポートで選択がなくなった場合、直接のダウンロードと個人情報の確認、`canOperate` が false の場合の行の操作とエクスポートの無効、ワークスペースごとの重複の確認、ワークスペースの変更の後の古い保存（移動も通知もしない）、設定の保存の後のワークスペースの変更（元のワークスペースに戻るとその値から始まる） |
 | 結果が不明（v0.1、`forms-workflows.spec.ts`） | 編集で応答が届かずにサーバーが保存していた場合、確認で送信したすべての項目が一致し、移動の確認を開かずに一覧に戻る。取り込みが例外で終わった場合、すべての行が結果が不明になり、状態の確認で登録済みの行を再処理の対象から外す。利用人数を確かめられなかった場合の「もう一度確かめる」 |
 | beforeunload（v0.1） | 未保存の変更がある場合にブラウザの確認が表示され、変更がない場合は表示されない（Chromium と WebKit。利用者の入力で変更を作る）。ブラウザが表示しない場合があるため、常に表示されることは保証しない |
+| 応答の順序（v0.1） | Forms & Workflows の模擬のサーバー（`preview/src/data/forms-workflows/server.ts`）に、Data Browsing と同じ方式の応答の保留と解放（`hold`、`held`、`release()`。種類は `save` と `check`）を加えた。応答の順序が結果を決める 8 件（非同期の重複の確認と古い応答、自動保存の状態、保存中の入力、保存して移動の取りやめ、保存中の移動、保存中のワークスペースの変更 2 件）は、遅延の時間ではなく、テストの側で解放の順序を決める。保留した要求は `AbortSignal` を無視する（中止を無視して後から応答するサーバーを再現する） |
 | SSR と Hydration | `ssr-forms-workflows.spec.ts`：window と document なしの描画、最初の描画でエラーを出さないこと、Hydration の不一致なし、Hydration の後の検証と Stepper と確認の Dialog、hook のファイルの `"use client"`（`export.ts` は付けない） |
 
 `forms-workflows.spec.ts`、`forms-workflows-checks.spec.ts`、`ssr-forms-workflows.spec.ts` は `npm run test:components` に含まれる。Patterns だけを実行する場合は `npm run test:patterns`（ファイル名に `forms-workflows` を含むテスト）。
@@ -355,7 +362,7 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 
 #### 結論
 
-**最終の候補（`d4a302f`）で、6 つの確認がすべて成功した全件の実行を 2 回連続では得ていない。** すべて成功した回は run 8 だけである。v0.1 の承認と main への統合の判断の前に、負荷の低い状態で 2 回連続の全件の実行をやり直す必要がある。
+**`d4a302f` で、6 つの確認がすべて成功した全件の実行を 2 回連続では得ていない。** すべて成功した回は run 8 だけである。この後の検品環境の改善と再検品は、下の「検品環境の改善と再検品」に記す。
 
 #### 各回の結果
 
@@ -381,11 +388,38 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 | 事象 | 原因 | 修正 | 確認 |
 | --- | --- | --- | --- |
 | 検証画面の詳細の「社内のメモ」を保存した後に、「メモを編集」へフォーカスが戻らないことがある（`Received: inactive`） | 編集を終えた後のフォーカスの移動を `requestAnimationFrame` で行っており、負荷が高いと React がボタンを描画する前に実行されていた | 描画の後の `useEffect` でフォーカスを移す | 8 ワーカーで 16 回（desktop）と 8 回（mobile）繰り返し、失敗 0 件 |
-| `data-browsing.spec.ts` の 2 件の競合の検品が、負荷が高いと失敗する | 検品の時間の前提の誤り（「既存の Components、App Structure、Data Browsing への影響」の注） | 模擬のサーバーの 1 回の間隔を、検品が意図した時間にした | 修正の前は 8 ワーカーで 24 回のうち 5 回失敗、修正の後は 16 回で失敗 0 件 |
+| `data-browsing.spec.ts` の 2 件の競合の検品が、負荷が高いと失敗する | 検品が応答の時間を前提にしていた（「既存の Components、App Structure、Data Browsing への影響」の注） | `d4a302f` で遅延を延ばした。`5a8f777` で、PR #3 の応答の保留と解放の方式に置き換えた | 遅延を延ばした後は 8 ワーカーで 16 回の繰り返しで失敗 0 件。置き換えの後は下の「検品環境の改善と再検品」 |
 
 #### スクリーンショット
 
 `preview/screenshots/v01/`（Git の管理外）。Chromium の 1280×900（資料のページ 6 つ、検証画面 6 画面、操作の途中の状態 12 種類）、390×844（タッチ。同じ画面と、利用人数の確認の失敗、取り込みの結果が不明）、320px（同じ画面と `#/forms-checks?case=submit`）を、独立したレビューの指摘の修正の後に撮り直した。撮影の間のページの例外、コンソールのエラー、横スクロールは 0 件。目視で、利用人数の確認の失敗（項目の理由、「もう一度確かめる」、操作の近くの「利用人数を確かめられませんでした。確かめ直すと次へ進めます」）と、取り込みが例外で終わった場合の表示（結果が不明 37 件、「状態を確認」だけ）を確かめた。WebKit と実機での目視の確認は行っていない。
+
+### 検品環境の改善と再検品（2026-11-27）
+
+v0.1 の設計と実装の方針の条件付きの承認（`def0934`）の後に、System & Account（PR #3）の検品の結果を参考にして、次の条件で検品した。
+
+- Node.js の LTS 版：26.13.1（Active LTS「Lithium」、V8 14.6.202.34）。公式の配布物（`node-v26.13.1-darwin-arm64.tar.gz`、SHA-256 を `SHASUMS256.txt` と照合）を作業用のディレクトリに展開し、`PATH` の先頭に置いて使った。システムの Node.js（26.10.0、Homebrew）は変えていない。26.10.0 は LTS ではない（`process.release.lts` がない。配布の一覧で LTS は 26.13.0 から）。24.22.3（「Krypton」）も取得したが、検品には使っていない。
+- Playwright のワーカー：3（`--workers=3`）。
+- ポートと出力先：回ごとに `PREVIEW_TEST_PORT`（5351〜5354）と `--output` を分けた。
+- Vite の標準出力：`webServer.stdout: "pipe"`（PR #3 と同じ設定）で、各確認のログに残した。依存の再最適化（`new dependencies optimized`）、全体の再読み込み（`page reload`）、`hmr update` は、どの回にも記録されていない。SSR の検品が開発サーバーを作るときの `WebSocket server error: Port 24678 is already in use`（HMR の既定のポートの重複）は記録されたが、SSR の検品は HMR を使わず、どの回も test:ssr は 96 件成功した。
+- 電源とスリープ：`caffeinate -dimsu` で、利用者の操作がないことによるスリープを防いだ。電源、ふたの状態（`AppleClamshellState`）、負荷の平均、ほかの作業ツリーの Playwright のワーカーの数を 60 秒ごとに記録した。
+- ほかの作業ツリーの検品：停止していない（ほかのセッションのプロセスは終了しない）。4 回目からは、ほかの作業ツリーのワーカーが 3 分続けて 0 になるまで待ってから始めた。
+- 検品の間、対象のコードは変えていない（各回の開始と終了で `git status` の変更が 0 件、HEAD が同じであることを記録した）。
+
+対象は `5a8f777`（`origin/main` の `aa7e664` を含む。PR #4 は未統合）。各回は 6 つの確認を続けて実行した。
+
+| 回 | 条件 | typecheck、preview:build、test:tokens | test:ssr | test:patterns | test:components | 判定 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 開発の確認（dev1） | 電池。08:13 にふたを閉じて本体がスリープした。ほかの作業ツリーの検品が同時に動いていた | （実行していない） | 一部 | 一部 | （範囲外） | 対象外（環境の異常）。webkit-mobile の 4 件が、クリックが `<html>` に当たって時間切れになった。4 件は単独で 3 回ずつ繰り返して 24 件成功 |
+| lts1 | **電池**。10:52〜11:04 に、ほかの作業ツリーの Playwright のワーカー（最大 12）が同時に動いていた | 成功 | 96 件成功 | 829 件成功、107 件 skip | 2340 件成功、256 件 skip | 失敗 0 件。条件を満たしていないため数えない |
+| lts2 | AC 電源、ふたは開いている、ほかの作業ツリーのワーカー 0、負荷の平均は最大 7.52 | 成功 | 96 件成功 | 829 件成功、107 件 skip | 2340 件成功、256 件 skip | **成功** |
+| lts3 | AC 電源。**14:36:42〜14:50:58 にふたが閉じられた**（`Clamshell Sleep` による DarkWake、画面は消灯）。ふたを開いた後にネットワークが切り替わった | 成功 | 96 件成功 | 770 件成功、59 件失敗 | 2339 件成功、1 件失敗 | 環境の異常のため数えない（下の注） |
+| lts4 | AC 電源、ふたは開いている、ほかの作業ツリーのワーカー 0、負荷の平均は最大 8.50 | 成功 | 96 件成功 | 829 件成功、107 件 skip | 2340 件成功、256 件 skip | **成功** |
+
+- lts3 の test:patterns の 59 件（webkit-mobile 56 件、webkit 3 件）は、すべて 14:37:12〜14:50:28 に起き、ふたが閉じていた時間に含まれる。59 件とも 30 秒の時間切れで、`locator.click` などの操作の対象が `<html>` に遮られた（`<html lang="ja">…</html> intercepts pointer events`）。ふたを開いた後のテストは成功した。test:components の 1 件（`advanced.spec.ts` の Multi Select、14:51:42）は、`net::ERR_NETWORK_CHANGED` で資源の読み込みに失敗した。ふたを開いた直後に、OS の通信の経路が切り替わった（終了時の既定の経路は `en0` の `172.20.10.1`）。
+- 推測（未確認）：ふたが閉じ、画面が消えた DarkWake の状態では、WebKit の画面の座標と要素の判定が正しく行われない。PR #3 の資料に記録のある、座標が NaN のイベントの事象とは症状が異なる（例外は記録されていない）。
+- Node.js の LTS 版での異常：lts1〜lts4 で、Vite のサーバーの V8 の致命的なエラー（`Lazy deopt after a fast API call with return value is unsupported`）、ワーカーの異常終了（`SIGABRT`）、接続の拒否は 0 件だった。ただし、この異常は 26.10.0 で、4 ワーカー以上と高い負荷（負荷の平均 28〜88）の場合に起きていた。今回は 3 ワーカーで負荷が低いため、条件が同じではない。26.13.1 は 26.10.0 と同じ V8（14.6.202.34）を使う。LTS 版で異常が起きないとは確かめられていない（推測：異常が起きなかった主な理由は、ワーカーの数と負荷が少ないことである）。
+- 判定：`5a8f777` で条件を満たして成功した回は lts2 と lts4 の 2 回である。間に環境の異常で失敗した lts3 がある。どちらも、最新の `origin/main`（PR #4 の統合の後）を取り込む前の検品であるため、最終の統合候補の検品として扱わない。
 
 ### v0.1 の独立したレビュー
 
@@ -500,3 +534,13 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 | 一覧の記録（条件、データ、位置）の履歴の項目ごとの保存 | 製品の責務（例ではページのメモリに 1 件だけ置く） |
 | View Switching の切り替えとエクスポートの入口を同じ行に置く場合の並べる順序 | 次のレビュー（検証画面に表示形式の切り替えがないため、確かめていない） |
 | `asyncFailure: "allow"` の例 | 次のレビュー（プレビューには、`"allow"` を使う項目がない） |
+| `useScopeGuard`（System & Account）との責務の整理 | Patterns Integration Review |
+| `useInstantSave` と Settings の保存の hook の責務の整理 | Patterns Integration Review |
+| 保存の結果が不明の分類と扱いの統一（Forms & Workflows、Settings、Notifications） | Patterns Integration Review |
+| スコープの変更の後に、古いフォームの値を表示・送信しないこと | Patterns Integration Review |
+| Permission States、System States との接続 | Patterns Integration Review |
+| Concurrent Rendering と中断された描画の追加の検品 | Patterns Integration Review |
+| Data Analysis から編集画面へ移動する場合の連携 | Patterns Integration Review |
+| `reconcileImportResult` の部分的な件数（行ごとの結果の一部だけを返すサーバー）の契約の明確化 | Patterns Integration Review |
+| raw CSV（`escapeCsvCell` の `mode: "raw"`）の用途と、数式の注入の注意事項 | Patterns Integration Review |
+| 実際の表計算ソフトでの CSV の解釈の検品 | Registry & Gallery の公開の前の検品 |
