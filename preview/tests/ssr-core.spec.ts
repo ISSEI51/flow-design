@@ -105,6 +105,11 @@ test.describe("SSR (Forms, Feedback, Overlays)", { tag: "@webkit" }, () => {
     await expect(page.getByRole("option", { name: "月払い" })).toBeVisible()
     await page.getByRole("option", { name: "月払い" }).click()
     await expect(page.getByTestId("ssr-core-plan")).toHaveText(/月払い/)
+    // Select が閉じ終わる（閉じる動きの後に一覧を外し、フォーカスを Select に戻す）まで待ってから、次の部品を操作する。
+    // 閉じ終わる前に Dialog を開くと、Select がフォーカスを戻す処理が Dialog を開いた後に実行され、Dialog を閉じた後のフォーカスが
+    // Select に移ることがある（実行の速さで順序が変わる。負荷をかけた WebKit で 160 回中 30 回）。
+    await expect(page.getByRole("listbox")).toHaveCount(0)
+    await expect(page.getByTestId("ssr-core-plan")).toBeFocused()
     // Checkbox と Switch
     await page.getByTestId("ssr-core-terms").click()
     await expect(page.getByTestId("ssr-core-terms")).toHaveAttribute("aria-checked", "false")

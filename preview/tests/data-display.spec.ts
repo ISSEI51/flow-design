@@ -67,24 +67,26 @@ test.describe("all data display pages", { tag: "@webkit" }, () => {
   for (const id of pages) {
     test(`${id}: names, no horizontal page scroll`, async ({ page }) => {
       await open(page, id)
+      const main = page.locator("main")
+      // 模擬のサーバーから受け取る表（data-table の「server」）は、読み込みが終わってから確かめる。読み込みの後に行と操作が増えるため、
+      // 固定の待機の後に数えると、実行の速さによって数える途中で操作の数が変わる。状態の見本（読み込み中・再取得中）の表は、常に aria-busy のまま。
+      for (const t of await main.getByTestId("server").locator("table").all()) await expect(t).not.toHaveAttribute("aria-busy", "true")
       await page.waitForTimeout(300)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-      const main = page.locator("main")
-      const controls = main
-        .getByRole("button")
-        .or(main.getByRole("checkbox"))
-        .or(main.getByRole("combobox"))
-        .or(main.getByRole("searchbox"))
-        .or(main.getByRole("link"))
-        .or(main.getByRole("separator"))
-        .or(main.getByRole("radio"))
+      const roles = ["button", "checkbox", "combobox", "searchbox", "link", "separator", "radio"] as const
+      const byRoles = (name?: RegExp) => roles.map((r) => main.getByRole(r, name ? { name } : {})).reduce((a, b) => a.or(b))
+      // 表示していない操作（狭い画面で隠した列など）は除く。表示している操作の数と、そのうち名前（空白以外の文字）がある操作の数が
+      // 一致することを確かめる（名前の判定は toHaveAccessibleName と同じ、Playwright の accessible name の計算）。
+      // 操作を 1 つずつ確かめると、操作の数（data-table では 370 を超える）だけページ全体を探し直し、実行の速さによって制限時間を超える。
+      const controls = byRoles().filter({ visible: true })
+      const named = byRoles(/\S/).filter({ visible: true })
       const n = await controls.count()
-      for (let i = 0; i < n; i++) {
-        const c = controls.nth(i)
-        // 表示していない操作（狭い画面で隠した列など）は除く
-        if (!(await c.isVisible())) continue
-        await expect(c).toHaveAccessibleName(/\S/)
+      expect(n).toBeGreaterThan(0)
+      if ((await named.count()) !== n) {
+        // 名前のない操作を特定して、失敗の理由に示す
+        for (let i = 0; i < n; i++) await expect(controls.nth(i)).toHaveAccessibleName(/\S/)
       }
+      expect(await named.count()).toBe(n)
       // 表は横にスクロールしても、ページ全体は横にスクロールしない
       for (const t of await main.locator("[data-slot=table-container]").all()) {
         expect(await t.evaluate((el) => el.getBoundingClientRect().right <= window.innerWidth + 1)).toBe(true)
