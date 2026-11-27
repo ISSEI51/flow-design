@@ -340,6 +340,38 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 - Vite の標準出力に、再読み込みと依存の再最適化の記録はない。SSR の検品（Vite のサーバーを検品の中で起動するもの）で「Port 24678 is already in use」が各回 17〜18 回記録された。この記録のある検品は成功している。
 - この結果は、PR #1 の統合の前の候補での結果である。PR #1 の統合の後に、最新の `origin/main` を取り込んだ最終統合候補で、同じ方式で 2 回続けて実行する。
 
+### 最終統合候補での結果（337d8dd）
+
+PR #1（Forms & Workflows v0.1）の統合の後の `origin/main`（ebb0f24）を取り込んだ（373aa68）。共有のファイルの競合は 4 つで、双方の変更を維持した（Forms & Workflows を先、Data Analysis を後にした）。
+
+| ファイル | 解決 |
+| --- | --- |
+| `package.json` | `test:patterns` に `forms-workflows` と `data-analysis` の両方を含める |
+| `preview/src/catalog.ts` | 両方の分類、ページの読み込み、ページの一覧 |
+| `scripts/diagrams/build.sh` | 両方の図の生成 |
+| `README.md` | 両方の Patterns の状態、表、資料への案内 |
+
+取り込みの後の `preview/tests/` の共通の検品は、main と同じ内容である（違いは Data Analysis の 3 ファイルだけ）。
+
+373aa68 の 2 回の実行では、両回とも test:components で同じ 4 件が失敗した（`overlays.spec.ts` の Sheet の 2 件、desktop と webkit）。
+
+- 原因：プレビューの上部のページの一覧の高さが、main の 399px から 457px になった（Forms & Workflows と Data Analysis の両方のページ）。背景の行（`sheet-row-C-0015`）が y=926 から始まり、900px の画面の外に出た。画面の外の点では `elementFromPoint` が null を返すため、「背景を押せる」の確認が失敗し、「背景を押せない」の確認は何も確かめずに成功していた。main では行は y=868〜908 で、確かめる点（y=888）が画面の端にあった。
+- 修正（337d8dd、検品だけ）：スクロールできる間（閲覧）に、背景の行を画面の高さの中央までスクロールする。確かめる点が画面の外にあるときは失敗にする。押せる・押せないの判定は変えていない。同じ前提の確認（`edit mode` と `nothing is left behind`）も同じように直した。
+- `overlays.spec.ts` の全件：322 件成功、36 件 skip、失敗 0 件。直した 4 件を 5 回ずつ：70 件成功。
+
+337d8dd で、`scripts/verify/full-pair.sh` で 2 回続けて実行した結果（2026-11-27、Node.js 26.10.0、Playwright 1.65.1）。
+
+| 確認 | 1 回目（21:36〜22:04） | 2 回目（22:04〜22:32） |
+| --- | --- | --- |
+| `npm run typecheck`、`npm run preview:build`、`npm run test:tokens` | 成功（exit 0） | 成功（exit 0） |
+| `npm run test:ssr` | 108 件成功 | 108 件成功 |
+| `npm run test:patterns` | 1052 件成功、172 件 skip、失敗 0 件（7.7 分） | 1052 件成功、172 件 skip、失敗 0 件（7.7 分） |
+| `npm run test:components` | 2563 件成功、321 件 skip、失敗 0 件（19.5 分） | 2563 件成功、321 件 skip、失敗 0 件（19.6 分） |
+
+- 両回とも電源に接続し、画面のふたは開いていた。スリープの記録はない。HEAD と作業ツリーは実行の前後で変わっていない。ほかの worktree の Playwright の実行と重なっていない（待機 0 回）。
+- Vite の標準出力に、再読み込みと依存の再最適化の記録はない。「Port 24678 is already in use」が各回 23〜24 回記録された（後続の課題）。
+- 新しいテストの skip は、既存の規則によるもの。テストの削除、skip の追加、制限時間と許容誤差の変更はしていない。
+
 ### 検品の方式（`scripts/verify/full-pair.sh`）
 
 全件検品を 2 回続けて実行するスクリプト。Patterns Integration Review でも同じ方式で使う。
@@ -370,6 +402,7 @@ caffeinate -i -s scripts/verify/full-pair.sh /tmp/verify-$(git rev-parse --short
 | SSR の検品の Vite のサーバーの HMR のポート 24678 の競合 | 「Port 24678 is already in use」が記録される。検品は成功している |
 | Vite のキャッシュの分離 | 開発サーバーと一部の SSR の検品は、キャッシュの置き場所を分けている。worktree の間の分離は未確認 |
 | Node.js LTS での検証 | Node.js 26.10.0 だけで確かめている |
+| 背景の要素の位置に依存する検品 | プレビューの上部のページの一覧が増えるたびに、背景の要素の位置が変わる。`overlays.spec.ts` の Sheet の確認は直した。モバイルの `edit mode` の確認は、行を画面の中に入れていない（Sheet が画面全体を覆うため） |
 | Select と Dialog を続けて操作した場合のフォーカスの競合 | `ssr-core.spec.ts` は、Select が閉じ終わるのを待つように直した。製品として、閉じ終わる前に Dialog を開いた場合の挙動は未対応 |
 | 実機（iOS Safari、Android）、VoiceOver、NVDA、Next.js での導入 | Registry & Gallery の公開の前の課題 |
 
