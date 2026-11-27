@@ -873,6 +873,15 @@ async function touchDrag(page: Page, x: number, y: number, dy: number) {
   await cdp.detach()
 }
 
+// 閉じるスワイプの距離。Base UI の Drawer は、指を離した時点で、速さが 0.5px/ms 以上か、移動の距離が面の高さの半分を超えると閉じる。
+// 速さは操作を送る速さ（CDP の応答の時間、実行環境の負荷）で変わるため、距離だけで閉じる条件を満たす（面の高さの半分 + 24px）。
+// 始点から画面の下端の手前までに収まらない場合は、検品の前提が成り立たないため失敗にする。
+async function closingSwipeDistance(page: Page, popup: Locator, startY: number) {
+  const dy = Math.ceil((await box(popup)).height / 2) + 24
+  expect(startY + dy, "閉じるスワイプの終点が画面の中に収まる").toBeLessThan(page.viewportSize()!.height - 1)
+  return dy
+}
+
 test.describe("Drawer", { tag: "@webkit" }, () => {
   test("tokens", async ({ page }) => {
     await open(page, "drawer")
@@ -977,7 +986,7 @@ test.describe("Drawer", { tag: "@webkit" }, () => {
     // 上端に達してから下へスワイプすると閉じる
     await body.evaluate((el) => el.scrollTo(0, 0))
     expect(await settledScrollTop(body)).toBe(0)
-    await touchDrag(page, bb.x + bb.width / 2, bb.y + 40, 400)
+    await touchDrag(page, bb.x + bb.width / 2, bb.y + 40, await closingSwipeDistance(page, long, bb.y + 40))
     await expect(long).toBeHidden()
 
     // 未保存の変更があるときは、スワイプでは閉じずに破棄を確かめる
@@ -987,7 +996,7 @@ test.describe("Drawer", { tag: "@webkit" }, () => {
     await page.getByTestId("drawer-note-field").fill("メモ")
     await page.getByTestId("drawer-note-field").blur()
     const nb = await box(note)
-    await touchDrag(page, nb.x + nb.width / 2, nb.y + 12, 400)
+    await touchDrag(page, nb.x + nb.width / 2, nb.y + 12, await closingSwipeDistance(page, note, nb.y + 12))
     await expect(page.getByTestId("drawer-discard")).toBeVisible()
     await expect(note).toBeVisible()
     // スワイプした面は元の位置に戻る

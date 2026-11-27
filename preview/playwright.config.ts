@@ -23,5 +23,8 @@ export default defineConfig({
     env: { PREVIEW_PORT: String(port) },
     url: `http://localhost:${port}`,
     reuseExistingServer: false,
+    // Vite の標準出力（依存の最適化 "new dependencies optimized"、再読み込み "page reload"、"hmr update"）も記録に残す。
+    // 既定（"ignore"）では標準エラー出力だけが残り、検品中の再読み込みや再最適化の有無を後から確かめられない。
+    stdout: "pipe",
   },
 })
