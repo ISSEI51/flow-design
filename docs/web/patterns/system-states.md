@@ -2,7 +2,7 @@
 
 サービスとの接続、サービスの稼働、データ、保存、長時間の処理の状態を区別して伝える。影響の範囲に合う場所に示し、影響を受けていない機能は使えるままにする。
 
-状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`registry/patterns/system-status.ts`](../../../registry/patterns/system-status.ts)、[`system-status-hooks.ts`](../../../registry/patterns/system-status-hooks.ts)、[`system-banner.tsx`](../../../registry/patterns/system-banner.tsx)、[`service-state.tsx`](../../../registry/patterns/service-state.tsx)、[`job-status.tsx`](../../../registry/patterns/job-status.tsx) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/system-status.ts`](../../../registry/patterns/system-status.ts)、[`system-status-hooks.ts`](../../../registry/patterns/system-status-hooks.ts)、[`system-banner.tsx`](../../../registry/patterns/system-banner.tsx)、[`service-state.tsx`](../../../registry/patterns/service-state.tsx)、[`job-status.tsx`](../../../registry/patterns/job-status.tsx) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 

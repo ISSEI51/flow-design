@@ -2,7 +2,7 @@
 
 利用者が知る価値のあるイベントを、作業を不必要に中断させずに、適切な方法で知らせる。既読と業務の対応を区別し、確認できない状態を推測しない。
 
-状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`registry/patterns/notification-state.ts`](../../../registry/patterns/notification-state.ts)、[`notification-feed.ts`](../../../registry/patterns/notification-feed.ts)、[`notification-indicator.tsx`](../../../registry/patterns/notification-indicator.tsx)、[`notification-list.tsx`](../../../registry/patterns/notification-list.tsx)、[`notification-center.tsx`](../../../registry/patterns/notification-center.tsx) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/notification-state.ts`](../../../registry/patterns/notification-state.ts)、[`notification-feed.ts`](../../../registry/patterns/notification-feed.ts)、[`notification-indicator.tsx`](../../../registry/patterns/notification-indicator.tsx)、[`notification-list.tsx`](../../../registry/patterns/notification-list.tsx)、[`notification-center.tsx`](../../../registry/patterns/notification-center.tsx) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 

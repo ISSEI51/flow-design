@@ -2,7 +2,7 @@
 
 ログイン、多要素認証、新規登録、メールの確認、パスワードの再設定、セッション切れの再認証、ログアウトとアカウントの切り替えを、必要最低限の手順で安全に行う。
 
-状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`auth-layout.tsx`](../../../registry/patterns/auth-layout.tsx)、[`password-input.tsx`](../../../registry/patterns/password-input.tsx)、[`verification-code-input.tsx`](../../../registry/patterns/verification-code-input.tsx)、[`auth-feedback.tsx`](../../../registry/patterns/auth-feedback.tsx)、[`auth-flow.ts`](../../../registry/patterns/auth-flow.ts) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`auth-layout.tsx`](../../../registry/patterns/auth-layout.tsx)、[`password-input.tsx`](../../../registry/patterns/password-input.tsx)、[`verification-code-input.tsx`](../../../registry/patterns/verification-code-input.tsx)、[`auth-feedback.tsx`](../../../registry/patterns/auth-feedback.tsx)、[`auth-flow.ts`](../../../registry/patterns/auth-flow.ts) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 

@@ -2,7 +2,7 @@
 
 権限や契約プランによって利用できない機能を、業務との関係と情報公開の安全性に応じて扱う。表示しない、無効にして理由を示す、閲覧だけにする、のいずれかを選び、すべてを機械的に非表示や無効にしない。
 
-状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`registry/patterns/access-decision.ts`](../../../registry/patterns/access-decision.ts)、[`registry/patterns/access.ts`](../../../registry/patterns/access.ts)、[`registry/patterns/restricted-action.tsx`](../../../registry/patterns/restricted-action.tsx)、[`registry/patterns/access-state.tsx`](../../../registry/patterns/access-state.tsx) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/access-decision.ts`](../../../registry/patterns/access-decision.ts)、[`registry/patterns/access.ts`](../../../registry/patterns/access.ts)、[`registry/patterns/restricted-action.tsx`](../../../registry/patterns/restricted-action.tsx)、[`registry/patterns/access-state.tsx`](../../../registry/patterns/access-state.tsx) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 

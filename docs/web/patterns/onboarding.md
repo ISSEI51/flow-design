@@ -2,7 +2,7 @@
 
 利用者が最初の価値を体験するまでの時間を短くする。機能の説明より、実際の利用を優先し、必要な知識は使うときに示す。
 
-状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`registry/patterns/onboarding.ts`](../../../registry/patterns/onboarding.ts)、[`registry/patterns/getting-started.tsx`](../../../registry/patterns/getting-started.tsx)、[`registry/patterns/contextual-help.tsx`](../../../registry/patterns/contextual-help.tsx) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/onboarding.ts`](../../../registry/patterns/onboarding.ts)、[`registry/patterns/getting-started.tsx`](../../../registry/patterns/getting-started.tsx)、[`registry/patterns/contextual-help.tsx`](../../../registry/patterns/contextual-help.tsx) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 

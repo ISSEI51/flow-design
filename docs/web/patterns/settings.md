@@ -2,7 +2,7 @@
 
 利用者が、設定が適用される範囲（自分か、組織か、この端末か）と保存された結果を確かめながら、設定を変えられるようにする。
 
-状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前） ・ 実装：[`registry/patterns/settings-layout.tsx`](../../../registry/patterns/settings-layout.tsx)、[`registry/patterns/setting-save.ts`](../../../registry/patterns/setting-save.ts)、[`registry/patterns/setting-status.tsx`](../../../registry/patterns/setting-status.tsx)、[`registry/patterns/setting-resolve.ts`](../../../registry/patterns/setting-resolve.ts) ・ 全体：[System & Account](system-and-account.md)
+状態：v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） ・ 実装：[`registry/patterns/settings-layout.tsx`](../../../registry/patterns/settings-layout.tsx)、[`registry/patterns/setting-save.ts`](../../../registry/patterns/setting-save.ts)、[`registry/patterns/setting-status.tsx`](../../../registry/patterns/setting-status.tsx)、[`registry/patterns/setting-resolve.ts`](../../../registry/patterns/setting-resolve.ts) ・ 全体：[System & Account](system-and-account.md)
 
 ## 目的
 

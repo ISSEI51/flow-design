@@ -193,7 +193,7 @@ Natural Motion
 | --- | --- |
 | 思想、原則、デザイントークン v0.1 | 完了 |
 | Components v0.1（39 種） | 完了 |
-| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：v0.1 確定候補、Forms & Workflows：v0.1 確定候補（方針は承認済み）、Data Analysis：v0.1 確定候補（方針は承認済み）、System & Account：v0.1 確定候補） |
+| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：v0.1 確定候補、Forms & Workflows：v0.1 確定候補（方針は承認済み）、Data Analysis：v0.1 確定候補（方針は承認済み）、System & Account：v0.1 確定候補（方針は承認済み）） |
 | Registry & Gallery、Agent Skills | 予定 |
 
 今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
@@ -208,7 +208,7 @@ Components が個々の UI の部品であるのに対し、Patterns はユー�
 | Data Browsing | Search & Filter、List & Detail、Bulk Actions、View Switching、Data States（[data-browsing.md](docs/web/patterns/data-browsing.md)） | v0.1 確定候補（最終レビュー前） |
 | Forms & Workflows | Form Layout、Create & Edit、Unsaved Changes、Confirmation、Multi-step Workflow、Import & Export（[forms-and-workflows.md](docs/web/patterns/forms-and-workflows.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） |
 | Data Analysis | Metric Overview、Dashboard Layout、Analysis Filters、Period Comparison、Drill-down（[data-analysis.md](docs/web/patterns/data-analysis.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） |
-| System & Account | Authentication、Settings、Onboarding、Permission States、System States、Notifications（[system-and-account.md](docs/web/patterns/system-and-account.md)） | v0.1 確定候補（最終レビュー前） |
+| System & Account | Authentication、Settings、Onboarding、Permission States、System States、Notifications（[system-and-account.md](docs/web/patterns/system-and-account.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） |
 
 Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md)、一覧の検索と閲覧の Patterns は [Data Browsing](docs/web/patterns/data-browsing.md)、登録・編集と手続きの Patterns は [Forms & Workflows](docs/web/patterns/forms-and-workflows.md)、分析とダッシュボードの Patterns は [Data Analysis](docs/web/patterns/data-analysis.md)、認証、設定、権限、障害、通知などの共通の体験の Patterns は [System & Account](docs/web/patterns/system-and-account.md) にまとめている。
 

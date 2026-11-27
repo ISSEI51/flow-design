@@ -2,7 +2,7 @@
 
 製品の機能そのものではなく、利用者が製品を安全に、快適に使い続けるための共通の体験を扱う Patterns のグループ。Authentication、Settings、Onboarding、Permission States、System States、Notifications の 6 種類からなる。Patterns の段階の最後のグループである。
 
-状態：v0.1 確定候補（v0.1 の最終調整を反映した。最終レビュー前。v0.1 の承認は、最終レビューで行う）
+状態：v0.1 確定候補（初期実装 `d1685b6` のレビューの後に最終調整を行った。設計と実装の方針は `694c8f6` の後に条件付きで承認された。条件は、Forms & Workflows と Data Analysis の統合の後の取り込みと、2 回連続の全件の検品で、どちらも満たした。横断の検品は Patterns Integration Review で行う）
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/system-and-account-dark.svg">
@@ -203,7 +203,8 @@ UI の部品は、入力、表示、遷移、古い操作と古い応答の照�
 | `preview/src/catalog.ts` | 分類「Patterns：System & Account」と 7 ページを追加した | 既存のページの id と URL は変わらない |
 | `package.json` | `test:patterns` に `system-account` を追加した | |
 | `scripts/diagrams/build.sh` | `gen_system_account.py` を追加した（`sa_*.py` を実行する） | 既存の図の出力は変わらない |
-| `preview/tests/button.spec.ts` | Tab を押す回数の上限を、80 回からページのフォーカスできる要素の数に変えた。上部の一覧に 7 ページが増え、80 回では対象のボタンに届かなくなったため。Forms & Workflows のブランチ（未統合）と同じ変更にした | 判定は変えていない |
+| `preview/tests/button.spec.ts` | 「Tab reaches the button…」の、Tab を押す回数の上限を、80 回からページのフォーカスできる要素の数に変えた。上部の一覧に 7 ページが増え、80 回では対象のボタンに届かなくなったため。PR #4 で、main にも同じ変更が入った。main の取り込みの後に、「buttonVariants on `<a>` › keyboard focus and navigation」の上限（120 回）も、同じ方法に変えた（「main への統合の前の検証」） | 判定は変えていない |
+| `preview/tests/navigation.spec.ts` | 「Sidebar (desktop) › collapse to 64px…」で、見出しの縦の位置を、ウィンドウからの位置ではなく、例の枠の上端からの距離で比べるようにした。main の取り込みの後の変更である（「main への統合の前の検証」） | 期待値（折りたたみの前後で位置が変わらない）は変えていない |
 | `preview/playwright.config.ts` | webServer に `stdout: "pipe"` を追加した（v0.1 の最終調整）。Vite の標準出力（HMR の更新、再読み込み、依存の最適化）を検品の記録に残し、検品環境の問題を後から確かめるため | 結果の判定は変わらない。Data Analysis のブランチの `tsconfig` の行とは別の位置 |
 | Components の検品（`preview/tests/forms.spec.ts` の「Select › typeahead and scroll」） | End を押す前に、一覧を開く動きの終了（`getAnimations` の `finished`）を待つようにした。WebKit では、開く動きの間はフォーカスが一覧に移っておらず、End が効かない。v0.1 の最終の検品で失敗し、`origin/main`（`aa7e664`）の作業ツリーでも 10 回中 8 回失敗することを確かめた（このブランチの変更による失敗ではない）。修正の後、4 つの project で 10 回ずつ成功した | 期待値（最後の選択肢が表示の範囲に入る）は変えていない。Components の実装は変えていない |
 | Data Browsing の検品（`preview/tests/data-browsing.spec.ts`）と模擬のサーバー（`preview/src/data/data-browsing/company-server.ts`） | A → B → A の一括操作の検品など 14 件を、応答の時間ではなく、模擬のサーバーの応答の保留と解放（`hold`、`held`、`release`）で順序を決める方式にした（「検品」の「時間に依存する検品」） | Registry は変更していない。期待値は弱めていない。既定（保留なし）の模擬のサーバーの挙動は変わらない |
@@ -234,7 +235,9 @@ UI の部品は、入力、表示、遷移、古い操作と古い応答の照�
 
 ## 統合時に確認する事項
 
-Forms & Workflows と Data Analysis は、v0.1 の最終調整の時点（2026-11-27）でも main に統合されていない（`origin/feat/forms-and-workflows-patterns` の `40df108`、`origin/feat/data-analysis-patterns` の `f5769d5`）。2 つのブランチは `git show` で読んだだけで、コードを持ち込んでいない（未統合の Patterns を再実装しない）。統合の後の横断の検品で、次を確かめる。詳しくは各資料の「統合時に確認する事項」にある。
+Forms & Workflows と Data Analysis は、v0.1 の最終調整の時点（2026-11-27）では main に統合されていなかった（`origin/feat/forms-and-workflows-patterns` の `40df108`、`origin/feat/data-analysis-patterns` の `f5769d5`）。2 つのブランチは `git show` で読んだだけで、コードを持ち込んでいない（未統合の Patterns を再実装しない）。
+
+その後、2 つは main に統合された（PR #1 `ebb0f24`、PR #2 `215a9f4`）。このブランチには `b5ea769` で取り込んだ（「main への統合の前の検証」）。取り込みでは、共有ファイルの双方の変更を残しただけで、下の置き換えと接続は行っていない。次の事項は、Patterns Integration Review の横断の検品で確かめる。詳しくは各資料の「統合時に確認する事項」にある。
 
 | 統合する Pattern | 確かめること |
 | --- | --- |
@@ -325,6 +328,54 @@ Forms & Workflows と Data Analysis は、v0.1 の最終調整の時点（2026-1
 - 既存のテストの削除、不要な skip の追加、許容誤差の拡大はしていない。既存のテストの変更は、`button.spec.ts`（初期実装）、`data-browsing.spec.ts` と `forms.spec.ts`（時間依存の修正。期待値は同じ）、System & Account の spec の期待値の一部（v0.1 で仕様を変えた箇所。例：確認中の保護された情報を既定で表示しない、`requirementsMet` の意味、不完全なエンコードの拒否）である。新しい skip は、画面の幅を 320px に変えて確かめる検品を幅を変えないモバイルの project で対象外にしたものと、Chromium の CDP とクリップボードを使う検品の WebKit での対象外である。
 - スクリーンショット（Git の管理外）：6 つの資料のページと統合の検証画面（ホーム、顧客の詳細、権限の再確認中、通知の設定）を、Chromium 1280×900、Pixel 7、320px、WebKit 1280×900、iPhone 15（Playwright の WebKit）で撮り、目視で確かめた。すべての画面で横方向のスクロールはなく（`scrollWidth - clientWidth` が 0）、ページの例外は 0 件だった。実機での目視は行っていない。
 
+### main への統合の前の検証（Forms & Workflows、Data Analysis の統合の後）
+
+v0.1 の最終調整（`694c8f6`）は、次の条件で承認された。Forms & Workflows と Data Analysis が main に統合された後に、最新の `origin/main` を取り込み、全件の検品を再実行すること。
+
+- 取り込み：`origin/main` の `215a9f4` を merge した（`b5ea769`）。この時点の main は、PR #4（`a132344`）、PR #1（`ebb0f24`）、PR #2（`215a9f4`）を含む。force push はしていない。
+- 競合と解消：次の 4 ファイルで競合した。すべて双方の変更を残し、Forms & Workflows、Data Analysis、System & Account の順に並べた。
+  - `README.md`：2 か所
+  - `package.json`：`test:patterns`
+  - `preview/src/catalog.ts`：4 か所
+  - `scripts/diagrams/build.sh`：図の生成の一覧
+- 競合のなかった共有ファイル：`playwright.config.ts`、`button.spec.ts`、`forms.spec.ts`、`company-server.ts`、`data-browsing.spec.ts` は、取り込みの後に `origin/main` と同じ内容である。次の 3 つは、PR #4 で同じ内容が main に入っていた。重複はない。
+  - `playwright.config.ts` の `stdout: "pipe"`
+  - `forms.spec.ts` の Select の待機
+  - Data Browsing の応答の保留と解放
+- 取り込みの直後（`b5ea769`）の全件の検品（run1、13:46〜14:30 UTC）では、`test:components` で 7 件が失敗した。内訳は次の 3 つの検品である。
+  - 「buttonVariants on `<a>` › keyboard focus and navigation」（`button.spec.ts:248`、4 つの project で失敗）
+    - 原因：Tab を押す回数の上限が、固定の 120 回だった。3 つの Patterns のページが上部の一覧に加わった後は、対象のリンクに届かなかった。
+    - 対処：上限を、ページのフォーカスできる要素の数にした。同じファイルの別の検品に、PR #4 で入った方法と同じである。
+  - 「Sidebar (desktop) › collapse to 64px keeps every item reachable and named」（`navigation.spec.ts:155`、desktop と webkit で失敗）
+    - 原因：見出しの縦の位置を、ウィンドウからの位置で比べていた。上部の一覧が長くなり、例が最初の表示の範囲の外に出た。そのため、メニューのボタンを押すとページがスクロールし、値が 34px 変わった（942.33 → 908.33）。
+    - 対処：例の枠の上端からの距離で比べるようにした。期待値は変えていない。
+  - 「Sheet mode and modal › mode=view, modal=指定しない」（`overlays.spec.ts:1248`、webkit-mobile で 30 秒の時間切れ）
+    - 原因：WebKit が、座標が NaN のポインターイベントを発生させる既知の事象である（[Overlays](../components/overlays.md) の「ページの例外の記録」）。ページの例外の記録は、環境の事象に分類された（`environment` 2、`unexplained` 0）。Select の選択肢のクリックが効かず、時間切れになった。
+    - 対処：検品は変えていない。同じ検品（5 つの組み合わせ）を webkit と webkit-mobile で 10 回ずつ実行し、100 回すべて成功した。
+  - 直した 2 つの検品は、`--repeat-each=5` で全 project で 30 回成功した。skip の 10 回は、モバイルの project では Sidebar の検品を実行しないためである。修正のコミットは `a914b66`。
+- 最終の候補（`a914b66`。作業ツリーに変更がない状態）で、全件の検品を 2 回続けて実行した。run2 は 14:34〜15:18 UTC、run3 は 15:18〜16:02 UTC。
+- 環境
+  - Node.js 26.10.0（Homebrew）。LTS の 26.13.1 の取得は、権限の確認で拒否された。そのため、v0.1 の最終調整の検品と同じ版を使った。Node.js の LTS の版での確認は、Registry & Gallery の課題である。
+  - Vite 8.3.8、Playwright 1.65.1、3 ワーカー。
+  - ポートは run2 が 5244、run3 が 5245。成果物の出力先は回ごとに分けた。
+  - `caffeinate` でスリープを止め、蓋の状態と電源を 1 分ごとに記録した。89 回の記録のすべてで、蓋は開いており、電源は AC だった。
+
+| 確認 | run2 | run3 |
+| --- | --- | --- |
+| `npm run typecheck` | 成功（exit 0） | 成功（exit 0） |
+| `npm run preview:build` | 成功（exit 0） | 成功（exit 0） |
+| `npm run test:tokens` | 成功（failed 0） | 成功（failed 0） |
+| `npm run test:ssr` | 120 件成功 | 120 件成功 |
+| `npm run test:patterns`（app-structure、data-browsing、forms-workflows、data-analysis、system-account） | 2565 件成功、187 件 skip、失敗 0 件（15.7 分） | 2565 件成功、187 件 skip、失敗 0 件（15.4 分） |
+| `npm run test:components` | 4076 件成功、336 件 skip、失敗 0 件（28.2 分） | 4076 件成功、336 件 skip、失敗 0 件（27.6 分） |
+
+- 製品の例外とコンソールのエラー（`unexplained`、`consoleProduct`）は、2 回とも 0 件だった。記録されたのは、次の 2 つだけである。
+  - Vite の HMR の WebSocket の接続のエラー（`consoleEnvironment`）
+  - run3 の、WebKit の座標が NaN のイベント 1 件（「Data Browsing integration › opening the list again from the sidebar…」、webkit-mobile、`environment` 6）。検品は成功した。
+- Vite の異常終了（`Lazy deopt…`）、`SIGABRT`、接続の拒否は 0 件だった。
+- 既存のテストの削除、skip の追加、許容誤差の拡大、待機の延長はしていない。
+- 横断の検品は行っていない。System & Account の部品の、Forms & Workflows と Data Analysis の部品への置き換えと接続は、Patterns Integration Review で行う。
+
 ### 初期実装の時点の記録（2026-11-26、`d1685b6`）
 
 初期実装の時点の検品は、`origin/main`（`aa7e664`）の上の `d1685b6` で、`test:patterns` 1221 件成功、`test:components` 2732 件成功（どちらも 3 ワーカー、失敗 0 件）だった。既定のワーカーの数の一括の実行で 1063 件が失敗した件は、上の「検品環境の競合」で調査した。
@@ -368,8 +419,10 @@ v0.1 の最終調整の後、別のエージェント（Opus）が、実装者�
 | パスワードマネージャー、SMS の確認コードの自動入力 | 未検証（公開の前の課題）。`autocomplete` の属性、ペーストと自動入力の模擬（1 回の入力で全桁が入る）、表示の切り替えのボタンが値とフォーカスを失わないことを、Playwright で確かめている |
 | IME | Chromium の CDP で再現した変換の範囲だけで確かめている。実機の IME は未検証 |
 | VoiceOver、NVDA | 未検証（公開の前の課題）。`role="status"`、`role="alert"`、`aria-live` の読み上げの回数と時期を、Playwright の属性の検品だけで確かめている |
-| Next.js（App Router）での導入 | 未検証。`"use client"` の境界を規則で確かめ、純粋な関数のファイルが hook を使わないことを確かめている |
-| Concurrent Rendering の破棄された描画 | `useScopeGuard`、`useAccess`、Settings の hook は、検品用の画面の中断された transition で確かめた。ほかの hook とプレビューの部品は、コードを読んだ範囲で直しており、破棄された描画の検品はない |
+| Next.js（App Router）での導入 | 未検証（Registry & Gallery の課題）。`"use client"` の境界を規則で確かめ、純粋な関数のファイルが hook を使わないことを確かめている |
+| Concurrent Rendering の破棄された描画 | `useScopeGuard`、`useAccess`、Settings の hook は、検品用の画面の中断された transition で確かめた。ほかの hook とプレビューの部品は、コードを読んだ範囲で直しており、破棄された描画の検品はない。追加の検品は Patterns Integration Review へ引き継ぐ |
 | 実際の認証・認可・通知の配信の基盤 | 模擬のサーバーだけで確かめている |
-| Forms & Workflows、Data Analysis との統合 | 未統合（2026-11-27 の時点で main にない）。後続の横断の検品へ引き継ぐ（「統合時に確認する事項」） |
-| 図 | 図（System States の offline-recovery）に、接続の未確認（`unknown`）の状態を加えていない |
+| Forms & Workflows、Data Analysis との統合 | main の取り込み（`b5ea769`）と全件の検品は行った。部品の置き換え、接続、共通の hook（`useScopeGuard`、`useInstantSave`、Settings の保存の hook）の責務の整理は、Patterns Integration Review へ引き継ぐ（「統合時に確認する事項」） |
+| 図 | 図（System States の offline-recovery）に、接続の未確認（`unknown`）の状態を加えていない。Patterns Integration Review へ引き継ぐ |
+| 残りの時間依存の検品 | Data Browsing の IME（600ms）と Skeleton（300ms）の固定の待機（「時間に依存する検品」）。Patterns Integration Review へ引き継ぐ |
+| 検品の環境 | Node.js の LTS の版での確認、同じ worktree の中で並行する Vite のサーバーの `cacheDir` の分離。Registry & Gallery の課題 |
