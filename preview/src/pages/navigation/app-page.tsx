@@ -430,7 +430,7 @@ function SettingsForm() {
           </Field>
         </FieldGroup>
         <div className="mt-8 flex justify-end">
-          <Button type="submit">変更を保存</Button>
+          <Button type="submit">保存する</Button>
         </div>
       </form>
     </div>

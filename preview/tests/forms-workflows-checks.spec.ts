@@ -912,7 +912,7 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
     await server(page, (s) => (s.listMode = "fail"))
     await page.getByTestId("row-actions-cu-1").click()
     await page.getByRole("menuitem", { name: "アーカイブ" }).click()
-    await expect(page.getByRole("alert").filter({ hasText: "再取得するまで、変更の操作はできません" })).toBeVisible()
+    await expect(page.getByRole("alert").filter({ hasText: "再試行するまで、変更の操作はできません" })).toBeVisible()
     await expect(page.getByTestId("row-actions-cu-2")).toBeDisabled()
     await expect(page.getByTestId("customers-export")).toBeDisabled()
   })

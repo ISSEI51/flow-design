@@ -16,7 +16,7 @@ import type { SettingSaveState } from "@/patterns/setting-save"
 //   設定の項目ごとに Card で囲まない。行の間は余白（16〜24px）で区切る。
 // - SettingSaveStatus：保存の単位の状態（保存中、保存しました、確定した失敗、バリデーションによる拒否、権限不足、競合、
 //   結果の不明、未保存の変更）を文字で示す。常に置いた読み上げの領域（role="status"）の中身を変える。
-//   結果が不明な場合と競合の場合だけ「確認する」を置く（サーバーの値を取得し直す。同じ保存を送り直さない）。
+//   結果が不明な場合と競合の場合だけ「保存されたかを確認」を置く（サーバーの値を取得し直す。同じ保存を送り直さない）。
 //
 // この部品が守ること
 // - 状態を色だけで伝えない（文字とアイコン）。Destructive の色は、処理されなかったことが確かな失敗（確定した失敗と
@@ -69,7 +69,7 @@ function SettingRow({
             {children}
           </div>
         </Field>
-        {/* 保存の状態は Field の外に置く（「確認する」のボタンを、設定の操作として関連付けない） */}
+        {/* 保存の状態は Field の外に置く（「保存されたかを確認」のボタンを、設定の操作として関連付けない） */}
         {status && <div className="col-start-1 min-w-0">{status}</div>}
       </div>
     </div>
@@ -94,7 +94,7 @@ function SettingSaveStatus({
   status,
   dirty = false,
   onVerify,
-  verifyLabel = "確認する",
+  verifyLabel = "保存されたかを確認",
   texts,
   className,
   ...props
@@ -102,7 +102,7 @@ function SettingSaveStatus({
   status: SettingSaveState
   /** 明示的な保存のフォームの未保存の変更（idle のときに示す） */
   dirty?: boolean
-  /** 結果が不明か競合の保存を確かめる（サーバーの値を取得する）。渡さない場合は「確認する」を置かない */
+  /** 結果が不明か競合の保存を確かめる（サーバーの値を取得する）。渡さない場合は「保存されたかを確認」を置かない */
   onVerify?: () => void
   verifyLabel?: string
   texts?: Partial<StatusTexts>

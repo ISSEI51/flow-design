@@ -128,7 +128,7 @@ export function SwitchPage() {
                 <Switch />
               </Field>
               <div className="mt-4 flex justify-end">
-                <Button>変更を保存</Button>
+                <Button>保存する</Button>
               </div>
             </div>
           }
@@ -140,7 +140,7 @@ export function SwitchPage() {
                 <FieldLabel>請求書をメールで受け取る</FieldLabel>
               </Field>
               <div className="mt-4 flex justify-end">
-                <Button>変更を保存</Button>
+                <Button>保存する</Button>
               </div>
             </div>
           }

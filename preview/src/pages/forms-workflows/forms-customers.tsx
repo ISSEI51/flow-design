@@ -373,7 +373,7 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
           {selection.hasSelection ? (
             <DataTableSelectionBar
               disabled={locked}
-              disabledReason={data.refreshFailed ? "再取得するまで操作できません" : undefined}
+              disabledReason={data.refreshFailed ? "再試行するまで操作できません" : undefined}
               selectedCount={selection.mode === "ids" ? (selection.count ?? 0) : 0}
               hiddenCount={selection.hiddenCount ?? 0}
               onClearSelection={selection.clear}
@@ -431,9 +431,9 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
         <DataTablePagination table={table} pageSizeOptions={[5, 20]} disabled={locked} />
         {data.refreshFailed && (
           <p role="alert" className="text-ui text-destructive">
-            一覧を最新にできませんでした。再取得するまで、変更の操作はできません。
+            一覧を最新にできませんでした。再試行するまで、変更の操作はできません。
             <Button variant="link" className="ml-2 h-auto min-h-0 p-0" onClick={data.reload}>
-              再取得
+              再試行
             </Button>
           </p>
         )}

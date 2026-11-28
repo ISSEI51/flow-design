@@ -96,7 +96,7 @@ function KeepForm() {
       </Tabs>
       <div className="mt-6 flex flex-wrap items-center gap-4">
         <Button type="submit" data-testid="tabs-keep-submit">
-          変更を保存
+          保存する
         </Button>
         <p role="status" data-testid="tabs-keep-result" className="text-ui text-muted-foreground">
           {result}

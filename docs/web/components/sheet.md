@@ -81,7 +81,7 @@
     {mode === "edit" && (
       <SheetFooter>
         <Button variant="secondary" onClick={cancel}>キャンセル</Button>
-        <Button type="submit">変更を保存</Button>
+        <Button type="submit">保存する</Button>
       </SheetFooter>
     )}
   </SheetContent>

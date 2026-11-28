@@ -169,7 +169,7 @@ export function describeUnsavedSettings(labels: string[]) {
   if (dirty.length) parts.push(`${quote(dirty)}の変更は保存されていません。`)
   if (unresolved.length) {
     parts.push(
-      `${quote(unresolved)}は、保存できたかを確認していません。サーバーには保存されている場合があります。移動すると、画面の入力は消えます。移動せずに「確認する」で確かめられます。`
+      `${quote(unresolved)}は、保存できたかを確認していません。サーバーには保存されている場合があります。移動すると、画面の入力は消えます。移動せずに「保存されたかを確認」で確かめられます。`
     )
   }
   return parts.join("") || "入力した内容は保存されません。"
@@ -225,7 +225,7 @@ type FormLike = {
 
 const blockedTexts = {
   unchanged: "変更がないため、保存していません。",
-  unresolved: "前の保存の結果を確認するまで、もう一度保存できません。「確認する」で確かめてください。",
+  unresolved: "前の保存の結果を確認するまで、もう一度保存できません。「保存されたかを確認」で確かめてください。",
 } as const
 
 /**

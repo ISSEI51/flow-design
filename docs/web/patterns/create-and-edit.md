@@ -252,7 +252,7 @@
 | `{ status: "success", values? }` | 保存した。`values` はサーバーが保存した値（正規化した値など） | 下の「保存の成功の後」 |
 | `{ status: "invalid", fieldErrors, formError }` | サーバー側の検証で保存できなかった（重複、権限の変更、同時の編集） | 項目のエラーを該当する項目にすぐ表示する。その項目の値を変えるまで、保存を止める。全体の文は `formError` |
 | `{ status: "failed", formError }` | 保存されていないことが確かな失敗（サーバーが処理を拒否した、送信の前に失敗した） | フォームの上の Alert（destructive）。入力は残す。もう一度保存できる |
-| `{ status: "unknown", formError }` | 保存されたかわからない（時間切れ、応答の前の切断、予期しない例外） | Alert（warning）。`canSubmit` が false になり、`handleSubmit` も保存の処理を呼ばない（Enter、`requestSubmit`、「保存して移動」を含む）。状態を確かめる操作（「登録されているか確認」）を置く |
+| `{ status: "unknown", formError }` | 保存されたかわからない（時間切れ、応答の前の切断、予期しない例外） | Alert（warning）。`canSubmit` が false になり、`handleSubmit` も保存の処理を呼ばない（Enter、`requestSubmit`、「保存して移動」を含む）。状態を確かめる操作（「登録されたかを確認」）を置く |
 
 保存の処理（`save`）が例外を投げた場合：
 
@@ -482,7 +482,7 @@ const checkSaved = async () => {
   {form.formError && (
     <Alert variant={unknown ? "warning" : "destructive"} role="alert">
       <AlertDescription>{form.formError}</AlertDescription>
-      {unknown && <AlertAction><Button size="sm" variant="secondary" onClick={checkSaved}>登録されているか確認</Button></AlertAction>}
+      {unknown && <AlertAction><Button size="sm" variant="secondary" onClick={checkSaved}>登録されたかを確認</Button></AlertAction>}
     </Alert>
   )}
   <FormActions sticky notice={<SaveBlockerNotice id="customer-notice" blockers={form.blockers} hidden={form.submitting || form.composing} unchanged={form.unchanged} detail onFocusField={(n) => focusFormControl(`customer-${n}`)} />}>

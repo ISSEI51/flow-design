@@ -213,7 +213,7 @@ function BulkResultAlert({
         )}
         {onCheckLatest && (unknown.length > 0 || requestError?.outcome === "unknown" || (integrity.reconciled && !integrity.complete)) && (
           <Button variant="secondary" size="sm" onClick={onCheckLatest}>
-            最新の状態を確認
+            状態を確認
           </Button>
         )}
         <Button variant="ghost" size="sm" onClick={onDismiss}>

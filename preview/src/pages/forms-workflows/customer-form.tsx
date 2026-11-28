@@ -472,7 +472,7 @@ export function CustomerForm({
           {unknown && (
             <AlertAction>
               <Button size="sm" variant="secondary" loading={checking} onClick={checkSaved}>
-                {mode === "create" ? "登録されているか確認" : "保存されているか確認"}
+                {mode === "create" ? "登録されたかを確認" : "保存されたかを確認"}
               </Button>
             </AlertAction>
           )}

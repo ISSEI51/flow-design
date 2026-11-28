@@ -343,7 +343,7 @@ function SecurityPolicyForm(props: SettingsSectionProps & { initial: SecurityPol
               }}
               data-testid="set-policy-confirm-action"
             >
-              {confirm === "reset" ? "標準に戻す" : "変更を保存"}
+              {confirm === "reset" ? "標準に戻す" : "保存する"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

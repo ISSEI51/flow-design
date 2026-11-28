@@ -185,7 +185,7 @@ test.describe("Dialog", { tag: "@webkit" }, () => {
     // 操作ボタン：右寄せ、キャンセルが左、間隔 8px
     const footer = popup.locator("[data-slot=dialog-footer]")
     expect(await css(footer, "column-gap")).toBe("8px")
-    const [cancel, primary] = [footer.getByRole("button", { name: "キャンセル" }), footer.getByRole("button", { name: "変更を保存" })]
+    const [cancel, primary] = [footer.getByRole("button", { name: "キャンセル" }), footer.getByRole("button", { name: "保存する" })]
     const [a, b] = [await box(cancel), await box(primary)]
     expect(a.x).toBeLessThan(b.x)
     expect(Math.round(b.x - (a.x + a.width))).toBe(8)
@@ -309,7 +309,7 @@ test.describe("Dialog", { tag: "@webkit" }, () => {
     // 保存すると閉じ、結果を文字で知らせる
     await trigger.click()
     await page.getByTestId("dialog-dirty-name").fill("山田商事株式会社")
-    await popup.getByRole("button", { name: "変更を保存" }).click()
+    await popup.getByRole("button", { name: "保存する" }).click()
     await expect(popup).toBeHidden()
     await expect(page.getByTestId("dialog-dirty-status")).toHaveText("会社情報を保存しました")
   })
@@ -1035,7 +1035,7 @@ test.describe("brand and portal", { tag: "@webkit" }, () => {
     await open(page, "dialog")
     await page.getByRole("radio", { name: "青" }).check()
     await page.getByTestId("dialog-trigger-default").click()
-    const primary = page.getByTestId("dialog-default").getByRole("button", { name: "変更を保存" })
+    const primary = page.getByTestId("dialog-default").getByRole("button", { name: "保存する" })
     await expect.poll(() => css(primary, "background-color")).toBe("rgb(30, 64, 175)")
     expect(await buttonContrast(primary)).toBeGreaterThanOrEqual(4.5)
     // Portal は <body> の直下に置かれ、テーマの変数を継承する

@@ -523,7 +523,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
               取得に失敗させる
             </Button>
             <Button variant="outline" size="xs" data-testid={`${testId}-reload`} onClick={() => setReloadKey((k) => k + 1)}>
-              再取得する
+              最新の情報に更新
             </Button>
           </div>
         )}

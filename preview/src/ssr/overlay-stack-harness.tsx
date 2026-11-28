@@ -118,7 +118,7 @@ function SheetFooterHarness() {
         </SheetBody>
         <SheetFooter data-testid="ovl-sheet-footer">
           <Button variant="secondary">キャンセル</Button>
-          <Button data-testid="ovl-sheet-save">変更を保存</Button>
+          <Button data-testid="ovl-sheet-save">保存する</Button>
         </SheetFooter>
       </SheetContent>
     </Sheet>

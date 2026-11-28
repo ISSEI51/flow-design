@@ -376,7 +376,7 @@ function ServerControls({
             詳細ページの取引の履歴の取得を失敗させる
           </label>
           <Button variant="outline" size="xs" data-testid="browsing-refetch" onClick={onRefetch}>
-            同じ条件で再取得する
+            最新の情報に更新
           </Button>
           <Button variant="outline" size="xs" onClick={onReload}>
             一覧を作り直す

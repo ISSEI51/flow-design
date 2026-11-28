@@ -1170,7 +1170,7 @@ export function CustomerEditor({
                       loading={saving || save.status === "checking"}
                       data-testid="perm-editor-save"
                     >
-                      保存
+                      保存する
                     </Button>
                   )}
                 </RestrictedAction>

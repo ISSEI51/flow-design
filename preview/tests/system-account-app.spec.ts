@@ -237,7 +237,7 @@ test.describe("Account app: everyday use", () => {
     await page.getByTestId("set-profile").getByRole("button", { name: /保存/ }).click()
     await expect(page.getByTestId("set-profile")).toContainText("保存できたかを確認できませんでした")
     await expect(page.getByTestId("set-profile-title")).toHaveValue("営業部 部長")
-    await expect(page.getByTestId("set-profile").getByRole("button", { name: "確認する" })).toBeVisible()
+    await expect(page.getByTestId("set-profile").getByRole("button", { name: "保存されたかを確認" })).toBeVisible()
   })
 
   test("notification -> target with unsaved changes asks first; keep editing cancels the move", async ({ page }) => {
@@ -812,7 +812,7 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(dialog).not.toContainText("保存されていません")
     await expect(dialog.getByRole("button", { name: "保存して移動" })).toHaveCount(0)
     await dialog.getByRole("button", { name: "編集を続ける" }).click()
-    await expect(page.getByTestId("set-profile").getByRole("button", { name: "確認する" })).toBeVisible()
+    await expect(page.getByTestId("set-profile").getByRole("button", { name: "保存されたかを確認" })).toBeVisible()
   })
 
   test("SET-7: save and leave saves the form, then moves only after the save succeeded", async ({ page }) => {
