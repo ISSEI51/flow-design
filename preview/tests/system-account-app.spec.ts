@@ -861,6 +861,32 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(page.getByTestId("set-profile-title")).toHaveValue("営業部 マネージャー")
   })
 
+  test("NTF-1: opening a notification while permissions are re-checked says so and does not mark it read", async ({ page }) => {
+    await signInAs(page, sato)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.grant("u-sato:hq", "audit.view")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await trigger(page).click()
+    const center = page.getByTestId("ntf-center")
+    await center.getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    // 再確認中（refreshing）か、前の権限を使えない間（loading）の文。どちらも「権限がない」とは示さない
+    await expect(center).toContainText(/(最新の)?権限を確認しています。確認できてから、もう一度開いてください。/)
+    await expect(center).not.toContainText("権限がありません")
+    await expect(page).not.toHaveURL(/page=customer&/)
+    await expect(center.locator("[data-notification-id=n-101]")).not.toHaveAttribute("data-read")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 確認できた後は開ける
+    await center.getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
+  })
+
   test("AUTH-1: the return path after re-authentication is checked with the current role, not the initial role", async ({ page }) => {
     await signInAs(page, sato)
     await go(page, "page=members&ws=hq")

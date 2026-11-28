@@ -27,7 +27,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useToast } from "@/components/ui/toast"
-import { decideAccess } from "@/patterns/access"
+import { decideAccess, restrictionText } from "@/patterns/access"
 import { AccessState } from "@/patterns/access-state"
 import { AppShell, AppShellBody, AppShellHeader, AppShellMain } from "@/patterns/app-shell"
 import { useBrowseData } from "@/patterns/browse-data"
@@ -204,7 +204,12 @@ function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, 
     const needed = pagePermission[next.page as AccountPage]
     // クリックした時点ではなく、確認の応答の後の最新の権限で判断する（再確認中は許可しない）。
     // access.latest() は commit した時点の値で照合する。変更の知らせを受けた処理の中で reload() を呼んだ後は、確認済みの権限を返さない
-    if (needed && !decideAccess(access.latest(), { permissions: [needed] }).allowed) {
+    const decision = needed ? decideAccess(access.latest(), { permissions: [needed] }) : null
+    if (decision && !decision.allowed) {
+      // 権限を確認している間（再確認中、確認の失敗）は、権限がないとは示さず、通知を既読にしない（NTF-1）
+      if (decision.reason.kind === "unresolved") {
+        return { status: "unavailable", reason: "unresolved", message: `${restrictionText(decision.reason)}。確認できてから、もう一度開いてください。` }
+      }
       return { status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" }
     }
     const ok = await requestNavigate(

@@ -28,9 +28,10 @@ export type NavigateOutcome =
   | { status: "cancelled" }
   /**
    * 対象を開けない。message を通知センターに示す。reason：deleted（削除された）、forbidden（権限がない）、
-   * invalid（移動先の検証に失敗した。対象を確かめられていないため、通知を既読にしない）
+   * invalid（移動先の検証に失敗した。対象を確かめられていないため、通知を既読にしない）、
+   * unresolved（最新の権限を確認している、または確認できなかった。権限がないとは示さず、通知を既読にしない）
    */
-  | { status: "unavailable"; message: string; reason?: "deleted" | "forbidden" | "invalid" }
+  | { status: "unavailable"; message: string; reason?: "deleted" | "forbidden" | "invalid" | "unresolved" }
 
 export type NavigateContext = {
   notification: AppNotification
