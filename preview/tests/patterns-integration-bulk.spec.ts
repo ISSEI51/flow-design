@@ -73,14 +73,16 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
     await dialog.getByRole("button", { name: "2件を停止にする" }).click()
     await expect(result(page)).toContainText("結果が不明1件")
     await result(page).getByRole("button", { name: "最新の状態を確認" }).click()
-    await expect(page.getByTestId("bulk-checked")).toContainText("状態を確認しました：1件は停止になっていました")
+    await expect(page.getByTestId("bulk-checked")).toHaveText("状態を確認しました：1件は停止になっていました")
+    // 照会の結果を一括操作の結果に反映した（結果が不明な行がなくなり、すべて完了した結果は一覧の上に残さない）
+    await expect(result(page)).toHaveCount(0)
     const lookups = await requests(page, "lookup")
     expect(lookups.map((r) => r.payload)).toEqual([["c03"]])
     // 照会の後も、一括操作を再実行していない
     expect(await requests(page, "bulk")).toHaveLength(1)
   })
 
-  test("S13 an unknown result that was not applied can be retried only after the lookup", async ({ page }) => {
+  test("S13 an unknown result that was not applied becomes a confirmed failure and can be retried only after the lookup", async ({ page }) => {
     await openApp(page, { route: "page=customers" })
     await listReady(page)
     await setConfig(page, { bulkOutcomes: { c03: "unknown" }, unknownApplied: false })
@@ -90,9 +92,9 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
     // 照会の前には、結果が不明な行を再実行するボタンを示さない
     await expect(page.getByRole("button", { name: /再試行/ })).toHaveCount(0)
     await result(page).getByRole("button", { name: "最新の状態を確認" }).click()
-    const checked = page.getByTestId("bulk-checked")
-    await expect(checked).toContainText("株式会社ウミネコ運輸は変更されていませんでした")
-    await checked.getByRole("button", { name: "変更されていなかった 1件を再試行" }).click()
+    await expect(page.getByTestId("bulk-checked")).toContainText("株式会社ウミネコ運輸は変更されていませんでした")
+    await expect(result(page)).toContainText(/失敗\s*1件/)
+    await result(page).getByRole("button", { name: "失敗した 1件を再試行" }).click()
     await expect.poll(async () => (await requests(page, "bulk")).map((r) => r.payload)).toEqual([["c01", "c03"], ["c03"]])
   })
 

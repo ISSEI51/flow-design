@@ -52,7 +52,7 @@ test.describe("Patterns integration: system states, settings and notifications",
     expect(await requests(page, "bulk")).toHaveLength(0)
   })
 
-  test("S29 a save with an unknown result is not re-sent on reconnect and is resolved by 状態を確認 @webkit", async ({ page, context }) => {
+  test("S29 a save with an unknown result is not re-sent on reconnect and is resolved by 保存されたかを確認 @webkit", async ({ page, context }) => {
     await openApp(page, { route: "page=customer-edit&id=c01&from=detail" })
     await setConfig(page, { saveMode: "unknown" })
     await editForm(page).getByLabel("社内のメモ").fill("結果が不明の保存")
@@ -65,7 +65,7 @@ test.describe("Patterns integration: system states, settings and notifications",
     await context.setOffline(false)
     await expect(banner(page)).toBeHidden()
     expect(await requests(page, "save")).toHaveLength(1)
-    await error.getByRole("button", { name: "状態を確認" }).click()
+    await error.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(page.locator("[data-slot=toast]").filter({ hasText: "保存されていたことを確かめました" })).toBeVisible()
     await expect(editForm(page)).toHaveAttribute("data-status", "succeeded")
     await expect(editForm(page)).not.toHaveAttribute("data-dirty", "true")
@@ -78,7 +78,7 @@ test.describe("Patterns integration: system states, settings and notifications",
     await setConfig(page, { saveMode: "unknown", unknownApplied: false })
     await editForm(page).getByLabel("社内のメモ").fill("保存されていない入力")
     await page.getByTestId("edit-submit").click()
-    await page.getByTestId("edit-form-error").getByRole("button", { name: "状態を確認" }).click()
+    await page.getByTestId("edit-form-error").getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(editForm(page)).toHaveAttribute("data-status", "idle")
     await expect(editForm(page)).toHaveAttribute("data-dirty", "true")
     await expect(editForm(page).getByLabel("社内のメモ")).toHaveValue("保存されていない入力")
