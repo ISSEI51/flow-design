@@ -959,7 +959,10 @@ test.describe("Multi-step Workflow", { tag: "@webkit" }, () => {
     if (isMobile) {
       // 狭い領域の簡易の表示は、番号と総数だけを示す（直後の見出しと同じ名前を重ねない。currentLabel="hidden"）
       const current = stepper.locator("[data-slot=stepper-narrow] [data-slot=stepper-current]")
-      await expect(current).toHaveText("ステップ 2 / 5")
+      await expect(current.locator(":scope > span:not(.sr-only)")).toHaveText(["ステップ 2 / 5"])
+      // D11：一覧を閉じている間も、支援技術には現在のステップの名前を伝える（aria-current の要素が隠れるため）
+      await expect(current.locator(":scope > .sr-only")).toHaveText("（現在のステップ：顧客）")
+      await expect(current).toHaveText("ステップ 2 / 5（現在のステップ：顧客）")
     } else await expect(stepper.locator("[data-slot=stepper-wide] li[aria-current=step]")).toContainText("顧客")
   })
 
