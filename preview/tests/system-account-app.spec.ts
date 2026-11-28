@@ -915,6 +915,14 @@ test.describe("Account app: settings, permissions and navigation (integration re
     expect(await ntfRequests()).toBe(ntfBefore)
   })
 
+  test("AUTH-4: after the password step, focus moves to the verification code input instead of falling to the body", async ({ page }) => {
+    await open(page)
+    await page.getByLabel("メールアドレス").first().fill(sato)
+    await page.getByLabel("パスワード", { exact: true }).fill(PASSWORD)
+    await page.getByLabel("パスワード", { exact: true }).press("Enter")
+    await expect(page.getByLabel("確認コード")).toBeFocused()
+  })
+
   test("AUTH-1: the return path after re-authentication is checked with the current role, not the initial role", async ({ page }) => {
     await signInAs(page, sato)
     await go(page, "page=members&ws=hq")
