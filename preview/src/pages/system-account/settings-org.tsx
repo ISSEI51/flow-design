@@ -25,8 +25,8 @@ import { Section, SectionActions, SectionDescription, SectionHeader, SectionHead
 import { planReset, resolveDependent, settingAccess } from "@/patterns/setting-resolve"
 import { useSettingsForm } from "@/patterns/setting-save"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
+import { DiscardChangesAlert } from "@/patterns/unsaved-changes"
 
-import { DiscardAlert } from "../overlays/discard-alert"
 
 import { plans, roles, type Language, type RoleId } from "../../data/system-account/model"
 import { securityDefaults, type ChangeRecord, type Member, type OrgInfo, type OrgRecord, type SecurityPolicy } from "../../data/system-account/settings-server"
@@ -666,7 +666,7 @@ function InviteDialog({ open, onOpenChange, onInvite }: { open: boolean; onOpenC
           </form>
         </DialogContent>
       </Dialog>
-      <DiscardAlert
+      <DiscardChangesAlert
         open={discard}
         onOpenChange={setDiscard}
         onDiscard={() => {

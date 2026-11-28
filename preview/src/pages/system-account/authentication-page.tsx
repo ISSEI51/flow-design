@@ -21,6 +21,7 @@ import {
 import type { AuthLayoutVariant } from "@/patterns/auth-layout"
 import { useScopeGuard } from "@/patterns/scope-guard"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
+import { DiscardChangesAlert } from "@/patterns/unsaved-changes"
 
 import { authApi, authServer, canOpenPath, demoInvitation, demoRecoveryCodes, homePathOf, type AuthServerMode, type SentEmail } from "../../data/system-account/auth-server"
 import { customers } from "../../data/data-display/customers"
@@ -30,7 +31,6 @@ import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
 import { DemoControls, DemoFrame, Mock, Radio, Rules } from "../data-browsing/doc-parts"
-import { DiscardAlert } from "../overlays/discard-alert"
 import {
   EmailVerificationScreen,
   MfaScreen,
@@ -1199,7 +1199,7 @@ function AccountDemo() {
           <Button onClick={() => change({ userId: "u-sato", workspaceId: "hq" })}>佐藤 花子としてログインし直す（模擬）</Button>
         </div>
       )}
-      <DiscardAlert
+      <DiscardChangesAlert
         open={confirm !== null}
         onOpenChange={(open) => !open && setConfirm(null)}
         onDiscard={() => {
@@ -1207,7 +1207,7 @@ function AccountDemo() {
           setConfirm(null)
           action?.()
         }}
-        testId="auth-account-discard"
+        data-testid="auth-account-discard"
       />
     </DemoFrame>
   )

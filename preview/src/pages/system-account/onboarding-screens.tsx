@@ -16,6 +16,7 @@ import { GettingStartedChecklist } from "@/patterns/getting-started"
 import { deriveChecklist, pickGuidance, type Checklist, type ChecklistVisibility, type OnboardingTaskResults } from "@/patterns/onboarding"
 import { useScopeGuard, type ScopeSnapshot, type ScopeTicket } from "@/patterns/scope-guard"
 import { cn } from "@/lib/utils"
+import { DiscardChangesAlert } from "@/patterns/unsaved-changes"
 
 import { MockRequestError } from "../../data/system-account/mock"
 import { users, type OnboardingTaskId, type Permission, type UserId } from "../../data/system-account/model"
@@ -29,7 +30,6 @@ import {
   type ProductScreen,
 } from "../../data/system-account/onboarding-data"
 import type { DataSpace, OnboardingApi, SetupDraft } from "../../data/system-account/onboarding-server"
-import { DiscardAlert } from "../overlays/discard-alert"
 
 // Onboarding の画面の部品（プレビュー）。統合の検証画面でも使えるよう、利用者（OnboardingViewer）、模擬のサーバーの関数（api）、
 // コールバックを props で受け取る。状態は api（模擬のサーバー）に保存し、部品は保存しない。
@@ -933,7 +933,7 @@ function CustomersScreen({
               </ActionButton>
             </SheetFooter>
           </form>
-          <DiscardAlert
+          <DiscardChangesAlert
             open={discard}
             onOpenChange={setDiscard}
             onDiscard={() => {
@@ -960,7 +960,7 @@ function ImportScreen({ viewer, api, onChanged, onDone, Title }: { viewer: Onboa
         <ActionButton
           actions={actions}
           actionKey="import"
-          testId="onb-import-run"
+          data-testid="onb-import-run"
           onRun={() =>
             actions.run("import", (ctx) => api.importCustomers(viewer.workspaceId, ctx), {
               success: (n) => `${n} 件を取り込みました。`,
