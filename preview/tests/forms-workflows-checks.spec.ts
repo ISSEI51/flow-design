@@ -870,6 +870,43 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
     expect(text.split("\r\n")[0]).toContain("電話番号")
   })
 
+  // D13：個人情報の確認の対象には、選んだ行の ID を含める。件数が同じでも行が入れ替わったら、確かめ直させる
+  test("export of selected rows with personal data: swapping a selected row while confirming asks to review again", async ({ page }) => {
+    await openApp(page, "page=customers")
+    const rows = listRows(page)
+    await rows.nth(0).getByRole("checkbox").click()
+    const second = await rows.nth(1).getAttribute("data-row-id")
+    const third = await rows.nth(2).getAttribute("data-row-id")
+    await rows.nth(1).getByRole("checkbox").click()
+    await page.getByTestId("customers-export-selected").click()
+    await expect(page.getByTestId("export-scope")).toHaveText("選んだ行（2件）")
+    await page.getByTestId("export-columns").getByRole("checkbox", { name: "電話番号" }).click()
+    await page.getByTestId("export-run").click()
+    const confirm = page.getByTestId("export-sensitive-confirm")
+    await expect(confirm.getByRole("button", { name: "ダウンロード" })).toBeEnabled()
+    // 件数は 2 件のまま、選んだ行を入れ替える
+    await page.evaluate(([a, b]) => {
+      window.__fdFormsSetSelected!(a!, false)
+      window.__fdFormsSetSelected!(b!, true)
+    }, [second, third] as const)
+    await expect(confirm.locator("[data-slot=confirm-action-changed]")).toBeVisible()
+    await expect(confirm.getByRole("button", { name: "ダウンロード" })).toBeDisabled()
+  })
+
+  // D14：raw の形式（ほかのシステムへの取り込み）は既定にせず、選んだときに表計算ソフトで開く場合の注意を示す
+  test("export format: spreadsheet is the default; choosing raw shows the spreadsheet warning", async ({ page }) => {
+    await openApp(page, "page=customers")
+    await page.getByTestId("customers-export").click()
+    await page.getByRole("menuitem", { name: "項目を選んでエクスポート…" }).click()
+    const dialog = page.getByTestId("export-dialog")
+    const format = dialog.getByRole("combobox", { name: "形式" })
+    await expect(format).toHaveText("CSV（Excel で開く。BOM 付きの UTF-8）")
+    await expect(dialog.getByTestId("export-raw-warning")).toHaveCount(0)
+    await format.click()
+    await page.getByRole("option", { name: "CSV（UTF-8。ほかのシステムへの取り込み）" }).click()
+    await expect(dialog.getByTestId("export-raw-warning")).toContainText("表計算ソフトで開くと式として実行されることがあります")
+  })
+
   test("canOperate false (refresh failed): row operations and export are disabled", async ({ page }) => {
     await openApp(page, "page=customers")
     await server(page, (s) => (s.listMode = "fail"))
