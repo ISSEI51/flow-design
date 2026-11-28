@@ -32,7 +32,7 @@ import { PageLayout } from "@/patterns/page-layout"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
 
 import { defaultListFilters, planLabel, regions, statusLabel, yen, type ListFilters, type PiCustomer } from "../../data/patterns-integration/model"
-import { fetchCustomers, lookupPaused, matchingIds, pauseCustomers, peekCustomer, type ListPage } from "../../data/patterns-integration/server"
+import { exportCustomers, fetchCustomers, lookupPaused, matchingIds, pauseCustomers, peekCustomer, type ListPage } from "../../data/patterns-integration/server"
 import { ExportDialog, type ExportColumn } from "../forms-workflows/export-dialog"
 import { ProtectedContent, usePi } from "./pi-context"
 import { Facts } from "./pi-parts"
@@ -109,16 +109,16 @@ function FilterSelect({ label, value, options, onChange, testId }: { label: stri
 }
 
 export function CustomersScreen({ restore }: { restore: boolean }) {
-  const { ws, scope, nav, permit, outageSeq } = usePi()
+  const { ws, scope, dataScope, nav, permit, outageSeq, viewAccess } = usePi()
   const { toast } = useToast()
   const { mainRef } = useAppShell()
   const root = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
-  const [initial] = useState(() => {
-    const s = restore && snapshot && snapshot.scope === scope ? snapshot : null
-    snapshot = null
-    return s
-  })
+  // 描画の中では記録を読むだけにする（commit されなかった描画で記録を消さない）。使い終えたことは commit の後に記録する
+  const [initial] = useState(() => (restore && snapshot && snapshot.scope === scope ? snapshot : null))
+  useEffect(() => {
+    if (initial && snapshot === initial) snapshot = null
+  }, [initial])
   const browse = useBrowseQuery<ListFilters>({
     defaultFilters: defaultListFilters,
     initialQuery: initial?.query ?? { pagination: { pageIndex: 0, pageSize: 10 } },
@@ -129,7 +129,7 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
   const [restoreKey] = useState(() => (initial ? JSON.stringify(initial.query) : null))
   const data = useBrowseData({
     query: q,
-    scopeKey: scope,
+    scopeKey: dataScope,
     initialData: initial?.page ?? undefined,
     // 要求の宛先は、取得を始めた時点のワークスペース
     fetcher: (query, { signal }) => fetchCustomers(ws, query, signal),
@@ -167,7 +167,8 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
   })
 
   // ---------------------------------------------------------------- 一括操作
-  const [checked, setChecked] = useState<null | { applied: string[]; notApplied: string[] }>(null)
+  // 照会の結果の知らせ（照会で結果が不明な行がなくなると、BulkResultAlert を閉じることがあるため、画面に残す）
+  const [lookupNotice, setLookupNotice] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const action = useBulkAction<Query, { kind: "pause" }>({
     scopeKey: scope,
@@ -178,7 +179,7 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
     },
     onSettled: (summary) => {
       selection.settle(summary)
-      setChecked(null)
+      setLookupNotice(null)
       data.reload()
       if (isBulkFullySucceeded(summary)) toast({ variant: "success", title: `${fmt(summary.succeeded.length)}件の顧客を停止にしました` })
     },
@@ -189,25 +190,33 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
   const bulkCount = bulkTarget ? (bulkTarget.kind === "ids" ? bulkTarget.ids.length : bulkTarget.expectedCount) : null
   const keyOfTarget = (t: BulkTarget<Query>) =>
     JSON.stringify(t.kind === "ids" ? ["ids", t.scope, [...t.ids].sort()] : ["query", t.scope, t.queryKey, [...t.excludedIds].sort(), t.expectedCount])
-  // 結果が不明な行の照会。現在のスコープの認可で照会し、照会した結果だけを示す（照会の前に再実行しない）
+  // 結果が不明な行の照会。現在のスコープの認可で照会し、照会の結果を useBulkAction.resolveUnknown で反映する
+  // （停止になっていた行は完了、変更されていなかった行は確定した失敗になり、「失敗した N件を再試行」の対象になる）。照会の前に再実行しない
   const summary = action.summary
   const checkUnknown = async () => {
     if (!summary || checking) return
     const ids = summary.unknown.map((i) => i.id)
+    const from = action.capture()
     setChecking(true)
     try {
       const state = await lookupPaused(ws, ids)
-      setChecked({ applied: ids.filter((id) => state[id]), notApplied: ids.filter((id) => !state[id]) })
-      data.reload()
+      const resolved = action.resolveUnknown(
+        ids.map((id) => (state[id] ? { id, outcome: "succeeded" as const } : { id, outcome: "failed" as const, message: "変更されていませんでした" })),
+        { from }
+      )
+      if (resolved > 0) {
+        const applied = ids.filter((id) => state[id])
+        const notApplied = ids.filter((id) => !state[id])
+        setLookupNotice(
+          `状態を確認しました：${fmt(applied.length)}件は停止になっていました${notApplied.length ? `。${notApplied.map(nameOf).join("、")}は変更されていませんでした` : ""}`
+        )
+        data.reload()
+      }
     } catch {
       toast({ variant: "destructive", title: "状態を確認できませんでした", description: "時間をおいて、もう一度確認してください。" })
     } finally {
       setChecking(false)
     }
-  }
-  const retryNotApplied = () => {
-    if (!checked || !summary || running) return
-    void action.start(summary.action, { kind: "ids", ids: checked.notApplied, scope: summary.target.scope }, summary.payload, { keepSummary: true })
   }
 
   // ---------------------------------------------------------------- 一覧の位置
@@ -220,7 +229,7 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
       openedIdx: (historyMarks().fdPiIdx ?? 0) + 1,
       query: q,
       position: captureListPosition({ scrollElement: mainRef.current, root: root.current, rowId }),
-      page: data.isCurrent && page && data.dataKey ? { data: page, key: data.dataKey, fetchedAt: data.fetchedAt, scope } : null,
+      page: data.isCurrent && page && data.dataKey ? { data: page, key: data.dataKey, fetchedAt: data.fetchedAt, scope: dataScope } : null,
     }
   }
   useListPositionRestore({
@@ -236,7 +245,12 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
 
   // ---------------------------------------------------------------- 詳細の Sheet
   const [open, setOpen] = useState<{ scope: string; id: string } | null>(null)
-  const openId = open && open.scope === scope ? open.id : null
+  // 権限の確認中と閲覧の権限がない間は、詳細の Sheet を表示しない（保護された内容を描画しない）
+  const viewing = viewAccess === "allowed"
+  const openId = open && open.scope === scope && viewing ? open.id : null
+  useEffect(() => {
+    if (!viewing) setOpen(null)
+  }, [viewing])
   const openRow = rows.find((r) => r.id === openId) ?? null
   const lastOpen = useRef<string | null>(null)
   if (openId) lastOpen.current = openId
@@ -370,35 +384,25 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
           </div>
 
           {summary && !isBulkFullySucceeded(summary) && (
-            <div className="flex flex-col gap-3" data-testid="bulk-result">
+            <div data-testid="bulk-result">
               <BulkResultAlert
                 summary={summary}
                 getItemLabel={nameOf}
-                retrying={running}
+                retrying={running || checking}
                 onRetryFailed={edit.allowed ? () => void action.retryFailed() : undefined}
-                // 結果が不明な行は、照会してから扱う（Registry の「最新の状態を確認」で、照会と一覧の再取得を行う）
-                onCheckLatest={summary.unknown.length > 0 && !checked ? () => void checkUnknown() : data.reload}
+                // 結果が不明な行があれば照会して反映する。なければ一覧を取得し直す（結果の矛盾の確認）
+                onCheckLatest={summary.unknown.length > 0 ? () => void checkUnknown() : data.reload}
                 onDismiss={() => {
                   action.dismiss()
-                  setChecked(null)
+                  setLookupNotice(null)
                   searchRef.current?.focus()
                 }}
               />
-              {checked && (
-                <div role="status" className="flex flex-wrap items-center gap-3 text-ui" data-testid="bulk-checked">
-                  <p>
-                    状態を確認しました：{fmt(checked.applied.length)}件は停止になっていました
-                    {checked.notApplied.length > 0 && `。${checked.notApplied.map(nameOf).join("、")}は変更されていませんでした`}。
-                  </p>
-                  {checked.notApplied.length > 0 && edit.allowed && (
-                    <Button size="sm" variant="secondary" loading={running} onClick={retryNotApplied}>
-                      変更されていなかった {fmt(checked.notApplied.length)}件を再試行
-                    </Button>
-                  )}
-                </div>
-              )}
             </div>
           )}
+          <p role="status" className="text-ui empty:hidden" data-testid="bulk-checked">
+            {lookupNotice}
+          </p>
 
           <div className="flex min-h-12 items-center" data-testid="customers-bar">
             {selection.hasSelection ? (
@@ -530,11 +534,12 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
             toast({ title: "停止にしていません", description: "一覧の状態が変わりました。選択と一覧を確かめてから、もう一度実行してください。" })
             return
           }
-          setChecked(null)
+          setLookupNotice(null)
           void action.start("停止", target, { kind: "pause" })
         }}
       >
-        {bulkTarget?.kind === "ids" && (
+        {/* 対象の名前は、閲覧の権限を確かめている間だけ示す（確認中は確認の Dialog 自体も閉じる） */}
+        {viewing && bulkTarget?.kind === "ids" && (
           <ul className="flex flex-col gap-1 text-ui" data-testid="pause-targets">
             {bulkTarget.ids.slice(0, 3).map((id) => (
               <li key={id}>{nameOf(id)}</li>
@@ -557,19 +562,17 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
           counts={{ selected: selectedIds.length, page: rows.length, results: total, all: matchingIds(ws, "", defaultListFilters).length }}
           targetOf={(s) => (s === "selected" ? JSON.stringify([...selectedIds].sort()) : s === "page" ? JSON.stringify(rows.map((r) => r.id)) : s === "results" ? JSON.stringify([q.search, q.filters]) : `all:${ws}`)}
           getRows={async (s) => {
-            // 実行の時点の権限と範囲で出す。選択がなくなった場合に、検索結果へ広げない
+            // 実行の時点の範囲で、サーバーに出力を求める（サーバーがエクスポートの権限を確かめる）。選択がなくなった場合に、検索結果へ広げない
             if (!exporting.allowed) throw new Error("forbidden")
-            const ids =
+            const target =
               s === "selected"
-                ? selection.mode === "ids"
-                  ? selection.selectedIds
-                  : []
+                ? { ids: selection.mode === "ids" ? selection.selectedIds : [] }
                 : s === "page"
-                  ? rows.map((r) => r.id)
+                  ? { ids: rows.map((r) => r.id) }
                   : s === "results"
-                    ? matchingIds(ws, q.search, q.filters)
-                    : matchingIds(ws, "", defaultListFilters)
-            return ids.map((id) => peekCustomer(ws, id)).filter((c): c is PiCustomer => c !== null).map(rowFor)
+                    ? { search: q.search, filters: q.filters }
+                    : { search: "", filters: defaultListFilters }
+            return (await exportCustomers(ws, target)).map(rowFor)
           }}
         />
       )}

@@ -9,8 +9,7 @@ import { PageHeader, PageHeaderContent, PageHeaderTitle } from "@/patterns/page-
 import { PageLayout } from "@/patterns/page-layout"
 import { RestrictedAction } from "@/patterns/restricted-action"
 
-import { importCustomers, matchingIds, peekCustomer, type ImportRow } from "../../data/patterns-integration/server"
-import { defaultListFilters } from "../../data/patterns-integration/model"
+import { importCustomers, lookupImport, type ImportRow } from "../../data/patterns-integration/server"
 import { usePi } from "./pi-context"
 import { PiBreadcrumb } from "./pi-parts"
 import { piHref } from "./pi-router"
@@ -21,6 +20,7 @@ import { piHref } from "./pi-router"
 // - 列の対応付けは、この検証画面では固定（名前、メールアドレス、プラン）。対応付けの検証は Forms & Workflows の検証画面で行う。
 
 type Outcome = { result: ImportResult; integrity: ImportIntegrity }
+let importSeq = 0
 
 function parse(text: string): ImportRow[] {
   const lines = text.replace(/^﻿/, "").split(/\r?\n/).filter((l) => l.trim() !== "")
@@ -39,6 +39,7 @@ export function ImportScreen() {
   const [outcome, setOutcome] = useState<Outcome | null>(null)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [importId, setImportId] = useState<string | null>(null)
   const edit = permit("edit")
   const targetRows = rows ? rows.map((_, i) => i + 1) : []
 
@@ -47,8 +48,11 @@ export function ImportScreen() {
     if (!permitLatest("edit")) return setError("取り込む権限がないか、オフラインのため取り込めません。")
     setRunning(true)
     setError(null)
+    // 要求の ID。応答を受け取れなかった場合も、この ID でサーバーの結果を照会する
+    const id = `import-${ws}-${++importSeq}-${Date.now()}`
+    setImportId(id)
     try {
-      const raw = await importCustomers(ws, rows)
+      const raw = await importCustomers(ws, id, rows)
       const r = reconcileImportResult({ total: rows.length, rows: targetRows }, raw)
       setOutcome({ result: r.result, integrity: r.integrity })
     } catch {
@@ -60,15 +64,26 @@ export function ImportScreen() {
     }
   }
 
-  // 状態の確認：取り込んだ行（メールアドレス）が登録されているかを、現在のワークスペースで照会する
-  const checkStatus = () => {
-    if (!rows || checking) return
+  // 状態の確認：この取り込みの要求（importId）の行ごとの結果を、現在の認可でサーバーに照会する。行の位置や内容から推測しない
+  const checkStatus = async () => {
+    if (!rows || checking || !importId) return
     setChecking(true)
-    const registered = new Set(matchingIds(ws, "", defaultListFilters).map((id) => peekCustomer(ws, id)?.email))
-    const response = { rows: rows.map((r, i) => ({ row: i + 1, outcome: registered.has(r.email) ? "created" : "failed", reason: registered.has(r.email) ? undefined : "登録されていません" })) }
-    const r = reconcileImportResult({ total: rows.length, rows: targetRows }, response)
-    setOutcome({ result: r.result, integrity: r.integrity })
-    setChecking(false)
+    try {
+      const recorded = await lookupImport(ws, importId)
+      // サーバーが要求を受け付けていない場合は、どの行も取り込んでいない（確定した失敗）
+      const response = {
+        rows: rows.map((_, i) => {
+          const r = recorded?.find((x) => x.row === i + 1)
+          return r ? { row: r.row, outcome: r.outcome, reason: r.reason } : { row: i + 1, outcome: "failed", reason: "取り込まれていません" }
+        }),
+      }
+      const r = reconcileImportResult({ total: rows.length, rows: targetRows }, response)
+      setOutcome({ result: r.result, integrity: r.integrity })
+    } catch {
+      setError("状態を確認できませんでした。時間をおいて、もう一度確認してください。")
+    } finally {
+      setChecking(false)
+    }
   }
 
   return (
@@ -111,7 +126,7 @@ export function ImportScreen() {
         )}
         {outcome ? (
           <div data-testid="import-result">
-            <ImportResultSummary result={outcome.result} integrity={outcome.integrity} retrying={checking} onCheckStatus={checkStatus} />
+            <ImportResultSummary result={outcome.result} integrity={outcome.integrity} retrying={checking} onCheckStatus={() => void checkStatus()} />
           </div>
         ) : (
           <RestrictedAction presentation={edit.presentation} reason={edit.reason ?? undefined}>

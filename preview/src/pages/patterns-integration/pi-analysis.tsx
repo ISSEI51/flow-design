@@ -86,7 +86,7 @@ function ConditionSelect({
 }
 
 export function AnalysisScreen({ params }: { params: URLSearchParams }) {
-  const { ws, scope, nav, outageSeq } = usePi()
+  const { ws, scope, dataScope, nav, outageSeq } = usePi()
   const { mainRef } = useAppShell()
   const root = useRef<HTMLDivElement>(null)
   const initialCond = conditionsFrom(params)
@@ -102,7 +102,7 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
   const summary = useBrowseData({
     query: a.key ?? "",
     enabled: a.key !== null,
-    scopeKey: scope,
+    scopeKey: dataScope,
     // 応答に、計算に使った条件（conditions）を含める。表示中の結果の条件は、この値から示す
     fetcher: (_key, { signal }) => fetchSummary(ws, cond, signal),
   })
@@ -118,11 +118,15 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
   const st = summary.status === "idle" ? "loading" : summary.status
   const stale = summary.status === "refreshing" && shown ? conditionsText(shown.conditions) : null
 
-  const [restore] = useState(() => {
+  // 描画の中では記録を読むだけにし、使い終えたことは commit の後に記録する
+  const [snapshotUsed] = useState(() => {
     const s = analysisSnapshot
-    analysisSnapshot = null
-    return params.get("back") === "1" && s && s.scope === scope && s.cond === condKey(initialCond) ? s.position : null
+    return params.get("back") === "1" && s && s.scope === scope && s.cond === condKey(initialCond) ? s : null
   })
+  useEffect(() => {
+    if (snapshotUsed && analysisSnapshot === snapshotUsed) analysisSnapshot = null
+  }, [snapshotUsed])
+  const restore = snapshotUsed?.position ?? null
   useAnalysisPositionRestore({
     position: restore,
     ready: summary.isCurrent,
@@ -219,7 +223,7 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
 
 // ---------------------------------------------------------------- 明細
 export function MetricDetailsScreen({ params }: { params: URLSearchParams }) {
-  const { ws, scope, nav } = usePi()
+  const { ws, dataScope, nav } = usePi()
   const metricParam = params.get("metric")
   const metric: MetricId = metricParam === "active" || metricParam === "paused" ? metricParam : "revenue"
   // 分析の画面で、表示中の結果の計算に使った条件（URL）をそのまま使う。見た目の文から条件を作り直さない
@@ -227,7 +231,7 @@ export function MetricDetailsScreen({ params }: { params: URLSearchParams }) {
   const wsParam = ws === "hq" ? null : ws
   const details = useBrowseData({
     query: JSON.stringify([metric, cond]),
-    scopeKey: scope,
+    scopeKey: dataScope,
     fetcher: (_k, { signal }) => fetchMetricDetails(ws, metric, cond, signal),
   })
   const list = details.data ?? []

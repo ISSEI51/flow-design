@@ -10,14 +10,18 @@ import type { CustomerValues, Permission } from "../../data/patterns-integration
 import type { PiNav } from "./pi-router"
 
 // 横断の検証画面の共有の状態（製品側のコード）。SignedInApp が値を作り、各画面が読む。
-// - scope：データの取得と操作の境界。利用者、ワークスペース、確認済みの権限の範囲を含める（権限だけが変わってもスコープが変わる）。
+// - scope：画面と操作の境界（利用者とワークスペース）。権限の再確認や、関係のない権限の変更では変えない
+//   （入力中のフォーム、実行中の一括操作と結果を作り直さない）。
+// - dataScope：取得したデータの境界。scope に閲覧の権限の有無を加える（閲覧の権限を失ったら、取得したデータを破棄する）。
+//   編集の権限の喪失は、編集のフォームの key（pi-customer.tsx）で扱う。
 // - access：useAccess の結果。保護された内容は resolveContentAccess（whileUnverified: "hide"）で、確認中は描画しない。
 // - permit：操作の可否。権限（decideAccess）と接続・障害（getMutationAvailability）を合わせて判断し、理由の文を返す。
 
 export type PiGrants = { scope: string; permissions: Permission[]; features: never[] }
 
 /** 再認証の後に復元を検討する入力（メモリだけ） */
-export type PiDraft = { userId: string; ws: string; id: string; values: CustomerValues; version: number; unconfirmed: boolean }
+/** values：期限切れの時点の入力。submitted：結果を確かめていない保存で送った値（照会に使う。なければ null） */
+export type PiDraft = { userId: string; ws: string; id: string; values: CustomerValues; submitted: CustomerValues | null; version: number; unconfirmed: boolean }
 
 export type Permit = { allowed: boolean; reason: string | null; presentation: ActionPresentation<Permission, never> }
 
@@ -25,6 +29,7 @@ export type PiContextValue = {
   user: PiUser
   ws: string
   scope: string
+  dataScope: string
   nav: PiNav
   access: AccessResult<Permission, never, PiGrants>
   /** 閲覧の可否。pending は権限の確認中（保護された内容を描画しない） */
@@ -36,8 +41,9 @@ export type PiContextValue = {
   permitLatest: (permission: Permission) => boolean
   /** 編集中のフォームが、セッションの期限切れのときに入力を渡すための登録先 */
   draftSource: MutableRefObject<null | (() => PiDraft | null)>
-  /** 再認証の後に復元すると決めた入力（1 回だけ使う） */
-  takeRestoredDraft: (ws: string, id: string) => PiDraft | null
+  /** 再認証の後に復元すると決めた入力。描画の中では読むだけにし（peek）、commit の後に使い終えたことを知らせる（consume） */
+  peekRestoredDraft: (ws: string, id: string) => PiDraft | null
+  consumeRestoredDraft: (draft: PiDraft) => void
   reportReachable: () => void
   reportFailure: () => void
   outageSeq: number
