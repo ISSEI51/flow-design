@@ -3,7 +3,7 @@
 // 使い方: node scripts/verify/summarize-log.mjs <ログのファイル>
 //
 // 出力の項目
-//   counts      Playwright の最後の集計行（passed、failed、flaky、skipped、didNotRun）。Playwright でない段階は空
+//   counts      Playwright の最後の集計行（passed、failed、flaky、skipped、interrupted、didNotRun）。Playwright でない段階は空
 //   pageErrors  preview/tests/page-errors.ts が出す "PAGE-ERRORS {...}" の行の合計
 //               （unexplained、consoleProduct は検品の失敗になるもの。environment、consoleEnvironment は記録だけ）
 //   vite        Vite の開発サーバーの出力（webServer.stdout: "pipe"）のうち、検品中に起きてはならない事象の件数
@@ -20,9 +20,9 @@ const text = readFileSync(file, "utf8")
 const lines = text.split("\n")
 
 const counts = {}
-const names = { passed: "passed", failed: "failed", flaky: "flaky", skipped: "skipped", "did not run": "didNotRun" }
+const names = { passed: "passed", failed: "failed", flaky: "flaky", skipped: "skipped", interrupted: "interrupted", "did not run": "didNotRun" }
 for (const line of lines) {
-  const m = /^\s+(\d+) (passed|failed|flaky|skipped|did not run)\b/.exec(line)
+  const m = /^\s+(\d+) (passed|failed|flaky|skipped|interrupted|did not run)\b/.exec(line)
   if (m) counts[names[m[2]]] = Number(m[1])
 }
 

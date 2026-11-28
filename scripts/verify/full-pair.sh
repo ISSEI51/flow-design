@@ -30,8 +30,11 @@
 #   <出力先>/events.log     ロックの取得・解放、各回の開始・終了（HEAD、変更の有無、負荷、電源）、待機の理由
 #   <出力先>/run<回>-<段階>.log  各段階の出力
 #
-# 判定: summary.jsonl の 12 行がすべて exit 0 で、counts に failed と flaky がなく、pageErrors の unexplained と
-#       consoleProduct が 0、anomalies がすべて 0、events.log の各回の終了で same-head=yes かつ dirty=0 であること。
+#   <出力先>/verdict.json   判定（pass か fail と、その理由）。fail の場合、このスクリプトは終了コード 1 で終わる
+#
+# 判定: summary.jsonl の 12 行がすべて exit 0 で、counts に failed、flaky、interrupted、didNotRun がなく、pageErrors の
+#       unexplained と consoleProduct が 0、anomalies がすべて 0、各回の終了で same-head=yes かつ dirty=0 であること。
+# 出力先は空のディレクトリにする（前回の記録が残っていると、判定を取り違えるため。空でなければ開始しない）。
 set -u
 if [ $# -ne 2 ]; then
   echo "usage: $0 <output-dir> <PREVIEW_TEST_PORT>" >&2
@@ -39,6 +42,10 @@ if [ $# -ne 2 ]; then
 fi
 REPO=$(git rev-parse --show-toplevel) || exit 2
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+if [ -z "${FLOW_VERIFY_LOCK_HELD:-}" ] && [ -d "$1" ] && [ -n "$(ls -A "$1" 2> /dev/null)" ]; then
+  echo "output directory is not empty: $1" >&2
+  exit 2
+fi
 mkdir -p "$1"
 OUT=$(cd "$1" && pwd)
 PORT=$2
@@ -62,8 +69,9 @@ if is_macos && command -v caffeinate > /dev/null; then
   log "caffeinate started pid=$!"
 fi
 
-# ほかの worktree の Playwright の実行（この worktree のものを除く）
-others() { ps -axo pid=,command= | grep -E "playwright(\.js)? test" | grep -v grep | grep -v "$REPO/" ; }
+# ほかの worktree の Playwright の実行（この worktree の node_modules から起動したものを除く。
+# worktree が本体のリポジトリの下にある構成でも、ほかの worktree の実行を検出する）
+others() { ps -axo pid=,command= | grep -E "playwright(\.js)? test" | grep -v grep | grep -v "$REPO/node_modules/" ; }
 dirty() { git status --porcelain | grep -v '^?? node_modules$' | wc -l | tr -d ' '; }
 power() { if is_macos; then pmset -g batt | head -1 | sed "s/Now drawing from //"; else echo n/a; fi; }
 on_ac() { if is_macos; then pmset -g batt | head -1 | grep -q "AC Power"; else return 0; fi; }
@@ -96,11 +104,19 @@ browsers=$(node -e '
     }
     process.stdout.write(JSON.stringify(out));
   })()' 2> /dev/null || echo '{}')
-os=$(if is_macos; then echo "macOS $(sw_vers -productVersion) ($(uname -sr))"; else uname -sr; fi)
-printf '{"os":"%s","arch":"%s","cpus":"%s","node":"%s","nodePath":"%s","npm":"%s","vite":"%s","playwright":"%s","browsers":%s,"workers":%d,"port":%d}\n' \
-  "$os" "$(uname -m)" "$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo '?')" "$(node -v)" "$(command -v node)" "$(npm -v)" \
-  "$(node -p 'require("vite/package.json").version')" "$(node -p 'require("@playwright/test/package.json").version')" \
-  "$browsers" "$WORKERS" "$PORT" > "$OUT/env.json"
+# JSON は node で作る（値のエスケープ）。node の配布区分（process.release.lts。LTS でない版は null）も記録する
+OS_TEXT=$(if is_macos; then echo "macOS $(sw_vers -productVersion) ($(uname -sr))"; else uname -sr; fi) \
+  BROWSERS="$browsers" WORKERS=$WORKERS PORT=$PORT node -e '
+    const { execSync } = require("node:child_process");
+    const sh = (c) => { try { return execSync(c, { encoding: "utf8" }).trim() } catch { return null } };
+    let browsers = {}; try { browsers = JSON.parse(process.env.BROWSERS) } catch {}
+    const out = {
+      os: process.env.OS_TEXT, arch: process.arch, cpus: require("node:os").cpus().length,
+      node: process.version, nodeLts: process.release.lts ?? null, nodePath: process.execPath,
+      npm: sh("npm -v"), vite: require("vite/package.json").version, playwright: require("@playwright/test/package.json").version,
+      browsers, workers: Number(process.env.WORKERS), port: Number(process.env.PORT),
+    };
+    process.stdout.write(JSON.stringify(out) + "\n");' > "$OUT/env.json"
 log "env $(cat "$OUT/env.json")"
 
 for r in 1 2; do
@@ -124,4 +140,36 @@ for r in 1 2; do
   done
   after=$(git rev-parse HEAD)
   log "run $r end head=$after dirty=$(dirty) same-head=$([ "$head" = "$after" ] && echo yes || echo no) power=$(power)"
+  printf '{"run":%d,"sameHead":%s,"dirty":%d}\n' "$r" "$([ "$head" = "$after" ] && echo true || echo false)" "$(dirty)" >> "$OUT/runs.jsonl"
 done
+
+# 判定
+node -e '
+  const fs = require("node:fs");
+  const out = process.argv[1];
+  const lines = fs.readFileSync(out + "/summary.jsonl", "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const runs = fs.readFileSync(out + "/runs.jsonl", "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const reasons = [];
+  if (lines.length !== 12) reasons.push(`steps: ${lines.length} (expected 12)`);
+  for (const l of lines) {
+    const d = l.detail ?? {};
+    const c = d.counts ?? {};
+    const where = `run ${l.run} ${l.step}`;
+    if (l.exit !== 0) reasons.push(`${where}: exit ${l.exit}`);
+    for (const k of ["failed", "flaky", "interrupted", "didNotRun"]) if (c[k]) reasons.push(`${where}: ${k} ${c[k]}`);
+    if (d.pageErrors?.unexplained) reasons.push(`${where}: unexplained page errors ${d.pageErrors.unexplained}`);
+    if (d.pageErrors?.consoleProduct) reasons.push(`${where}: product console errors ${d.pageErrors.consoleProduct}`);
+    for (const [k, v] of Object.entries(d.anomalies ?? {})) if (v) reasons.push(`${where}: ${k} ${v}`);
+  }
+  for (const r of runs) {
+    if (!r.sameHead) reasons.push(`run ${r.run}: HEAD changed during the run`);
+    if (r.dirty) reasons.push(`run ${r.run}: working tree changed (${r.dirty} entries)`);
+  }
+  const verdict = { verdict: reasons.length ? "fail" : "pass", reasons };
+  fs.writeFileSync(out + "/verdict.json", JSON.stringify(verdict) + "\n");
+  process.stdout.write(JSON.stringify(verdict) + "\n");
+  process.exit(reasons.length ? 1 : 0);
+' "$OUT"
+code=$?
+log "verdict exit=$code $(cat "$OUT/verdict.json" 2> /dev/null)"
+exit $code
