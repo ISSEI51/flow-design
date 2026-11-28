@@ -39,7 +39,7 @@ import {
 import { LoginScreen, ProductMark, SetupScreen, VerifyingScreen, needsSetup } from "./pi-account"
 import { AnalysisScreen, MetricDetailsScreen } from "./pi-analysis"
 import { contentAccessOf, makePermit, PiProvider, type PiContextValue, type PiDraft, type PiGrants } from "./pi-context"
-import { CustomerDetailScreen, CustomerEditScreen } from "./pi-customer"
+import { clearInflightSaves, CustomerDetailScreen, CustomerEditScreen } from "./pi-customer"
 import { CustomersScreen, dropListSnapshot, hasListSnapshot } from "./pi-customers"
 import { ImportScreen } from "./pi-import"
 import { NotificationsSheet, SettingsScreen, usePiFeed } from "./pi-notify"
@@ -92,8 +92,9 @@ export function PatternsIntegrationApp() {
     let notice: string | null = null
     const plan = previous ? planReauthentication({ previousUserId: previous.id, userId: user.id, previousWorkspaceId: previousWs, workspaceId: ws, hasUnconfirmedMutation: draft?.unconfirmed ?? false }) : null
     if (plan && plan.kind !== "same-user") {
-      // 別の利用者：前の利用者の入力、通知、キャッシュ、Toast を引き継がない
+      // 別の利用者：前の利用者の入力、通知、キャッシュ、Toast、結果を受け取っていない保存の記録を引き継がない
       dropListSnapshot()
+      clearInflightSaves(user.id)
       restoredDraft.current = null
       for (const t of toastsRef.current) dismiss(t.id)
     }
@@ -219,6 +220,7 @@ export function PatternsIntegrationApp() {
         onSignedOut={() => {
           logout()
           dropListSnapshot()
+          clearInflightSaves()
           for (const t of toastsRef.current) dismiss(t.id)
           setPhase({ kind: "login", returnTo: null })
         }}
@@ -408,6 +410,7 @@ function SignedInApp({
       connectivity: connectivity.status,
       health,
       permit: (p, component) => (component ? makePermit(access, connectivity.status, health(component))(p) : permitOf(p)),
+      viewAllowedLatest: () => contentAccessOf(access.latest()) === "allowed",
       permitLatest: (p) =>
         decideAccess(access.latest(), { permissions: [p] }).allowed && (p === "view" || getMutationAvailability({ connectivity: connRef.current }).allowed),
       draftSource,

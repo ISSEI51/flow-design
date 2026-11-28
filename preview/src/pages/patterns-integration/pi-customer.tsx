@@ -12,7 +12,7 @@ import { useBrowseData } from "@/patterns/browse-data"
 import { ConfirmActionDialog, useUndoableAction, type UndoHandle } from "@/patterns/confirm-action"
 import { DataRegionError } from "@/patterns/data-states"
 import { FormActions, SaveBlockerNotice, focusFormControl } from "@/patterns/form-layout"
-import { submitOnEnter, useFormState, type FormFields, type FormSaveResult } from "@/patterns/form-state"
+import { FormSaveError, submitOnEnter, useFormState, type FormFields, type FormSaveResult } from "@/patterns/form-state"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { PageLayout } from "@/patterns/page-layout"
 import { Section, SectionHeader, SectionStack, SectionTitle } from "@/patterns/section-layout"
@@ -89,16 +89,19 @@ function Missing() {
 
 // ---------------------------------------------------------------- 詳細
 export function CustomerDetailScreen({ id, params }: { id: string; params: URLSearchParams }) {
-  const { ws, scope, nav, permit, permitLatest, viewAccess, connectivity } = usePi()
+  const { ws, scope, nav, permit, permitLatest, viewAccess, connectivity, access } = usePi()
   const { toast } = useToast()
   const detail = useCustomer(id)
+  const canEdit = access.grants?.permissions.includes("edit") ?? false
   // keepPreviousData は同じレコードの取得し直しだけで前の内容を残すため、data は常にこのレコードの内容（再取得中は前回の内容）。
   // 権限の確認中と閲覧の権限がない間は、名前を含めて顧客の内容を使わない（見出し、階層、Drawer、確認の文）
   const viewing = viewAccess === "allowed"
   const c = viewing ? (detail.data ?? undefined) : undefined
   const f = fromOf(params)
   const w = ws === "hq" ? null : ws
-  const undo = useUndoableAction({ scopeKey: scope })
+  // 「元に戻す」の通知は、顧客の名前を含む。権限の確認中（閲覧を確かめていない間）と、編集の権限が変わったときは、
+  // スコープを変えて通知を閉じ、古い通知から取り消さない（useUndoableAction はスコープが変わると通知を閉じる）
+  const undo = useUndoableAction({ scopeKey: `${scope}:${canEdit ? "edit" : "read"}:${viewing ? "view" : "checking"}` })
   const edit = permit("edit")
   const del = permit("delete")
   const reasons = [...new Set([del.reason, edit.reason].filter((r): r is string => r !== null))]
@@ -119,6 +122,8 @@ export function CustomerDetailScreen({ id, params }: { id: string; params: URLSe
       perform: () => setCustomerStatus(ws, customer.id, next),
       // 取り消しの対象は、実行の結果（ワークスペースと ID）で固定する
       undo: async (res) => {
+        // 取り消しの直前に、最新の権限で確かめる（通知のボタンの表示だけに頼らない）。確定した失敗として示す
+        if (!permitLatest("edit")) throw new FormSaveError("この顧客を変更する権限がないため、元に戻していません。", "failed")
         await setCustomerStatus(res.ws, res.id, customer.status)
         detail.reload()
       },
@@ -322,12 +327,21 @@ function ContactDrawer({
   const [discard, setDiscard] = useState(false)
   const savedRef = useRef(false)
   const dirty = text.trim() !== ""
+  // 権限の確認が終わったら、確認中に示した理由を消す
+  useEffect(() => {
+    if (showName) setError((e) => (e?.startsWith("権限を確認しています") ? null : e))
+  }, [showName])
 
   // Drawer の表示中は、Registry の Drawer が、すでに表示している Toast を Drawer の面の上へずらす（--toast-offset-overlay。toast.md）。
   // この画面では位置を設定しない
 
   const save = async () => {
     if (saving || !dirty) return
+    if (!showName) {
+      // 権限の確認中：確認が終わると保存できる（確認が終わったら、この文を消す）
+      setError("権限を確認しています。確認が終わってから、もう一度保存してください。")
+      return
+    }
     if (!permitLatest("edit")) {
       setError("記録を追加する権限がないか、オフラインのため保存できません。")
       return
@@ -446,6 +460,11 @@ const valuesOf = (c: PiCustomer): CustomerValues => ({ name: c.name, email: c.em
  * 同じ顧客のフォームを開き直したときに、結果を照会するまで保存させない（前の保存が後から反映される場合がある）
  */
 const inflightSaves = new Map<string, { submitted: CustomerValues }>()
+const inflightKey = (userId: string, ws: string, id: string) => `${userId}:${ws}:${id}`
+/** 利用者が変わったとき（別の利用者でのログイン、ログアウト）に、前の利用者の記録を捨てる */
+export function clearInflightSaves(keepUserId?: string) {
+  for (const key of [...inflightSaves.keys()]) if (!keepUserId || !key.startsWith(`${keepUserId}:`)) inflightSaves.delete(key)
+}
 
 export function CustomerEditScreen({ id, params }: { id: string; params: URLSearchParams }) {
   const { ws, scope, access, viewAccess } = usePi()
@@ -493,7 +512,7 @@ export function CustomerEditScreen({ id, params }: { id: string; params: URLSear
 }
 
 function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearchParams }) {
-  const { ws, scope, nav, user, permit, permitLatest, draftSource, peekRestoredDraft, consumeRestoredDraft, connectivity } = usePi()
+  const { ws, scope, nav, user, permit, permitLatest, viewAllowedLatest, viewAccess, draftSource, peekRestoredDraft, consumeRestoredDraft, connectivity } = usePi()
   const { toast } = useToast()
   const f = fromOf(params)
   const w = ws === "hq" ? null : ws
@@ -507,7 +526,38 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
   const edit = permit("edit")
   // 保存の競合の確認に送る版。保存に成功したら、サーバーが返した版に進める（続けて保存しても、自分の保存を競合としない）
   const versionRef = useRef(customer.version)
-  const saveKey = `${ws}:${customer.id}`
+  // 権限の確認中に保存が終わった場合の、確認の後の移動
+  const [backAfterCheck, setBackAfterCheck] = useState(false)
+  useEffect(() => {
+    if (!backAfterCheck || viewAccess !== "allowed") return
+    setBackAfterCheck(false)
+    if (!nav.pending()) nav.navigate(back, { replace: true })
+  }, [backAfterCheck, viewAccess])
+  // 権限の確認中は入力欄を描画しないため、フォーカスしていた入力欄が外れる。入力欄が戻ったときに、
+  // フォーカスが <body> にある場合だけ、前にフォーカスしていた入力欄へ戻す（ほかの場所へ移した利用者の操作を奪わない）
+  const lastFocused = useRef<string | null>(null)
+  const wasHidden = useRef(false)
+  useEffect(() => {
+    if (viewAccess !== "allowed") {
+      wasHidden.current = true
+      return
+    }
+    if (!wasHidden.current) return
+    wasHidden.current = false
+    // 入力欄は、権限の確認の後の描画で戻る。描画が終わるまで数フレーム確かめ、フォーカスが <body> にある場合だけ戻す
+    let frames = 0
+    let frame = 0
+    const check = () => {
+      if (document.activeElement && document.activeElement !== document.body) return
+      const el = lastFocused.current ? document.getElementById(lastFocused.current) : null
+      if (el) el.focus()
+      else if (frames++ < 10) frame = requestAnimationFrame(check)
+    }
+    frame = requestAnimationFrame(check)
+    return () => cancelAnimationFrame(frame)
+  }, [viewAccess])
+  // 利用者ごとに分ける（別の利用者の保存の結果を、照会させたり解かせたりしない）
+  const saveKey = inflightKey(user.id, ws, customer.id)
   // 前のフォームで結果を受け取らなかった保存（描画の中では読むだけ）
   const [orphan, setOrphan] = useState(() => inflightSaves.get(saveKey) ?? null)
   // 再認証の後に復元すると決めた入力（描画の中では読むだけ。使い終えたことは effect で知らせる）
@@ -559,9 +609,13 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
         if (first) focusFormControl(`pi-edit-${first.name}`)
       },
       onSuccess: (saved, { changedWhileSaving }) => {
-        toast({ variant: "success", title: `${saved.name}を保存しました` })
+        // 権限の確認中に応答が届いた場合は、通知に顧客の名前を入れず、移動は確認が終わってから行う
+        const viewingNow = viewAllowedLatest()
+        toast({ variant: "success", title: viewingNow ? `${saved.name}を保存しました` : "顧客を保存しました" })
         // 保存中に変えた内容が残っている場合と、保存して移動の途中は、ここでは移動しない
-        if (!nav.pending() && !changedWhileSaving) nav.navigate(back, { replace: true })
+        if (nav.pending() || changedWhileSaving) return
+        if (viewingNow) nav.navigate(back, { replace: true })
+        else setBackAfterCheck(true)
       },
     }
   )
@@ -589,9 +643,14 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
       const applied = keys.every((k) => String(server[k]).trim() === String(orphan.submitted[k] ?? "").trim())
       inflightSaves.delete(saveKey)
       setOrphan(null)
-      versionRef.current = server.version
-      // 基準値をサーバーの現在の値にする（保存されていれば、その内容）
-      form.reset(valuesOf(server))
+      if (applied) {
+        // 保存されていた：基準値と版をサーバーの値にする。このフォームで入力した項目（再認証の後に戻した入力を含む）は残す
+        const edited = (Object.keys(fields) as (keyof CustomerValues)[]).filter((k) => form.isInteracted(k)).map((k) => [k, form.values[k]] as const)
+        versionRef.current = server.version
+        form.reset(valuesOf(server))
+        for (const [k, v] of edited) if (v !== server[k]) form.setValue(k, v as never)
+      }
+      // 保存されていなかった：入力も版も変えない（ほかの利用者の変更があれば、次の保存で競合として示す）
       toast({ variant: applied ? "success" : "neutral", title: applied ? "保存されていたことを確かめました" : "前の保存は反映されていませんでした" })
     } catch {
       toast({ variant: "destructive", title: "状態を確認できませんでした", description: "時間をおいて、もう一度確認してください。" })
@@ -618,7 +677,7 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
         toast({ variant: "success", title: "保存されていたことを確かめました" })
       } else {
         inflightSaves.delete(saveKey)
-        if (server) versionRef.current = server.version
+        // 保存されていなかった：版は変えない（サーバーの現在の版にすると、ほかの利用者の変更を上書きしてしまう）
         form.resolveUnknown({ saved: false })
       }
     } catch {
@@ -650,6 +709,9 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
     <form
       noValidate
       onSubmit={(e) => void save(e)}
+      onFocus={(e) => {
+        if (e.target instanceof HTMLElement && e.target.id) lastFocused.current = e.target.id
+      }}
       onKeyDown={(e) => submitOnEnter(e, () => save())}
       data-testid="edit-form"
       data-dirty={form.isDirty || undefined}
