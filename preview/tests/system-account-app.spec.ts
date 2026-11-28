@@ -937,7 +937,8 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await page.evaluate(() => {
       const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
       s.hold.access = true
-      s.simulate.grant("u-sato:hq", "audit.view")
+      // 権限の一覧が実際に変わる変更（管理者 → メンバー）。確認の後に scopeVersion が変わる
+      s.simulate.setRole("u-sato", "hq", "member")
     })
     await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
     await page.evaluate(() => {
