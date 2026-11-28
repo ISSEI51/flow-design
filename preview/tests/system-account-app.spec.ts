@@ -932,6 +932,33 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
   })
 
+  test("PERM-5: a notification delivered while permissions are re-checked is held, not inserted with the previous permission scope", async ({ page }) => {
+    await signInAs(page, sato)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.grant("u-sato:hq", "audit.view")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaNotificationsServer: { push: (w: string, p: object) => void } }).__fdSaNotificationsServer
+      s.push("hq", { title: "再確認中に届いたお知らせ", type: "mention" })
+    })
+    await settle(page)
+    await trigger(page).click()
+    const center = page.getByTestId("ntf-center")
+    await expect(center.locator("[data-notification-id=n-101]")).toBeVisible()
+    await expect(center.getByRole("button", { name: /新着.*件を表示/ })).toBeVisible()
+    await expect(center).not.toContainText("再確認中に届いたお知らせ")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 権限が変わった：新しいスコープで取得し直す（サーバーに保存された通知は、新しいスコープの取得で表示される）
+    await expect(center).toContainText("再確認中に届いたお知らせ")
+  })
+
   test("PERM-6: while permissions are re-checked, a page the previous role could not open is not shown as forbidden", async ({ page }) => {
     await signInAs(page, "misaki.tanaka@example.com")
     await go(page, "page=members&ws=hq")
