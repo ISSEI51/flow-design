@@ -234,7 +234,7 @@ UI の部品は、入力、表示、遷移、古い操作と古い応答の照�
 | 権限の再確認中の保護された情報（v0.1） | `resolveContentAccess` の既定を、確認中に保護された情報を表示しない（`hide`）にした。統合の検証画面は既定のまま使う | 認可が不明な間に機密情報を表示し続けることを、標準として保証しない（指示書 4 章）。表示を続けるかは、製品が情報の機密性で選ぶ |
 | 接続の状態の表示（統合の検証画面、v0.1） | 監視の状態を、接続（オフライン、未確認）とサービス（障害、メンテナンス）に分けて、顧客の操作と保存の条件に渡す | 初期実装は、障害とメンテナンスも「オフライン」として示していた |
 | 描画の中の状態の更新（v0.1、独立したレビューの後） | Registry の hook は、スコープの変更を描画の中の `setState` や ref の書き換えで反映しない。状態を `useScopeGuard` の値かスコープと組にして持ち、描画の中で照合する。最新の関数と値を持つ ref は、commit の後（layout effect）に更新する | commit されなかった描画（中断された transition）の中の `setState` が後から適用され、表示中のスコープの状態を初期化した（Settings の hook の検品で確かめた）。描画の中で書き換えた ref は、破棄された描画の値のまま残り、表示中のスコープの操作を止めた（`useAccess` の `latest()` の検品で確かめた） |
-| 未統合の Patterns | Forms & Workflows（Unsaved Changes、Confirmation、Multi-step Workflow、Create & Edit、Form Layout、Import & Export）と Data Analysis は読み込まず、既存の Components とプレビューの `DiscardAlert` で代替した。Patterns Integration Review で、Unsaved Changes（`UnsavedChangesProvider`、`useUnsavedChanges`、`useNavigationGuard`、`DiscardChangesAlert`）に置き換えた（下の「Patterns Integration Review での変更」）。Confirmation と Multi-step Workflow は置き換えていない | 指示書の「未統合の Patterns を独自に再実装しない」 |
+| 未統合の Patterns | Forms & Workflows（Unsaved Changes、Confirmation、Multi-step Workflow、Create & Edit、Form Layout、Import & Export）と Data Analysis は読み込まず、既存の Components とプレビューの `DiscardAlert` で代替した。Patterns Integration Review で、Unsaved Changes（`UnsavedChangesProvider`、`useUnsavedChanges`、`useNavigationGuard`、`DiscardChangesAlert`）に置き換えた（下の「Patterns Integration Review での変更」）。Confirmation は置き換えていない。Multi-step Workflow は 2 回目（`fix/pi-system2`）で置き換えた | 指示書の「未統合の Patterns を独自に再実装しない」 |
 
 ## Patterns Integration Review での変更
 
@@ -271,6 +271,28 @@ Patterns Integration Review（指示書 6 章、11 章、12.1、12.2、12.6）�
 | 接続の監視 | `useConnectedApi` で、設定とお知らせの要求の応答を `reportReachable` と `reportFailure` に報告する。接続を確認できない間は、保存と既読の更新を送らず、確定した失敗にする。接続が回復したらお知らせを取得し直す | SYS-3。設定の画面は、回復の後に取得し直さない（取得し直すと、入力中のフォームを作り直すため。結果が不明な保存は「確認する」で確かめる） | |
 | 接続の表示 | `connecting` を顧客の操作に「接続を確認しています」（`unconfirmed`）として渡す。「復旧を確認中」の Banner の文を、止めていない操作を「できません」と示さない文にした | SYS-1、SYS-2 | 復旧の確認の間、登録・更新・削除を止める案：`getMutationAvailability` の確定した仕様を変えるため採らなかった |
 
+### Patterns Integration Review の 2 回目（ブランチ `fix/pi-system2`）
+
+1 回目（`fix/pi-system`）で残した事項のうち、指示書 9.7、11.2〜11.4、11.7、12.5 に関わるものを直した。確定した仕様を変えた箇所の理由、影響、代替案は、各資料に記録した（onboarding.md、settings.md、permission-states.md、notifications.md、toast.md）。
+
+| 対象 | 変更（前 → 後） | 互換性 | 理由 |
+| --- | --- | --- | --- |
+| `access-decision.ts` の `Restriction`、`decideAccess`、`presentAction` | `unresolved` に省略可能な `missing` を追加。再確認中、再確認の失敗、`verified: false` の間、前の権限に含まれない権限が必要な操作の理由：`authorization` → `unresolved`（`missing` 付き）。`presentAction` は `missing` がある場合に認可と同じ規則で `hidden` と `disabled` を決める | 型は追加だけ。確認中の理由の `kind` と文が変わる（表示のモードは同じ）。確認済み（`ready`）の結果は変わらない | 新しいロールで許可される操作に、確認が終わるまで「権限が必要です」と示していた（PERM-6）。既存の型の値だけでは、表示のモードを保ったまま理由を変えられなかったため、`missing` を加えた |
+| プレビューの `CreateOrganizationSetup` | 独自の手順の表示（`setupStepsOf`、`moveTo`、「手順 n / m」）を `useStepFlow`、`Stepper`、`useFormState`、`handleSubmit`、`useUnsavedChanges`、`DiscardChangesAlert` に置き換えた。`setupStepsOf` は `StepDefinition` の配列を返す | props は同じ | 9.7（onboarding.md） |
+| プレビューの `useGettingStarted` | `results` に `null`（取得中）を、`resultsError`、`tasks`、`pending` を追加 | 既定は前と同じ | ONB-1、ONB-2、ONB-4。Registry には移していない（模擬の API と作業の定義に依存するプレビューの製品側の hook のため。onboarding.md の部品の表を直した。ONB-5） |
+| プレビューの `NotificationSettingsMatrix` | `onPermissionDenied` を追加。結果が不明な項目を自動で取得し直さない | 渡さない場合は権限を取り直さない | SET-6 |
+| プレビューの `requestNavigate`（`account-signed-in.tsx`） | `recheck` を追加し、結果を `"navigated" \| "cancelled" \| "blocked"` にした | 製品側のコードの内部 | NTF-3 |
+
+| 事項 | 変更 | 理由と影響 |
+| --- | --- | --- |
+| 統合の検証画面の Checklist | 製品のデータ（顧客、メンバー、処理の状況）から作業結果を作って渡す。画面のない作業（支払い方法、プロフィールの写真）を対象にしない。権限を確認できない間は Checklist を導かない | ONB-1、ONB-2。作成した直後の組織を App Shell の製品の画面に接続しないことは、プレビューの制約として記録した（ONB-3） |
+| 0 件と完了、サンプルの分離 | 変更なし。既存の検品で確かめた：`system-account-onboarding-logic.spec.ts` の `zero tasks…`、`invited member whose remaining tasks…`、`adding to the sample space…`、`sample data does not enter billing usage…`、`system-account-onboarding.spec.ts` の `sample data is not counted for billing…`、`after all tasks are done…`。統合の検証画面では `ONB-1` の検品で、閲覧者（0 件）に完了を示さないことを加えた | 11.4 |
+| タイムゾーンの正本 | 通知の設定は、個人の設定の `timezone` を使う | SET-4 |
+| 書き出しの開始できない理由 | `monitor.mutation("export").reason` ごとの文 | PERM-4 |
+| 権限の再確認中の新着 | `holdIncoming` で保留する | PERM-5 |
+| Authentication の例のセッション切れ | 保存の失敗をセッション切れとして扱うかを、セッションごとの `useScopeGuard` の Ticket で判断する（closure のセッションの ID を比べない） | AUTH-8。応答を待つ間に再認証した場合に、新しいセッションを再認証の画面に戻していた |
+| Toast の `select-none` | 変更なし。入力できる要素のフォーカスと入力を妨げないことを確かめ、検品を加えた | 12.5（toast.md） |
+
 ## 統合時に確認する事項
 
 Forms & Workflows と Data Analysis は、v0.1 の最終調整の時点（2026-11-27）では main に統合されていなかった（`origin/feat/forms-and-workflows-patterns` の `40df108`、`origin/feat/data-analysis-patterns` の `f5769d5`）。2 つのブランチは `git show` で読んだだけで、コードを持ち込んでいない（未統合の Patterns を再実装しない）。
@@ -281,7 +303,7 @@ Forms & Workflows と Data Analysis は、v0.1 の最終調整の時点（2026-1
 | --- | --- | --- |
 | Unsaved Changes | ログアウト、アカウントとワークスペースの切り替え、設定のカテゴリの移動、通知からの移動、統合の検証画面の画面の移動の確認（現在はプレビューの `DiscardAlert`）を、Unsaved Changes の部品と文言に置き換える。ブラウザの戻る操作での確認は、現在は扱っていない | 置き換えた。統合の検証画面（`account-app.tsx`、`account-signed-in.tsx`）と Settings の単独のプレビューは `UnsavedChangesProvider` を置き、設定の明示的な保存のフォームを `useUnsavedChanges` で登録する（`settings-parts.tsx` の `useSettingsFormUnsaved`）。ブラウザの戻る・進む（`hashchange`）も確認する。Dialog と Sheet の中の破棄の確認（招待、顧客の登録、通知の設定の例、Authentication の例）は `DiscardChangesAlert` に置き換えた。結果が不明な入力の文は、製品の `labels.description`（`describeUnsavedSettings`）で変える |
 | Confirmation | ロールの変更、2 段階認証の無効化、ポリシーの保存とリセット、アカウントとワークスペースの削除の確認（現在は `AlertDialog`）を置き換える。再認証とログアウトに確認を出さない方針が、Confirmation の判断基準と一致するか | 未実施。`AlertDialog` のまま（`confirm-action.tsx` は別の担当が並行して変更しているため、現在の API の確定を待つ） |
-| Multi-step Workflow | 組織の作成（`CreateOrganizationSetup`）を置き換える。手順の見出しへのフォーカス、作成の要求の ID、結果の不明の確認を保つ | 未実施。`CreateOrganizationSetup` は独自の手順の画面のまま（onboarding.md の「統合時に確認する事項」の手順で置き換える。`step-flow.ts`、`stepper.tsx`、`form-state.ts` は別の担当が並行して変更している） |
+| Multi-step Workflow | 組織の作成（`CreateOrganizationSetup`）を置き換える。手順の見出しへのフォーカス、作成の要求の ID、結果の不明の確認を保つ | 置き換えた（2 回目の `fix/pi-system2`。onboarding.md の「統合時に確認する事項」） |
 | Create & Edit、Form Layout | 認証のフォーム、設定の明示的な保存のフォーム、顧客の登録と編集の入力の検証と配置を合わせる | 未実施 |
 | Import & Export | 長時間の処理の一覧（`JobStatusList`）、Onboarding の「既存の顧客を取り込む」の完了の判定を、Import & Export の結果と照合する | 未実施 |
 | Data Analysis | 集計値と Chart で、閲覧できない対象を含めないこと、集計の取得の失敗と鮮度の表示を、その Pattern の資料にも記載する | この担当の範囲外（Data Analysis の担当が確かめる） |
