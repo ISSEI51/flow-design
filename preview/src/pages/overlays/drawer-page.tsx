@@ -147,7 +147,9 @@ function NoteDrawer() {
               </Field>
             </DrawerBody>
             <DrawerFooter>
-              {/* Drawer の表示中に、操作つきの通知（Toast）を出す例。通知を押した後も、フォーカスは Drawer の中に残る。 */}
+              {/* Drawer の表示中に、操作つきの通知（Toast）を出す例。通知を押した後も、フォーカスは Drawer の中に残る。
+                  表示中は DrawerFooter が Toast を Footer の上に表示する（--toast-offset-overlay）。下部の操作は隠れない。
+                  Drawer の中で完結する結果は、Toast ではなく Drawer の中に示す（下の「Drawer の中の結果」）。 */}
               <Button
                 type="button"
                 variant="ghost"
@@ -186,6 +188,34 @@ function NoteDrawer() {
         {status}
       </p>
     </div>
+  )
+}
+
+// Drawer の中で完結する操作の結果は、Drawer の中に示す（toast.md）。Drawer は閉じず、Toast も出さない。
+function ResendDrawer() {
+  const [result, setResult] = useState("")
+  return (
+    <Drawer onOpenChange={(open) => open && setResult("")}>
+      <DrawerTrigger render={<Button variant="secondary" data-testid="drawer-resend-trigger" />}>招待の状況</DrawerTrigger>
+      <DrawerContent data-testid="drawer-resend">
+        <DrawerHeader>
+          <DrawerTitle>招待の状況</DrawerTitle>
+          <DrawerDescription>taro.yamada@example.com（未参加）</DrawerDescription>
+        </DrawerHeader>
+        <DrawerBody>
+          {/* 読み上げの領域は常に置き、中身だけを変える */}
+          <p role="status" data-testid="drawer-resend-status" className="text-ui text-muted-foreground">
+            {result}
+          </p>
+        </DrawerBody>
+        <DrawerFooter>
+          <DrawerClose render={<Button variant="secondary" />}>閉じる</DrawerClose>
+          <Button data-testid="drawer-resend-send" onClick={() => setResult("招待のメールを再送しました（模擬）。")}>
+            招待を再送
+          </Button>
+        </DrawerFooter>
+      </DrawerContent>
+    </Drawer>
   )
 }
 
@@ -239,6 +269,15 @@ export function DrawerPage() {
       >
         <Row label="メモ">
           <NoteDrawer />
+        </Row>
+      </Section>
+
+      <Section
+        title="Drawer の中の結果"
+        lead="Drawer の中で完結する操作の結果は、Toast ではなく Drawer の中に示す。Drawer を閉じた後の結果は、閉じてから Toast や状態の文で伝える。"
+      >
+        <Row label="再送">
+          <ResendDrawer />
         </Row>
       </Section>
 
