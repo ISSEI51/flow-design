@@ -507,7 +507,7 @@ function SettingsForm<V extends FormValues>({
         <FormActions
           notice={
             <>
-              <SaveBlockerNotice id={`${id("notice" as keyof V)}`} blockers={form.blockers} hidden={form.submitting} unchanged={!form.isDirty} />
+              <SaveBlockerNotice id={`${id("notice" as keyof V)}`} blockers={form.blockers} reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : undefined} unchanged={!form.isDirty} />
               {form.isDirty && !form.submitting && form.blockers.length === 0 && <p className="text-ui text-muted-foreground">保存していない変更があります</p>}
             </>
           }

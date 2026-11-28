@@ -132,7 +132,7 @@ test.describe("async validation", { tag: "@webkit" }, () => {
 })
 
 // ------------------------------------------------------------------ Enter による送信
-type SubmitState = { submits: number; shownErrors: string[]; canSubmit: boolean; unchanged: boolean }
+type SubmitState = { submits: number; shownErrors: string[]; canSubmit: boolean; unchanged: boolean; due: string | null }
 const submitState = (page: Page) => state<SubmitState>(page, "submit-state")
 
 test.describe("Enter submission", { tag: "@webkit" }, () => {
@@ -167,6 +167,21 @@ test.describe("Enter submission", { tag: "@webkit" }, () => {
       expect(await submitState(page)).toMatchObject({ submits: 0, shownErrors: [] })
     })
   }
+
+  // D10：Components の DatePicker の文字の入力欄での Enter は、日付の確定であり、送信ではない（保存できる状態のフォームでも）。
+  // 固定の時間を待たずに確かめる：後から送信になる Enter を押し、送信の回数が 1 になることで、前の Enter が送信しなかったことを確かめる
+  test("Enter in the DatePicker text input commits the date and does not submit", async ({ page }) => {
+    await page.getByTestId("f-name").fill("山田")
+    await expect.poll(async () => (await submitState(page)).canSubmit).toBe(true)
+    const date = page.locator("#f-datepicker")
+    await date.fill("2026/12/01")
+    await date.press("Enter")
+    await expect.poll(async () => (await submitState(page)).due).toBe("2026-12-1")
+    await expect(date).toHaveValue("2026/12/01")
+    expect((await submitState(page)).submits).toBe(0)
+    await page.getByTestId("f-name").press("Enter")
+    await expect.poll(async () => (await submitState(page)).submits).toBe(1)
+  })
 
   test("Enter inside a Combobox popup and inside another Dialog does not submit", async ({ page, isMobile }) => {
     test.skip(isMobile, "ハードウェアキーボードの操作")

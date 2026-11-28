@@ -461,7 +461,7 @@ export function ContractWizard({
               <SaveBlockerNotice
                 id={noticeId}
                 blockers={stepBlockers}
-                hidden={form.composing}
+                reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}
                 goal={current === "review" ? "登録できます" : "次へ進めます"}
                 onFocusField={(name) => focusFormControl(id(name))}
                 data-testid={`${idPrefix}-notice`}

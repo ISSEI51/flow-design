@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import { DatePicker } from "@/components/ui/date-picker"
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList, ComboboxTrigger, ComboboxValue } from "@/components/ui/combobox"
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -132,7 +133,7 @@ function AsyncCase() {
 }
 
 // ---------------------------------------------------------------- Enter による送信
-type SubmitValues = { name: string; memo: string; kind: string | null; account: string | null; date: string; other: string }
+type SubmitValues = { name: string; memo: string; kind: string | null; account: string | null; date: string; due: Date | null; other: string }
 const accounts = [
   { value: "a1", label: "株式会社山田商事" },
   { value: "a2", label: "有限会社佐藤工業" },
@@ -148,12 +149,13 @@ function SubmitCase() {
       kind: { label: "種類" },
       account: { label: "取引先" },
       date: { label: "日付" },
+      due: { label: "期限" },
       other: { label: "その他" },
     }),
     []
   )
   const form = useFormState<SubmitValues>({
-    initialValues: { name: mode === "edit" ? "山田" : "", memo: "", kind: null, account: null, date: "", other: "" },
+    initialValues: { name: mode === "edit" ? "山田" : "", memo: "", kind: null, account: null, date: "", due: null, other: "" },
     fields,
     requireChanges: mode === "edit",
   })
@@ -164,7 +166,7 @@ function SubmitCase() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-2">
-        <Button size="sm" variant="secondary" data-testid="mode-edit" onClick={() => (setMode("edit"), form.reset({ name: "山田", memo: "", kind: null, account: null, date: "", other: "" }))}>
+        <Button size="sm" variant="secondary" data-testid="mode-edit" onClick={() => (setMode("edit"), form.reset({ name: "山田", memo: "", kind: null, account: null, date: "", due: null, other: "" }))}>
           編集のフォームにする
         </Button>
       </div>
@@ -207,6 +209,11 @@ function SubmitCase() {
           <Input type="date" value={form.values.date} onChange={(e) => form.setValue("date", e.target.value, { commit: true })} data-testid="f-date" />
         </Field>
         <Field>
+          <FieldLabel htmlFor="f-datepicker">期限（Date Picker）</FieldLabel>
+          {/* Components の DatePicker。文字の入力欄での Enter は日付の確定であり、送信ではない */}
+          <DatePicker id="f-datepicker" value={form.values.due} onValueChange={(d) => form.setValue("due", d, { commit: true })} />
+        </Field>
+        <Field>
           <FieldLabel>Enter で送信しない入力欄</FieldLabel>
           <Input {...form.inputProps("other")} data-submit-on-enter="false" data-testid="f-other" />
         </Field>
@@ -239,7 +246,16 @@ function SubmitCase() {
           </DialogContent>
         </Dialog>
       </form>
-      <Out testId="submit-state" value={{ submits, shownErrors: ["name"].filter((n) => form.error(n as keyof SubmitValues) !== null), canSubmit: form.canSubmit, unchanged: form.unchanged }} />
+      <Out
+        testId="submit-state"
+        value={{
+          submits,
+          shownErrors: ["name"].filter((n) => form.error(n as keyof SubmitValues) !== null),
+          canSubmit: form.canSubmit,
+          unchanged: form.unchanged,
+          due: form.values.due ? [form.values.due.getFullYear(), form.values.due.getMonth() + 1, form.values.due.getDate()].join("-") : null,
+        }}
+      />
     </div>
   )
 }

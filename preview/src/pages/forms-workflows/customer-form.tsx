@@ -487,7 +487,8 @@ export function CustomerForm({
               id={noticeId}
               data-testid={`${idPrefix}-save-notice`}
               blockers={form.blockers}
-              hidden={form.submitting || form.composing}
+              // 結果が不明、保存中、変換中も、保存ボタンの aria-describedby の参照先に理由を置く（空にしない）
+              reason={unknown ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}
               unchanged={form.unchanged}
               detail
               onFocusField={(name) => focusFormControl(id(name))}
@@ -497,7 +498,6 @@ export function CustomerForm({
                 保存中に変えた内容は、まだ保存していません
               </p>
             )}
-            {unknown && <p className="text-ui text-muted-foreground">保存されたかを確かめてから、もう一度保存できます</p>}
           </>
         }
       >

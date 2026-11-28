@@ -380,6 +380,33 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
   })
 })
 
+// H1：asyncFailure "allow" の例。入力中の確認ができなくても保存でき、保存の時にサーバーが同じ確認を行う
+test.describe("Create & Edit: asyncFailure allow", { tag: "@webkit" }, () => {
+  test("a failed check does not block inviting; the server rejects a duplicate on save; the message does not ask to check again", async ({ page }) => {
+    await page.goto("/#/create-edit")
+    await fast(page)
+    const demo = page.getByTestId("invite-demo")
+    const checkMode = page.getByRole("group", { name: "入力中の確認（模擬のサーバー）" })
+    await checkMode.getByRole("radio", { name: "通信の失敗" }).check()
+    await demo.locator("#invite-email").fill("yamada@example.com")
+    const unverified = demo.getByTestId("invite-email-unverified")
+    await expect(unverified).toHaveText("メールアドレスをいまは確かめられませんでした。保存するときに確かめます")
+    await expect(unverified).not.toContainText("もう一度確かめてください")
+    const submit = demo.getByTestId("invite-submit")
+    await enabled(submit)
+    await submit.click()
+    // 保存の時に、サーバーが招待済みかを確かめて拒否する
+    await expect(demo.locator("[data-slot=field-error]")).toContainText("yamada@example.com はすでに招待しています")
+    expect((await requests(page, "invite-member")).length).toBe(1)
+    // 確認できる状態に戻すと、招待済みでないアドレスは招待できる
+    await checkMode.getByRole("radio", { name: "成功" }).check()
+    await demo.locator("#invite-email").fill("tanaka@example.com")
+    await enabled(submit)
+    await submit.click()
+    await expect(page.locator("[data-slot=toast]", { hasText: "tanaka@example.com に招待を送りました" })).toBeVisible()
+  })
+})
+
 test.describe("Create & Edit in the app", () => {
   test("create: navigates to the created detail with focus on its heading", async ({ page }) => {
     await openApp(page, "page=customer-new")
@@ -588,6 +615,32 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
     await expect(error).toBeHidden()
     await enabled(submitOf(page, "edit"))
     await expect(page.getByTestId("forms-customer-edit")).toBeVisible()
+  })
+
+  // D5：結果が不明の間の Focusable Disabled の保存ボタンは、支援技術から理由を確かめられる。押しても保存しない
+  test("edit with an unknown result: the focusable disabled save button is described by the reason and does not save", async ({ page, isMobile }) => {
+    await openApp(page, "page=customer-edit&id=cu-1&from=list")
+    await page.locator("#edit-phone").fill("03-0000-9999")
+    await server(page, (s) => (s.saveMode = "unknown"))
+    await submitOf(page, "edit").click()
+    await expect(page.getByTestId("edit-form-error")).toBeVisible()
+    const submit = submitOf(page, "edit")
+    await disabled(submit)
+    await expect(submit).toHaveAccessibleDescription("保存されたかを確かめると保存できます")
+    await expect(page.getByTestId("edit-save-notice")).toHaveText("保存されたかを確かめると保存できます")
+    const sent = (await requests(page, "update-customer")).length
+    await submit.click({ force: true })
+    if (!isMobile) {
+      await submit.focus()
+      await expect(submit).toBeFocused()
+      await page.keyboard.press("Enter")
+      await page.keyboard.press("Space")
+    }
+    await page.locator("#edit-phone").press("Enter")
+    // 押せない保存ボタンの操作と Enter では、保存の要求を送らない（requestSubmit も handleSubmit が止める）
+    await page.evaluate(() => (document.querySelector("[data-testid=customer-edit-form] form, form[data-testid=customer-edit-form]") as HTMLFormElement | null)?.requestSubmit())
+    expect((await requests(page, "update-customer")).length).toBe(sent)
+    await disabled(submit)
   })
 
   test("edit whose response was lost after the server saved: checking confirms every sent field and returns without a dialog", async ({ page }) => {

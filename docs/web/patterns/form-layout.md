@@ -25,7 +25,7 @@
 | 必須・任意 | `FieldOptionalMark`、`FieldRequiredMark` | 少ない方に印を付け、フォームの上に凡例を置く |
 | 補足 | FieldDescription | 入力の形式や制約など、判断に必要なことだけ |
 | 操作ボタン | `FormActions` | フォームの末尾。キャンセル（Secondary）を左、保存（Primary）を右 |
-| 保存できない理由 | `SaveBlockerNotice`（`blockers`、`hidden`、`detail`、`detailLimit`、`goal`、`unchanged`、`onFocusField`） | 操作ボタンの近く。下の「保存できない理由」と [create-and-edit.md](create-and-edit.md) |
+| 保存できない理由 | `SaveBlockerNotice`（`blockers`、`hidden`、`reason`、`detail`、`detailLimit`、`goal`、`unchanged`、`onFocusField`） | 操作ボタンの近く。下の「保存できない理由」と [create-and-edit.md](create-and-edit.md) |
 | フォーカスの移動 | `focusFormControl(id)` | 理由の一覧やエラーから、該当する入力欄へ移る |
 
 ### 列とまとまり
@@ -107,8 +107,13 @@
 | 非同期の検証ができなかった項目がある（`check-failed`） | 「{項目の名前}を確かめられませんでした。確かめ直すと{goal}」。未入力や修正が必要な項目と同時の場合は、件数の文の後に「{項目の名前}を確かめられませんでした」 |
 | 非同期の検証の結果を待っている（`checking`） | 「{項目の名前}を確認しています」 |
 | 変更のない編集のフォーム（`unchanged`） | 画面には示さない。支援技術にだけ「変更がありません。変更すると保存できます」を伝える（`sr-only`） |
+| 保存の結果が不明（`reason="unknown"`） | 「保存されたかを確かめると{goal}」（画面に示す）。項目の理由は示さない |
+| 保存中（`reason="submitting"`） | 画面には示さない（保存ボタンの Loading で示す）。支援技術にだけ「保存しています」を伝える（`sr-only`） |
+| IME の変換中（`reason="composing"`） | 画面には示さない。支援技術にだけ「文字を変換しています。確定すると、入力した値を確かめます」を伝える（`sr-only`） |
 | 理由がない | 何も表示しない。要素は残し、`aria-describedby` の参照先を保つ |
-| `hidden`（保存中、変換中など） | 理由を示さない |
+| `hidden` | 理由を示さない（`reason` の文は示す） |
+
+- Focusable Disabled の保存ボタンの `aria-describedby` の参照先を空にしない。項目の理由がなく、保存の結果が不明、保存中、変換中のために押せない場合は、`reason` を渡す（例：`reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}`）。以前は `hidden={form.submitting || form.composing}` で理由を消していたため、結果が不明の間と保存中に、保存ボタンの説明が空になっていた（検品：「edit with an unknown result: the focusable disabled save button is described by the reason and does not save」）。`hidden` は互換のため残す。変更の記録：`reason` は追加の API。代替案（製品が別の要素に文を書き、`aria-describedby` に複数の id を渡す）は、製品ごとに文と参照がずれるため標準にしない。
 
 - 文は上の表の順に 1 つだけ示す。「保存できます」の部分は `goal` で変える（ステップでは「次へ進めます」）。
 - `detail` と `onFocusField` を渡すと、該当する項目へ移動するボタンを置く。理由の項目が `detailLimit`（既定 3）以下なら項目ごとに並べ（「会社名（未入力）」「顧客コード（確認できなかった）」）、超える場合は「最初の項目（会社名）へ移動」だけを置く。修正が必要な項目、確認できなかった項目、未入力と入力の途中の項目の順に並べる。
@@ -204,7 +209,7 @@ const id = (n: keyof BillingValues) => `billing-${n}`
         </FieldGroup>
       </Section>
     </SectionStack>
-    <FormActions sticky notice={<SaveBlockerNotice id="billing-notice" blockers={form.blockers} hidden={form.composing} />}>
+    <FormActions sticky notice={<SaveBlockerNotice id="billing-notice" blockers={form.blockers} reason={form.composing ? "composing" : undefined} />}>
       <Button type="button" variant="secondary" onClick={cancel}>キャンセル</Button>
       <Button type="submit" disabled={!form.canSubmit} focusableWhenDisabled aria-describedby="billing-notice">請求先を登録</Button>
     </FormActions>

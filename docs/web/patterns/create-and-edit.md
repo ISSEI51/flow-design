@@ -104,6 +104,8 @@
 | `missing` か `incomplete` と、`invalid` の両方 | 「未入力の項目が N つ、修正が必要な項目が N つあります」 |
 | `check-failed`（非同期の検証ができなかった） | 「顧客コードを確かめられませんでした。確かめ直すと保存できます」 |
 | `checking`（非同期の検証の結果を待っている） | 「顧客コードを確認しています」 |
+| 項目以外の理由（`reason`）：保存の結果が不明 | 「保存されたかを確かめると保存できます」 |
+| 項目以外の理由（`reason`）：保存中、IME の変換中 | 画面には示さず、支援技術にだけ「保存しています」「文字を変換しています。確定すると、入力した値を確かめます」 |
 
 - 文は上の表の順に 1 つだけ示す（未入力と修正が必要な項目を、確認できなかった項目と確認中の項目より先に示す）。「保存できます」の部分は `goal` で変える（ステップでは「次へ進めます」）。
 - 長いフォームでは、`detail` で該当する項目へ移動するボタンを置く。理由が 3 項目以下（`detailLimit`）なら項目ごとに並べ（「会社名（未入力）」「顧客コード（確認できなかった）」）、超える場合は「最初の項目（会社名）へ移動」だけを置く。修正が必要な項目、確認できなかった項目、未入力と入力の途中の項目の順に並べる。
@@ -133,6 +135,7 @@
 - 無効な操作が実行されないことを保証する。クリック、Enter、Space は、Base UI がボタンへのクリックを止める。フォームの送信は、送信の処理（`handleSubmit`）も条件を確かめる。検品：`forms-workflows-checks.spec.ts` の「the focusable disabled save button cannot be activated by click, Enter or Space」。
 - 保存ボタンが Focusable Disabled の間は、1 行の入力欄での Enter（ブラウザの暗黙の送信）が submit にならない。Base UI が、無効のボタンへのクリックを止めるためである。form の `onKeyDown` に `submitOnEnter` を指定する（下の「Enter による送信」）。
 - 理由を示せない場合に、Focusable Disabled で済ませない。理由の文がない Focusable Disabled のボタンは、フォーカスしても押せない理由がわからない。
+- 保存の結果が不明（`unknown`）、保存中、IME の変換中で押せない場合も、`aria-describedby` の参照先を空にしない。`SaveBlockerNotice` の `reason` を渡す（[form-layout.md](form-layout.md#保存できない理由)）。検品：`forms-workflows.spec.ts` の「edit with an unknown result: the focusable disabled save button is described by the reason and does not save」（クリック、Enter、Space、1 行の入力欄の Enter、`requestSubmit` で保存の要求を送らない）。
 
 ### Enter による送信
 
@@ -144,6 +147,7 @@
 | 修飾キー付き（Shift、Alt、Ctrl、⌘）、押し続けによる連続の入力（`repeat`）、ほかの処理が止めた Enter（`defaultPrevented`） | 意図しない送信、二重の送信を防ぐ |
 | Textarea、`contenteditable` | Enter は改行の入力である |
 | ボタン、Checkbox、Radio、File、日付と時刻の入力欄 | それぞれの部品の操作である（ボタンの Enter はボタンの実行） |
+| Date Picker と Date Range Picker の文字の入力欄（`data-slot="date-picker"`、`data-slot="date-range-picker"` の中の入力欄） | 入力した日付の確定である（部品が Enter で確定する）。確定した日付を確かめてから保存する |
 | `role` が `combobox`、`listbox`、`menu`、`grid`、`tree` の要素、`aria-haspopup` の要素、`aria-expanded="true"` の要素と、それらの中の要素（Combobox、Multi Select、Select、Date Picker、Calendar、Dropdown Menu） | 選択肢の選択、ポップアップの開閉である |
 | フォームの外の要素、フォームとは別の Dialog の中の要素（フォームの外に描画される Popover、入れ子の Dialog） | フォームとは独立した操作である |
 | 読み取り専用と無効の入力欄 | 入力できない欄からの送信を防ぐ |
@@ -152,7 +156,8 @@
 送信にする Enter（1 行の文字の入力欄：`text`、`email`、`tel`、`url`、`search`、`number`、`password`）は、`submit`（`handleSubmit` の戻り値）を呼ぶ。保存の条件は `handleSubmit` が確かめる。
 
 - 保存ボタンが押せる間は、ブラウザが 1 行の入力欄、日付と時刻、Checkbox、Radio などの Enter でフォームを送信する（暗黙の送信）。`submitOnEnter` は、送信にしない Enter のうち、この暗黙の送信の対象になる入力欄（ポップアップの部品の中の要素を除く）の Enter で `preventDefault()` を呼び、送信を止める。変換の確定の Enter と、ほかの処理が止めた Enter には触れない（ブラウザは送信しない）。
-- 例（`forms-workflows-checks.spec.ts`）：保存できる状態のフォームで、Textarea、日付、`data-submit-on-enter="false"` の入力欄、Enter を止めた入力欄の Enter は保存しない。
+- 例（`forms-workflows-checks.spec.ts`）：保存できる状態のフォームで、Textarea、日付、`data-submit-on-enter="false"` の入力欄、Enter を止めた入力欄の Enter は保存しない。Components の `DatePicker` の文字の入力欄の Enter は、日付を確定し、保存しない（「Enter in the DatePicker text input commits the date and does not submit」）。
+- Date Picker の資料（[date-picker.md](../components/date-picker.md)）の「Enter では確定してから、通常の入力欄と同じくフォームの送信を続ける」は、`submitOnEnter` を使わないフォーム（ブラウザの暗黙の送信だけのフォーム）での部品の動作である。`submitOnEnter` を指定したフォームでは、上の表のとおり送信しない。変更の記録：v0.1 の途中まで、`submitOnEnter` は Date Picker の文字の入力欄を 1 行の入力欄として扱い、送信していた（この資料の表と異なっていた）。部品（`date-picker.tsx`）は変えず、`submitOnEnter` の除外の条件に加えた。代替案（部品の Enter で `preventDefault` する）は、`submitOnEnter` を使わないフォームの既存の動作を変えるため採らない。
 
 | 状態 | Enter と `requestSubmit` の結果 |
 | --- | --- |
@@ -204,7 +209,7 @@
 - `asyncDeps(values)` には、検証が依存するほかの項目の値を返す（組織と顧客コード、国と郵便番号、プランと利用人数など）。依存する値が変わると、対象の項目の値が同じでも以前の結果を使わず、検証し直す。例：契約の登録の利用人数は、プランに依存する（ライトは 10 人、スタンダードは 100 人まで。[multi-step-workflow.md](multi-step-workflow.md)）。
 - 値やキーが変わったら、前のキーの確認を中止する（`AbortSignal`）。古いキーの応答、`reset` の後、スコープの変更の後、アンマウントの後の応答は使わない。`AbortSignal` を無視して遅れて応答する validator の結果も、キーと世代で照合して捨てる（A → B → A と値を戻した場合も、最初の A の応答で現在の A を決めない）。
 - 期限は `asyncTimeoutMs`（既定 10000ms）。期限を過ぎたら検証できなかった（`error` か `unverified`）とし、その後に届いた応答は使わない。例の顧客コードは 5000ms。
-- 文は `asyncMessage(name)` で読む。期限切れは「{label}の確認が時間内に終わりませんでした。もう一度確かめてください」、それ以外は「{label}を確かめられませんでした。通信の状態を確認して、もう一度確かめてください」。
+- 文は `asyncMessage(name)` で読む。`asyncFailure` が `"block"`（`error`）の場合、期限切れは「{label}の確認が時間内に終わりませんでした。もう一度確かめてください」、それ以外は「{label}を確かめられませんでした。通信の状態を確認して、もう一度確かめてください」。`"allow"`（`unverified`）の場合は確かめ直しを求めず、期限切れは「{label}の確認が時間内に終わりませんでした。保存するときに確かめます」、それ以外は「{label}をいまは確かめられませんでした。保存するときに確かめます」。v0.1 の途中では、`unverified` でも「もう一度確かめてください」と示していた（保存できるのに、確かめ直しが必要と誤解させた）。
 - 例：顧客コードを確かめられなかった場合は、保存ボタンの近くに「顧客コードを確かめられませんでした。確かめ直すと保存できます」、項目に理由と「もう一度確かめる」（`revalidate("code")`）を示す（`#/forms-app?page=customer-new`、「非同期の検証（顧客コードの重複）」の「通信の失敗」「応答しない」）。重複の確認はワークスペースごとに行う（九州支店には `C-0001` がない）。
 
 `asyncFailure` の選び方：
@@ -215,6 +220,8 @@
 | `"allow"` | 検証できなかった場合も保存を止めない（`unverified`）。製品が「保存するときに確かめます」などを示す | 保存の処理の中で、サーバーが必ず同じ検証を行い、検証に失敗した保存を拒否する場合だけ |
 
 - 権限や前提の条件の確認に `"allow"` を使わない。確認の API の障害の間に、確かめていない保存を通すことになる。
+- `"allow"` の利用条件：保存の処理（API）が、入力中の確認と同じ確認を必ず行い、確認に失敗した保存を拒否して、項目のエラー（`FormSaveResult` の `invalid` の `fieldErrors`）として返すこと。製品は、入力中の確認ができなかったことを項目の近くに示す（`asyncMessage`）。
+- 例：`#/create-edit` の「入力中の確認ができなかった場合（asyncFailure）」（担当者の招待。招待済みかの確認ができなくても招待でき、招待の時にサーバーが招待済みのアドレスを拒否する）。検品：「a failed check does not block inviting; the server rejects a duplicate on save; the message does not ask to check again」。
 - 初期実装（`be6972b`）では、通信の失敗を `unverified` として保存を許していた。v0.1 では既定を `"block"` にした。
 
 ### 保存中
