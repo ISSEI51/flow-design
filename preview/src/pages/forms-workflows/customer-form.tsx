@@ -215,6 +215,8 @@ export function CustomerForm({
   useUnsavedChanges({
     dirty: form.isDirty || form.status === "unknown",
     saving: form.submitting,
+    // 結果が不明の間は、確認の文を「保存されたかを確認できていません」にする（「保存されていません」と断定しない）
+    unknown: form.status === "unknown",
     label,
     revision: form.revision,
     canSave: form.canSubmit,

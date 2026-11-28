@@ -36,7 +36,12 @@ import { Button } from "@/components/ui/button"
 //   待っている間も「移動をやめる」で取り消せる（通信の障害で操作できなくならない）。
 //   待つ確認は 200ms 後に表示する（保存の直後の移動など、すぐに終わる場合は表示しない）。
 // - beforeunload は、未保存の変更か保存中の処理がある間だけ登録する。ブラウザの標準の確認が出る（文言は指定できない。
-//   ブラウザによっては、利用者がページを操作していない場合などに確認を出さない）。
+//   ブラウザによっては、利用者がページを操作していない場合などに確認を出さない）。確認を出すかは、イベントの時点の登録で判断する。
+// - 確認の表示中に確認の対象がなくなった（スコープの変更でフォームがアンマウントされた、保存が終わったなど）場合は、
+//   確認を閉じ、要求を onCancel で取り消す（移動しない。古いスコープの移動先へ移動させない）。
+// - 認可の失効、別のアカウントへの切り替え、強制のログアウト（401）では、releaseAll() で確認と beforeunload を止めてから移動する
+//   （破棄の確認で認可の失効を遅らせない）。利用者の操作による通常のログアウトは、通常の移動と同じく確かめる。
+// - 保存の結果が不明な単位（unknown）は、「保存されていません」ではなく「保存されたかを確認できていません」と示す。
 //
 // この部品が持たないもの（製品の責務）
 // - 実際の移動の阻止と再開。ルーターの移動（リンク、Sidebar）、戻る・進む（popstate、ルーターの blocker）で
@@ -47,6 +52,8 @@ type Entry = {
   label?: string
   dirty: boolean
   saving: boolean
+  /** 保存の結果が不明（保存されたかを確認できていない）。確認の文を変える */
+  unknown?: boolean
   canSave: boolean
   save?: () => Promise<boolean>
   discard?: () => void
@@ -57,6 +64,8 @@ type Entry = {
    * revision が変わる（新しい変更がある）、dirty が false になる、移動の処理が終わる（次のタスク）のいずれかで解除する
    */
   released: { revision: number | string | undefined } | null
+  /** releaseAll で確認の対象から外した。アンマウント（登録の解除）まで、確認と beforeunload の対象にしない */
+  forced: boolean
 }
 
 type NavigationRequest = {
@@ -67,11 +76,14 @@ type NavigationRequest = {
 
 // 登録の関数（変わらない）と、状態（変わる）を別の Context にする。
 // 状態が変わるたびに登録をやり直すと、「破棄した」「保存して移動した」の印（released）が消えるため。
+type EntryInput = Omit<Entry, "released" | "forced">
 type RegistryActions = {
-  register: (id: string, entry: Omit<Entry, "released">) => void
-  update: (id: string, entry: Omit<Entry, "released">) => void
+  register: (id: string, entry: EntryInput) => void
+  update: (id: string, entry: EntryInput) => void
   unregister: (id: string) => void
   confirmNavigation: (proceed: () => void, options?: { onCancel?: () => void }) => boolean
+  cancelNavigation: () => void
+  releaseAll: () => void
 }
 type RegistryState = { hasUnsavedChanges: boolean; saving: boolean; pending: boolean }
 
@@ -85,6 +97,9 @@ const defaultLabels = {
   title: "変更を破棄しますか？",
   description: (labels: string[]) =>
     labels.length ? `${labels.map((l) => `「${l}」`).join("")}の変更は保存されていません。` : "入力した内容は保存されません。",
+  /** 保存の結果が不明な単位がある場合の文（保存されたかを確認できていない。保存されていないとは言わない） */
+  unknownDescription: (labels: string[]) =>
+    `${labels.length ? `${labels.map((l) => `「${l}」`).join("")}は、` : ""}保存されたかを確認できていません。移動する前に、保存されたかを確かめてください。`,
   keepEditing: "編集を続ける",
   discard: "変更を破棄",
   saveAndLeave: "保存して移動",
@@ -111,10 +126,11 @@ function UnsavedChangesProvider({
   }, [])
   const bump = React.useCallback(() => setVersion((v) => v + 1), [])
 
-  const active = () => [...entries.current.values()]
+  // releaseAll で外した単位は、確認、保存を待つ、beforeunload のどれの対象にもしない
+  const active = () => [...entries.current.values()].filter((e) => !e.forced)
   const isReleased = (e: Entry) => e.released !== null && e.released.revision === e.revision
   const blocking = () => active().filter((e) => e.dirty && !isReleased(e))
-  const blockingIds = () => [...entries.current.entries()].filter(([, e]) => e.dirty && !isReleased(e)).map(([id]) => id)
+  const blockingIds = () => [...entries.current.entries()].filter(([, e]) => !e.forced && e.dirty && !isReleased(e)).map(([id]) => id)
   // 移動の処理（proceed）の後に、確認を省く印を解除する。移動が失敗した（画面が残った）場合も、未保存の変更を守る
   const releaseLater = React.useCallback(() => {
     window.setTimeout(() => {
@@ -131,25 +147,26 @@ function UnsavedChangesProvider({
   const anySaving = () => active().some((e) => e.saving)
 
   const register = React.useCallback(
-    (id: string, entry: Omit<Entry, "released">) => {
-      entries.current.set(id, { ...entry, released: null })
+    (id: string, entry: EntryInput) => {
+      entries.current.set(id, { ...entry, released: null, forced: false })
       bump()
     },
     [bump]
   )
   const update = React.useCallback(
-    (id: string, entry: Omit<Entry, "released">) => {
+    (id: string, entry: EntryInput) => {
       const prev = entries.current.get(id)
       if (!prev) return
       const released = prev.released && entry.dirty && prev.released.revision === entry.revision ? prev.released : null
       const changed =
         prev.dirty !== entry.dirty ||
         prev.saving !== entry.saving ||
+        prev.unknown !== entry.unknown ||
         prev.canSave !== entry.canSave ||
         prev.label !== entry.label ||
         prev.revision !== entry.revision ||
         prev.released !== released
-      entries.current.set(id, { ...entry, released })
+      entries.current.set(id, { ...entry, released, forced: prev.forced })
       if (changed) bump()
     },
     [bump]
@@ -181,6 +198,24 @@ function UnsavedChangesProvider({
     [setRequest]
   )
 
+  // 移動の要求を取り消す（確認を閉じ、onCancel を呼ぶ）。スコープ（ワークスペース、アカウント）が変わったときに製品が呼ぶ。
+  // 保存して移動の途中の場合も、移動だけを取りやめる（保存は続き、結果はフォームに示す）
+  const cancelNavigation = React.useCallback(() => {
+    const r = requestRef.current
+    if (!r) return
+    setRequest(null)
+    r.onCancel?.()
+  }, [setRequest])
+
+  // 認可の失効、別のアカウントへの切り替え、強制のログアウト：確認せずに移動できるようにする。
+  // 表示中の確認を取り消し（onCancel）、登録済みのすべての単位を、アンマウントまで確認と beforeunload の対象から外す。
+  // 値は変えない（破棄の処理を待たない）。製品は、この後すぐに移動し、フォームをアンマウントする
+  const releaseAll = React.useCallback(() => {
+    for (const e of entries.current.values()) e.forced = true
+    cancelNavigation()
+    bump()
+  }, [cancelNavigation, bump])
+
   const hasUnsavedChanges = blocking().length > 0
   const saving = anySaving()
 
@@ -194,10 +229,20 @@ function UnsavedChangesProvider({
     } else setRequest({ ...r, phase: "confirm" })
   }, [version, saving, hasUnsavedChanges, setRequest])
 
+  // 確認の表示中に、確認の対象がなくなった（フォームのアンマウント、スコープの変更、保存の完了）：確認を閉じ、要求を取り消す。
+  // 移動はしない（要求を受けた時点の移動先が、新しいスコープで正しいとは限らない）
+  React.useEffect(() => {
+    const r = requestRef.current
+    if (!r || r.phase !== "confirm" || hasUnsavedChanges) return
+    cancelNavigation()
+  }, [version, hasUnsavedChanges, request, cancelNavigation])
+
   // 再読み込み、タブを閉じる、別のサイトへの移動。必要な間だけ登録する
   React.useEffect(() => {
     if (!hasUnsavedChanges && !saving) return
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      // イベントの時点の登録で判断する（releaseAll の直後に、描画を待たずに location を変える場合も確認を出さない）
+      if (blocking().length === 0 && !anySaving()) return
       event.preventDefault()
       // 古いブラウザは returnValue の設定で確認を出す。文言は表示されない
       event.returnValue = ""
@@ -207,12 +252,7 @@ function UnsavedChangesProvider({
   }, [hasUnsavedChanges, saving])
 
   // 保存して移動の途中でも、移動はやめられる（保存は続き、結果はフォームに示す）。保存が終わらない場合に操作できなくならない
-  const cancel = () => {
-    const r = requestRef.current
-    if (!r) return
-    setRequest(null)
-    r.onCancel?.()
-  }
+  const cancel = cancelNavigation
 
   const discard = () => {
     const r = requestRef.current
@@ -228,7 +268,14 @@ function UnsavedChangesProvider({
   }
 
   const targets = blocking()
-  const canSaveAll = targets.length > 0 && targets.every((e) => e.save && e.canSave)
+  // 保存の結果が不明な単位は、保存して移動の対象にしない（再送信しない）
+  const canSaveAll = targets.length > 0 && targets.every((e) => e.save && e.canSave && !e.unknown)
+  const labelsOf = (list: Entry[]) => list.map((e) => e.label).filter((l): l is string => Boolean(l))
+  const unknownTargets = targets.filter((e) => e.unknown)
+  const knownTargets = targets.filter((e) => !e.unknown)
+  const confirmDescription = unknownTargets.length
+    ? [knownTargets.length ? labels.description(labelsOf(knownTargets)) : "", labels.unknownDescription(labelsOf(unknownTargets))].join("")
+    : labels.description(labelsOf(targets))
 
   const saveAndLeave = async () => {
     const r = requestRef.current
@@ -266,7 +313,10 @@ function UnsavedChangesProvider({
     } else latest.onCancel?.()
   }
 
-  const actions = React.useMemo<RegistryActions>(() => ({ register, update, unregister, confirmNavigation }), [register, update, unregister, confirmNavigation])
+  const actions = React.useMemo<RegistryActions>(
+    () => ({ register, update, unregister, confirmNavigation, cancelNavigation, releaseAll }),
+    [register, update, unregister, confirmNavigation, cancelNavigation, releaseAll]
+  )
   const state = React.useMemo<RegistryState>(() => ({ hasUnsavedChanges, saving, pending: request !== null }), [hasUnsavedChanges, saving, request])
 
   const waiting = request?.phase === "waiting"
@@ -294,7 +344,7 @@ function UnsavedChangesProvider({
           <AlertDialogHeader>
             <AlertDialogTitle>{waiting ? labels.waitingTitle : labels.title}</AlertDialogTitle>
             <AlertDialogDescription>
-              {waiting ? labels.waitingDescription : labels.description(targets.map((e) => e.label).filter((l): l is string => Boolean(l)))}
+              {waiting ? labels.waitingDescription : confirmDescription}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -325,6 +375,7 @@ function UnsavedChangesProvider({
 function useUnsavedChanges({
   dirty,
   saving = false,
+  unknown = false,
   label,
   canSave = true,
   revision,
@@ -333,6 +384,11 @@ function useUnsavedChanges({
 }: {
   dirty: boolean
   saving?: boolean
+  /**
+   * 保存の結果が不明（useFormState の status が "unknown"）。確認の文を「保存されたかを確認できていません」にし、
+   * 「保存して移動」の対象にしない。結果が不明の間も移動から守る場合は、dirty も true にする
+   */
+  unknown?: boolean
   /** 確認の文に示す名前（「請求先」など）。保存の単位が 1 つだけの画面では省略してよい */
   label?: string
   canSave?: boolean
@@ -354,12 +410,13 @@ function useUnsavedChanges({
       label,
       dirty,
       saving,
+      unknown,
       revision,
       canSave: canSave && Boolean(onSave),
       save: onSave ? () => handlers.current.onSave?.() ?? Promise.resolve(false) : undefined,
       discard: () => handlers.current.onDiscard?.(),
     }),
-    [label, dirty, saving, revision, canSave, onSave]
+    [label, dirty, saving, unknown, revision, canSave, onSave]
   )
   const entryRef = React.useRef(entry)
   React.useLayoutEffect(() => {
@@ -380,6 +437,10 @@ function useUnsavedChanges({
  * 製品のルーターと接続する。
  * confirmNavigation(proceed, { onCancel })：未保存の変更も保存中の処理もなければ、すぐに proceed を呼んで true を返す。
  * あれば確認を開いて false を返す。許可されたら proceed、取り消されたら onCancel を呼ぶ。
+ * cancelNavigation()：表示中の確認を閉じ、要求を onCancel で取り消す。スコープ（ワークスペース、アカウント）が変わったときに呼ぶ。
+ * releaseAll()：認可の失効、別のアカウントへの切り替え、強制のログアウトの前に呼ぶ。表示中の確認を取り消し、
+ *   登録済みのすべての単位を、アンマウントまで確認と beforeunload の対象から外す。呼んだ後に移動し、フォームをアンマウントする。
+ *   利用者の操作による通常の移動とログアウトには使わない。
  */
 function useNavigationGuard() {
   const registry = React.useContext(UnsavedChangesContext)
@@ -393,6 +454,8 @@ function useNavigationGuard() {
             /** 確認を表示している */
             pending: state.pending,
             confirmNavigation: registry.confirmNavigation,
+            cancelNavigation: registry.cancelNavigation,
+            releaseAll: registry.releaseAll,
           }
         : {
             hasUnsavedChanges: false,
@@ -402,6 +465,8 @@ function useNavigationGuard() {
               proceed()
               return true
             },
+            cancelNavigation: () => undefined,
+            releaseAll: () => undefined,
           },
     [registry, state]
   )
@@ -411,6 +476,8 @@ function useNavigationGuard() {
  * Dialog、Sheet、Drawer を閉じるときの、変更の破棄の確認。各部品の onDiscardRequest から開く。
  * 親の Overlay の中に置くと入れ子になり、Escape はこの確認だけを閉じる（入力は残る）。
  * onSave を渡すと「保存して閉じる」を加える。保存に失敗した場合は、確認を閉じて Overlay と入力を残す（製品が処理する）。
+ * unknown：保存の結果が不明（保存されたかを確認できていない）。既定の文を「保存されたかを確認できていません」にし、
+ * 「保存して閉じる」を示さない（再送信しない）。
  */
 function DiscardChangesAlert({
   open,
@@ -418,8 +485,9 @@ function DiscardChangesAlert({
   onDiscard,
   onSave,
   saving = false,
+  unknown = false,
   title = defaultLabels.title,
-  description = "入力した内容は保存されません。",
+  description = unknown ? "保存されたかを確認できていません。閉じる前に、保存されたかを確かめてください。" : "入力した内容は保存されません。",
   saveLabel = "保存して閉じる",
   ...props
 }: {
@@ -428,6 +496,7 @@ function DiscardChangesAlert({
   onDiscard: () => void
   onSave?: () => void
   saving?: boolean
+  unknown?: boolean
   title?: React.ReactNode
   description?: React.ReactNode
   saveLabel?: string
@@ -444,7 +513,7 @@ function DiscardChangesAlert({
           <AlertDialogAction variant="destructive" disabled={saving} onClick={onDiscard}>
             {defaultLabels.discard}
           </AlertDialogAction>
-          {onSave && (
+          {onSave && !unknown && (
             <Button loading={saving} onClick={onSave}>
               {saveLabel}
             </Button>

@@ -17,7 +17,8 @@ import { UnsavedChangesProvider, useNavigationGuard, useUnsavedChanges } from "@
 //   #/forms-checks?case=async    非同期の検証（依存する値、A→B→A、中止を無視する検証、非表示、reset、同期の例外、スコープ）
 //   #/forms-checks?case=submit   Enter による送信（Input、Textarea、Select、Combobox、日付、ボタン、別の Dialog、止めた Enter、押し続け）
 //   #/forms-checks?case=scope    保存、即時保存、自動保存、Undo、確認の Dialog の古い結果とスコープ
-//   #/forms-checks?case=unsaved  保存して移動（一部の失敗、保存中の入力）、移動の失敗の後の保護、新しい変更
+//   #/forms-checks?case=unsaved  保存して移動（一部の失敗、保存中の入力）、移動の失敗の後の保護、新しい変更、
+//                                確認の表示中の対象の消滅、cancelNavigation、releaseAll（認可の失効）、保存の結果が不明な単位
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void }
 function deferred<T>(): Deferred<T> {
@@ -426,8 +427,9 @@ function UnsavedUnit({ name, label, withDiscard = true }: { name: string; label:
   const save = form.handleSubmit(async (v) => (await hold<FormSaveResult<{ v: string }>>(`save-${name}`)) ?? { status: "success", values: v })
   // withDiscard が false の単位は、破棄の処理を持たない（移動するとアンマウントされる画面の状態など）。破棄しても値は残る
   useUnsavedChanges({
-    dirty: form.isDirty,
+    dirty: form.isDirty || form.status === "unknown",
     saving: form.submitting,
+    unknown: form.status === "unknown",
     label,
     revision: form.revision,
     canSave: form.canSubmit,
@@ -446,10 +448,13 @@ function UnsavedInner() {
   const guard = useNavigationGuard()
   const [page, setPage] = useState("a")
   const [log, setLog] = useState<string[]>([])
+  const [units, setUnits] = useState(true)
   const failNavigation = useRef(false)
   return (
     <div className="flex flex-col gap-4">
-      {page === "a" ? (
+      {!units ? (
+        <p>保存の単位を外した（スコープの変更の再現）</p>
+      ) : page === "a" ? (
         <>
           <UnsavedUnit name="one" label="1 つ目" />
           <UnsavedUnit name="two" label="2 つ目" />
@@ -495,6 +500,31 @@ function UnsavedInner() {
         </Button>
         <Button size="sm" variant="secondary" data-testid="fail-navigation" onClick={() => (failNavigation.current = true)}>
           次の移動を失敗させる
+        </Button>
+        {/* 確認の表示中にモーダルの背後から押す（検品は DOM から押す）。スコープの変更で、保存の単位がアンマウントされる場合の再現 */}
+        <Button size="sm" variant="secondary" data-testid="unmount-units" onClick={() => setUnits(false)}>
+          保存の単位を外す
+        </Button>
+        <Button size="sm" variant="secondary" data-testid="cancel-navigation" onClick={() => guard.cancelNavigation()}>
+          移動の確認を取り消す（cancelNavigation）
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          data-testid="release-all"
+          onClick={() => {
+            // 認可の失効：確認と beforeunload を止めてから、確認せずに移動する
+            guard.releaseAll()
+            guard.confirmNavigation(() => {
+              setPage("signed-out")
+              setLog((l) => [...l, "moved-signed-out"])
+            })
+          }}
+        >
+          認可の失効（releaseAll）
+        </Button>
+        <Button size="sm" variant="secondary" data-testid="release-only" onClick={() => guard.releaseAll()}>
+          releaseAll だけを呼ぶ（移動しない）
         </Button>
       </div>
       <Out testId="unsaved-log" value={{ log, page, hasUnsaved: guard.hasUnsavedChanges }} />

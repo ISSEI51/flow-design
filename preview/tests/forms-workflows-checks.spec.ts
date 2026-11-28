@@ -525,6 +525,82 @@ test.describe("unsaved changes and navigation", { tag: "@webkit" }, () => {
   })
 })
 
+test.describe("unsaved changes: scope change, authorization loss and unknown results", { tag: "@webkit" }, () => {
+  test.beforeEach(async ({ page }) => open(page, "unsaved"))
+
+  // D2：確認の表示中に保存の単位がなくなった（スコープの変更でアンマウントされた）場合は、確認を閉じて要求を取り消す（移動しない）
+  test("the confirmation closes without moving when its units unmount while it is shown", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await page.evaluate(() => (document.querySelector("[data-testid=unmount-units]") as HTMLButtonElement).click())
+    await expect(dialog).toBeHidden()
+    expect(await unsaved(page)).toMatchObject({ page: "a", log: ["cancelled"], hasUnsaved: false })
+  })
+
+  test("cancelNavigation closes the confirmation and calls onCancel; the input stays protected", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await page.evaluate(() => (document.querySelector("[data-testid=cancel-navigation]") as HTMLButtonElement).click())
+    await expect(dialog).toBeHidden()
+    expect(await unsaved(page)).toMatchObject({ page: "a", log: ["cancelled"], hasUnsaved: true })
+    await expect(page.getByTestId("u-one")).toHaveValue("1")
+    await page.getByTestId("go").click()
+    await expect(dialog).toBeVisible()
+  })
+
+  // D3：認可の失効では、確認を出さずに移動する。表示中の確認は取り消す
+  test("releaseAll cancels the shown confirmation and moves without asking", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await page.evaluate(() => (document.querySelector("[data-testid=release-all]") as HTMLButtonElement).click())
+    await expect(dialog).toBeHidden()
+    await expect.poll(async () => (await unsaved(page)).page).toBe("signed-out")
+    expect((await unsaved(page)).log).toEqual(["cancelled", "moved-signed-out"])
+  })
+
+  test("after releaseAll, closing the page shows no beforeunload confirmation", async ({ page }) => {
+    const dialogs: string[] = []
+    page.on("dialog", (d) => {
+      dialogs.push(d.type())
+      void d.dismiss()
+    })
+    // 利用者の操作（入力）で変更を作る。releaseAll の前は、ブラウザの確認が出る
+    await page.getByTestId("u-one").click()
+    await page.keyboard.type("1")
+    await page.close({ runBeforeUnload: true })
+    await expect.poll(() => dialogs, { timeout: 5000 }).toEqual(["beforeunload"])
+    expect(page.isClosed()).toBe(false)
+    // 登録は残っている（アンマウントしていない）が、releaseAll の後は確認の対象ではない
+    await page.getByTestId("release-only").click()
+    await expect.poll(async () => (await unsaved(page)).hasUnsaved).toBe(false)
+    await page.close({ runBeforeUnload: true })
+    await expect.poll(() => page.isClosed()).toBe(true)
+    expect(dialogs).toEqual(["beforeunload"])
+  })
+
+  // SET-2：保存の結果が不明な単位を「保存されていません」と示さない。保存して移動の対象にもしない
+  test("a unit whose save result is unknown is described as not confirmed and is not offered save and move", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await dialog.getByRole("button", { name: "保存して移動" }).click()
+    await waitCount(page, "save-one", 1)
+    await resolve(page, "save-one", { status: "unknown", formError: "保存されたかを確かめられていません" })
+    await expect(dialog).toBeHidden()
+    await page.getByTestId("go").click()
+    await expect(dialog).toContainText("「1 つ目」は、保存されたかを確認できていません。")
+    await expect(dialog).not.toContainText("保存されていません")
+    await expect(dialog.getByRole("button", { name: "保存して移動" })).toHaveCount(0)
+    await expect(dialog.getByRole("button", { name: "変更を破棄" })).toBeVisible()
+  })
+})
+
 test.describe("unsaved changes: a unit without onDiscard", { tag: "@webkit" }, () => {
   test.beforeEach(async ({ page }) => open(page, "unsaved"))
 

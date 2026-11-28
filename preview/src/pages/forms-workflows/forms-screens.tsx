@@ -444,6 +444,7 @@ function ContactSheet({
           open={confirm}
           onOpenChange={setConfirm}
           data-testid="contact-discard"
+          unknown={form.status === "unknown"}
           onDiscard={() => {
             setConfirm(false)
             form.discard()
@@ -589,7 +590,7 @@ export function AutosaveMemo({ ws = "hq" }: { ws?: string }) {
       await saveSetting("memo", v, { mode: formsServer.autosaveMode, ws })
     },
   })
-  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", label: "チームのメモ", canSave: auto.status !== "unknown", onSave: () => auto.flush() })
+  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", unknown: auto.status === "unknown", label: "チームのメモ", canSave: auto.status !== "unknown", onSave: () => auto.flush() })
   const status = {
     saved: auto.savedAt ? `${auto.savedAt.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} に保存しました` : "保存済み",
     unsaved: "入力が止まると保存します",

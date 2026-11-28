@@ -706,6 +706,50 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
     await page.getByTestId("uc-drawer-discard").getByRole("button", { name: "変更を破棄" }).click()
     await expect(page.getByTestId("uc-drawer")).toBeHidden()
   })
+
+  // D2：確認の表示中にワークスペースが変わったら、確認を閉じる。「変更を破棄」で前のワークスペースの移動先へ移動させない
+  test("a workspace change while the confirmation is shown closes it without moving to the old workspace", async ({ page, isMobile }) => {
+    await openApp(page, "page=customer-edit&id=cu-1&from=list")
+    await page.locator("#edit-phone").fill("03-0000-9999")
+    await goSidebar(page, "契約", isMobile)
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    // 別のタブでのワークスペースの切り替え（モーダルの背後のボタンのため、DOM から押す）
+    await page.evaluate(() => (document.querySelector("[data-testid=external-ws-kyushu]") as HTMLButtonElement).click())
+    await expect(page.getByTestId("forms-main")).toHaveAttribute("data-ws", "kyushu")
+    await expect(dialog).toBeHidden()
+    await expect(page.getByTestId("forms-customers")).toBeVisible()
+    expect(new URLSearchParams(page.url().split("?")[1]).get("ws")).toBe("kyushu")
+    expect(new URLSearchParams(page.url().split("?")[1]).get("page")).toBe("customers")
+  })
+
+  // D3：認可の失効では、未保存の変更を確かめずに移動し、beforeunload も出さない。利用者の操作によるログアウトは確かめる
+  test("authorization loss moves without asking and removes beforeunload; a normal sign-out still asks", async ({ page, isMobile }) => {
+    await openApp(page, "page=customer-edit&id=cu-1&from=list")
+    await page.locator("#edit-phone").click()
+    await page.keyboard.type("1")
+    if (isMobile) await page.getByRole("button", { name: "メニュー" }).first().click()
+    await page.locator("[data-slot=sidebar]").getByRole("button", { name: /佐藤/ }).click()
+    await page.getByRole("menuitem", { name: "ログアウト" }).click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole("button", { name: "編集を続ける" }).click()
+    await expect(dialog).toBeHidden()
+    await expect(page.getByTestId("forms-customer-edit")).toBeVisible()
+
+    // サーバーが 401 を返した場合の処理を再現する（狭い画面では Sidebar の Sheet が残るため、DOM から押す）
+    await page.evaluate(() => (document.querySelector("[data-testid=session-expired]") as HTMLButtonElement).click())
+    await expect(page.getByTestId("forms-signed-out")).toBeVisible()
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
+    const dialogs: string[] = []
+    page.on("dialog", (d) => {
+      dialogs.push(d.type())
+      void d.dismiss()
+    })
+    await page.close({ runBeforeUnload: true })
+    await expect.poll(() => page.isClosed()).toBe(true)
+    expect(dialogs).toEqual([])
+  })
 })
 
 // ------------------------------------------------------------------ Confirmation
