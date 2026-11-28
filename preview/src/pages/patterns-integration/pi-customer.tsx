@@ -39,7 +39,7 @@ import { piHref } from "./pi-router"
 // - どこから開いたか（from=list、from=metric と分析の条件）を URL に持ち、階層の表示と、保存の後の戻り先に使う。
 // - 「停止にする」は useUndoableAction（元に戻すの通知は、スコープが変わると閉じ、古い通知からは取り消さない）。
 // - 連絡の記録は Drawer の中のフォーム。結果は Drawer の中で伝え、成功したら Drawer を閉じてから Toast を出す。
-//   Drawer の表示中に、すでに表示している Toast があれば、--toast-offset-bottom で Drawer の上へずらす（toast.md）。
+//   Drawer の表示中に、すでに表示している Toast は、Registry の Drawer が Drawer の面の上へずらす（toast.md）。
 // - 編集：useFormState と useUnsavedChanges。保存の結果が不明な場合は、再送信せずに「状態を確認」で照会する。
 
 type From = { from: string | null; extra: Record<string, string | null> }
@@ -321,27 +321,10 @@ function ContactDrawer({
   const [error, setError] = useState<string | null>(null)
   const [discard, setDiscard] = useState(false)
   const savedRef = useRef(false)
-  // Drawer の面（Portal の中に、開いた後で描画される）。callback ref で受け取り、描画された時点で位置を測る
-  const [popup, setPopup] = useState<HTMLDivElement | null>(null)
   const dirty = text.trim() !== ""
 
-  // Drawer の表示中は、Toast の位置を Drawer の上端より上にする。Registry の DrawerFooter は Footer の高さだけ上げる
-  // （--toast-offset-overlay）。この Drawer は内容（入力欄）にも Toast を重ねないため、Drawer 全体の高さを --toast-offset-bottom に設定する
-  // （Toaster は 2 つの変数の大きい方を使う）
-  useLayoutEffect(() => {
-    const el = popup
-    if (!open || !el) return
-    const root = document.documentElement
-    // 下から開く Drawer は画面の下端に接する。開く動き（transform）の途中でも同じ値になるよう、位置ではなく高さを使う
-    const set = () => root.style.setProperty("--toast-offset-bottom", `${el.offsetHeight}px`)
-    set()
-    const ro = new ResizeObserver(set)
-    ro.observe(el)
-    return () => {
-      ro.disconnect()
-      root.style.removeProperty("--toast-offset-bottom")
-    }
-  }, [open, popup])
+  // Drawer の表示中は、Registry の Drawer が、すでに表示している Toast を Drawer の面の上へずらす（--toast-offset-overlay。toast.md）。
+  // この画面では位置を設定しない
 
   const save = async () => {
     if (saving || !dirty) return
@@ -382,7 +365,7 @@ function ContactDrawer({
           toast({ variant: "success", title: "連絡の記録を保存しました" })
         }}
       >
-        <DrawerContent ref={setPopup} data-testid="contact-drawer">
+        <DrawerContent data-testid="contact-drawer">
           <DrawerHeader>
             <DrawerTitle>連絡の記録を追加</DrawerTitle>
             <DrawerDescription>{showName ? customer.name : "権限を確認しています"}</DrawerDescription>

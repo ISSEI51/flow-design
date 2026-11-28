@@ -340,7 +340,8 @@ function UnsavedChangesProvider({
           if (!open) cancel()
         }}
       >
-        <AlertDialogContent size="sm" data-slot="unsaved-changes-dialog" data-phase={request?.phase}>
+        {/* ボタンが 3 つ（保存して移動を含む）の場合は、標準の幅にする（sm の幅では 2 つと 1 つに折り返す） */}
+        <AlertDialogContent size={!waiting && canSaveAll ? "default" : "sm"} data-slot="unsaved-changes-dialog" data-phase={request?.phase}>
           <AlertDialogHeader>
             <AlertDialogTitle>{waiting ? labels.waitingTitle : labels.title}</AlertDialogTitle>
             <AlertDialogDescription>
@@ -503,7 +504,7 @@ function DiscardChangesAlert({
 } & Omit<React.ComponentProps<typeof AlertDialogContent>, "children">) {
   return (
     <AlertDialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
-      <AlertDialogContent size="sm" data-slot="discard-changes-alert" {...props}>
+      <AlertDialogContent size={onSave && !unknown ? "default" : "sm"} data-slot="discard-changes-alert" {...props}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
