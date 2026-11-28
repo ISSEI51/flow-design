@@ -581,7 +581,7 @@ function LifecycleDemo() {
             ))}
           </DemoControls>
           <Button variant="outline" size="sm" onClick={data.reload} loading={data.status === "refreshing"}>
-            最新の状態を取得する
+            最新の情報に更新
           </Button>
         </div>
         {item ? (

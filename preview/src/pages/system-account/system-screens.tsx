@@ -1211,7 +1211,7 @@ export function BackgroundJobsPanel({
             actions={
               s === "unknown" ? (
                 <Button variant="outline" size="sm" onClick={load}>
-                  最新の状態を確認
+                  状態を確認
                 </Button>
               ) : undefined
             }
@@ -1413,11 +1413,11 @@ export function UnknownSaveExample({
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="secondary" size="sm" onClick={submit} loading={s.status === "saving"} disabled={!canSubmit || (!dirty && s.status !== "failed")}>
-          保存
+          保存する
         </Button>
         {d.saved === null && d.loadFailed && online && (
           <Button variant="outline" size="sm" onClick={loadMemo}>
-            もう一度取得
+            再試行
           </Button>
         )}
         {(s.status === "unknown" || s.status === "checking") && (
@@ -1491,10 +1491,10 @@ export function StatusPageExample({ api = systemServer, headingLevel = 3 }: { ap
         </p>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <p className="text-ui text-muted-foreground" data-testid="sys-status-updated">
-            {data ? `最終更新：${incidentTime(api, data.updatedAt)}` : state.status === "failed" ? "状態を取得できませんでした。時間をおいて、もう一度取得してください。" : ""}
+            {data ? `最終更新：${incidentTime(api, data.updatedAt)}` : state.status === "failed" ? "状態を取得できませんでした。時間をおいて、もう一度更新してください。" : ""}
           </p>
           <Button variant="outline" size="sm" onClick={load} loading={state.status === "loading" && state.data !== null}>
-            最新の状態を取得
+            最新の情報に更新
           </Button>
         </div>
       </div>

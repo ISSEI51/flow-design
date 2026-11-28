@@ -6,7 +6,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Compare, Row, Section } from "../layout/section"
 
 const variants = [
-  { variant: "default", name: "Primary", note: "最も重要な操作。1 つの操作グループに原則 1 つ", label: "変更を保存" },
+  { variant: "default", name: "Primary", note: "最も重要な操作。1 つの操作グループに原則 1 つ", label: "保存する" },
   { variant: "secondary", name: "Secondary", note: "次に重要な操作。補助操作の標準", label: "下書きを保存" },
   { variant: "outline", name: "Outline", note: "操作できる範囲を線で示す必要がある補助操作", label: "書き出す" },
   { variant: "ghost", name: "Ghost", note: "控えめな操作、繰り返し並ぶ操作", label: "編集" },
@@ -64,7 +64,7 @@ export function ButtonPage() {
         {sizes.map((s) => (
           <Row key={s.size} label={`${s.name}　${s.px}`} note={`size="${s.size}"　${s.note}`}>
             <Button data-testid={`size-${s.size}`} size={s.size}>
-              変更を保存
+              保存する
             </Button>
             <Button size={s.size} variant="outline">
               <Plus />
@@ -80,7 +80,7 @@ export function ButtonPage() {
       <Section title="状態" lead="ホバー、押下、フォーカスは、実際に操作して確認する。">
         <Row label="通常 / ホバー / 押下" note="ポインターを重ね、押して確認する">
           <Button data-testid="state-default" onClick={() => setClicks((c) => c + 1)}>
-            変更を保存
+            保存する
           </Button>
           <span className="text-ui text-muted-foreground" data-testid="click-count">
             押した回数：{clicks}
@@ -92,7 +92,7 @@ export function ButtonPage() {
         </Row>
         <Row label="無効" note="押せない理由を、近くの文字で示す">
           <Button data-testid="state-disabled" disabled onClick={() => setClicks((c) => c + 1)}>
-            変更を保存
+            保存する
           </Button>
           <span className="text-ui text-muted-foreground">必須の項目を入力すると押せる</span>
         </Row>
@@ -171,7 +171,7 @@ export function ButtonPage() {
 
       <Section title="ラベル">
         <Row label="日本語">
-          <Button>変更を保存</Button>
+          <Button>保存する</Button>
         </Row>
         <Row label="英語">
           <Button>Save changes</Button>
@@ -194,7 +194,7 @@ export function ButtonPage() {
         <Row label="フォームの操作" note="Primary は 1 つ。右端に置く">
           <div className="flex w-full justify-end gap-2">
             <Button variant="secondary">キャンセル</Button>
-            <Button>変更を保存</Button>
+            <Button>保存する</Button>
           </div>
         </Row>
         <Row label="取り消せない操作" note="結果を文章で示し、操作の名前を具体的にする">
@@ -255,14 +255,14 @@ export function ButtonPage() {
           bad={
             <>
               <Button>キャンセル</Button>
-              <Button>変更を保存</Button>
+              <Button>保存する</Button>
             </>
           }
           badNote="Primary が 2 つあり、どちらが主要な操作かわからない。"
           good={
             <>
               <Button variant="secondary">キャンセル</Button>
-              <Button>変更を保存</Button>
+              <Button>保存する</Button>
             </>
           }
           goodNote="主要な操作だけを Primary にする。"

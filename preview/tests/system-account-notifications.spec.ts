@@ -711,7 +711,7 @@ test.describe("Notification settings", () => {
     await expect(sw).toHaveAttribute("aria-readonly", "true")
     const settingsRequests = () => serverWith(page, (s) => s.requests.filter((r) => r.kind === "settings").length, null)
     const before = await settingsRequests()
-    await settings(page).getByRole("button", { name: "新しい機能のお知らせ：アプリ内の設定を確認する" }).click()
+    await settings(page).getByRole("button", { name: "新しい機能のお知らせ：アプリ内の設定が保存されたかを確認" }).click()
     // サーバーでは保存されている。確認で取得した値を表示する
     await expect(sw).toHaveAttribute("aria-checked", "false")
     await expect(settings(page).getByTestId("ntf-setting-error")).toHaveCount(0)
@@ -741,7 +741,7 @@ test.describe("Delivery state and read state", () => {
     await expect(table.getByTestId("ntf-lifecycle-task")).toContainText("対応待ち")
     await toggle(inbox(page), "n-101").click()
     await expect.poll(async () => (await stored(page, "hq")).find((n) => n.id === "n-101")!.read).toBe(true)
-    await table.getByRole("button", { name: "最新の状態を取得する" }).click()
+    await table.getByRole("button", { name: "最新の情報に更新" }).click()
     await expect(table.getByTestId("ntf-lifecycle-read")).toContainText("既読")
     await expect(table.getByTestId("ntf-delivery-email")).toContainText("送信済み（届いたかは確認できません）")
     await expect(table.getByTestId("ntf-lifecycle-task")).toContainText("対応待ち")

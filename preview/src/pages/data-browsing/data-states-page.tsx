@@ -110,7 +110,7 @@ function StatesDemo() {
           </p>
           <DataRefreshIndicator active={data.status === "refreshing"} />
           <Button variant="outline" size="sm" className="ms-auto" onClick={data.reload} disabled={data.status === "loading" || data.status === "refreshing"}>
-            再取得する
+            最新の情報に更新
           </Button>
         </div>
         {data.refreshFailed && (

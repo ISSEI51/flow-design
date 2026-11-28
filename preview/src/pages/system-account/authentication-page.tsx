@@ -1021,7 +1021,7 @@ function SessionDemo() {
             <div className="flex flex-wrap items-center gap-4">
               {canEdit && (
                 <Button onClick={save} loading={saveState === "saving"} disabled={!dirty && saveState !== "failed"} data-testid="auth-session-save">
-                  保存
+                  保存する
                 </Button>
               )}
               <AuthStatus data-testid="auth-session-message">{message}</AuthStatus>

@@ -629,7 +629,7 @@ export function SettingsScreen({ title }: { title: string }) {
               </FieldGroup>
             </Section>
             <div className="flex justify-end">
-              <Button type="submit">変更を保存</Button>
+              <Button type="submit">保存する</Button>
             </div>
           </form>
         </TabsContent>

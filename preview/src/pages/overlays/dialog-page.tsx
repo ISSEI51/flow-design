@@ -202,7 +202,7 @@ function EditCompanyDialog() {
               </Button>
               <DialogClose render={<Button variant="secondary" disabled={saving} />}>キャンセル</DialogClose>
               <Button type="submit" loading={saving} data-testid="dialog-dirty-save">
-                変更を保存
+                保存する
               </Button>
             </DialogFooter>
           </form>
@@ -415,7 +415,7 @@ export function DialogPage() {
                 <SizeBody kind={s.body} />
                 <DialogFooter>
                   <DialogClose render={<Button variant="secondary" />}>キャンセル</DialogClose>
-                  <DialogClose render={<Button />}>{s.size === "xl" ? "3 件を取り込む" : "変更を保存"}</DialogClose>
+                  <DialogClose render={<Button />}>{s.size === "xl" ? "3 件を取り込む" : "保存する"}</DialogClose>
                 </DialogFooter>
               </DialogContent>
             </Dialog>

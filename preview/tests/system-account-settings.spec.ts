@@ -270,7 +270,7 @@ test.describe("Settings: saving", () => {
     // 戻さない
     await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
     const gets = (await server(page, (s) => s.requests.filter((r) => r.kind === "get").length)) as number
-    await area(page).getByTestId("set-theme-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-theme-status").getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
     expect(await server(page, (s) => s.requests.filter((r) => r.kind === "get").length)).toBe(gets + 1)
     await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
@@ -285,7 +285,7 @@ test.describe("Settings: saving", () => {
     await expect(statusText(page, "set-profile-status")).toHaveText(UNKNOWN_FORM)
     // この模擬のサーバーでは unknown でも処理される。確認の前に、ほかの端末で元の内容に戻された状態を作る
     await server(page, (s) => s.setProfileElsewhere("u-sato", { name: "佐藤 花子", title: "営業部 マネージャー", bio: "" }))
-    await area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-profile-status").getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(statusText(page, "set-profile-status")).toHaveText("保存されていませんでした。入力した内容は残っています。")
     await expect(area(page).getByTestId("set-profile-bio")).toHaveValue("法人営業を担当しています。")
     // もう一度保存できる
@@ -508,7 +508,7 @@ test.describe("Settings: save results and server ordering", () => {
     // 確認するまで、同じ項目を送らない（古い版で送っても、また競合になる）
     await area(page).getByRole("radio", { name: "端末に合わせる" }).click({ force: true })
     expect((await requestsOf(page, "instant")).length).toBe(1)
-    await status.getByRole("button", { name: "確認する" }).click()
+    await status.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(status.getByRole("status")).toHaveText("保存されていませんでした。現在保存されている設定を表示しています。")
     await expect(area(page).getByRole("radio", { name: "ライト" })).toBeChecked()
     // 確認した版で、もう一度変更できる
@@ -539,7 +539,7 @@ test.describe("Settings: save results and server ordering", () => {
     // サーバーの版は 1（ON）。版 0 の要求は拒否され、「保存しました」とは示さない
     await expect(status).toHaveAttribute("data-state", "conflict")
     expect(await server(page, (s) => s.personalOf("u-sato").display.quietEnabled)).toBe(true)
-    await status.getByRole("button", { name: "確認する" }).click()
+    await status.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(status.getByRole("status")).toHaveText("保存されていませんでした。現在保存されている設定を表示しています。")
     await expect(sw).toBeChecked()
   })
@@ -589,7 +589,7 @@ test.describe("Settings: save results and server ordering", () => {
     // 確認するまで送らない
     await sw.click({ force: true })
     expect((await requestsOf(page, "instant")).length).toBe(2)
-    await status.getByRole("button", { name: "確認する" }).click()
+    await status.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(status.getByRole("status")).toHaveText("保存されていませんでした。現在保存されている設定を表示しています。")
     await expect(sw).toBeChecked()
   })
@@ -668,7 +668,7 @@ test.describe("Settings: save results and server ordering", () => {
     await expect(statusText(page, "set-timezone-status")).toHaveText("保存しました")
     // 確認の取得を保留する。確認中の変更も送らない
     await server(page, (s) => (s.hold.get = true))
-    await area(page).getByTestId("set-theme-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-theme-status").getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(statusText(page, "set-theme-status")).toHaveText("保存されたかを確認しています…")
     await area(page).getByRole("radio", { name: "ライト" }).click({ force: true })
     expect((await requestsOf(page, "instant")).length).toBe(2)
@@ -696,7 +696,7 @@ test.describe("Settings: save results and server ordering", () => {
     await expect(status).toHaveAttribute("data-reason", "aborted")
     await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
     expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("dark")
-    await status.getByRole("button", { name: "確認する" }).click()
+    await status.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(status.getByRole("status")).toHaveText("保存しました")
   })
 
@@ -710,7 +710,7 @@ test.describe("Settings: save results and server ordering", () => {
       "保存の応答にこの設定の値が含まれていなかったため、保存できたかを確認できませんでした。確認するまで、この設定は変更できません。"
     )
     await expect(status).toHaveAttribute("data-reason", "missing")
-    await status.getByRole("button", { name: "確認する" }).click()
+    await status.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(status.getByRole("status")).toHaveText("保存しました")
     await expect(area(page).getByRole("radio", { name: "ダーク" })).toBeChecked()
   })
@@ -756,9 +756,9 @@ test.describe("Settings: save results and server ordering", () => {
     await area(page).getByTestId("set-profile-save").click()
     await expect(statusText(page, "set-profile-status")).toHaveText(UNKNOWN_FORM)
     await area(page).getByTestId("set-profile-save").click()
-    await expect(area(page).getByTestId("set-profile-blocked")).toHaveText("前の保存の結果を確認するまで、もう一度保存できません。「確認する」で確かめてください。")
+    await expect(area(page).getByTestId("set-profile-blocked")).toHaveText("前の保存の結果を確認するまで、もう一度保存できません。「保存されたかを確認」で確かめてください。")
     expect((await requestsOf(page, "form")).length).toBe(1)
-    await area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-profile-status").getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(statusText(page, "set-profile-status")).toHaveText("保存しました")
     await expect(area(page).getByTestId("set-profile-blocked")).toHaveText("")
   })
@@ -1004,12 +1004,12 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
     await server(page, (s) => (s.outcomeQueue.form = ["unknown"]))
     await area(page).getByTestId("set-display-reset-button").click()
-    await expect(area(page).getByTestId("set-display-reset-status")).toHaveText("標準の設定に戻せたかを確認できませんでした。各項目の「確認する」で確かめてください。")
+    await expect(area(page).getByTestId("set-display-reset-status")).toHaveText("標準の設定に戻せたかを確認できませんでした。各項目の「保存されたかを確認」で確かめてください。")
     await expect(area(page).getByTestId("set-display-reset-status")).not.toContainText("変わっていません")
     await expect(statusText(page, "set-theme-status")).toHaveText(UNKNOWN_INSTANT)
     // 模擬のサーバーは unknown でも処理する
     expect(await server(page, (s) => s.personalOf("u-sato").display.theme)).toBe("system")
-    await area(page).getByTestId("set-theme-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-theme-status").getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(statusText(page, "set-theme-status")).toHaveText("保存しました")
     await expect(area(page).getByRole("radio", { name: "端末に合わせる" })).toBeChecked()
   })
@@ -1036,9 +1036,9 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await expect(area(page).getByTestId("set-profile-discard")).toBeDisabled()
     await area(page).getByTestId("set-profile-discard").click({ force: true })
     await expect(statusText(page, "set-profile-status")).toHaveText(UNKNOWN_FORM)
-    await expect(area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" })).toBeVisible()
+    await expect(area(page).getByTestId("set-profile-status").getByRole("button", { name: "保存されたかを確認" })).toBeVisible()
     await expect(area(page).getByTestId("set-profile-bio")).toHaveValue("確認前の文")
-    await area(page).getByTestId("set-profile-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-profile-status").getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(statusText(page, "set-profile-status")).toHaveText("保存しました")
     expect(await server(page, (s) => s.personalOf("u-sato").profile.bio)).toBe("確認前の文")
   })
@@ -1105,7 +1105,7 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await area(page).getByTestId("set-policy-save").click()
     await expect(page.getByTestId("set-policy-confirm")).toContainText("多要素認証を必須にする")
     expect(await server(page, (s) => s.orgOf("hq").security.requireMfa)).toBe(false)
-    await page.getByTestId("set-policy-confirm").getByRole("button", { name: "変更を保存" }).click()
+    await page.getByTestId("set-policy-confirm").getByRole("button", { name: "保存する" }).click()
     await expect(statusText(page, "set-policy-status")).toHaveText("保存しました")
     expect(await server(page, (s) => s.orgOf("hq").security.requireMfa)).toBe(true)
     await expect(area(page).getByTestId("set-policy-history")).toContainText("佐藤 花子：セキュリティのポリシーを変更しました")

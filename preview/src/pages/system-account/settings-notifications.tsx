@@ -26,7 +26,7 @@ import { notificationPolicies, notificationsApi, type NotificationsApi, type Set
 // 通知の設定（種類 × 配信チャネルの Matrix、まとめて受け取る、通知を控える時間）。製品側のコードの例。Registry には含めない。
 // 保存は Settings の即時保存（useInstantSettings）を使う：項目ごとの最新の要求だけの反映、スコープの境界、
 // 確定した失敗の戻し、結果の不明の確認、確認するまで同じ項目を送らない規則は、Settings と同じ。
-// 状態の文と確認の方法も、個人の設定（Settings）と同じにする（SET-6）：結果の不明と競合は、利用者が「確認する」を押して
+// 状態の文と確認の方法も、個人の設定（Settings）と同じにする（SET-6）：結果の不明と競合は、利用者が「保存されたかを確認」を押して
 // サーバーの値を取得する（自動では取得し直さない）。文は useInstantSettings の文（項目の名前を前に付ける）。
 // 権限不足（forbidden）は確定した失敗の文にせず、onPermissionDenied で製品が最新の権限を取り直す。
 // 区別するもの：必須の通知（無効にできない）、個人の設定（保存されている値）、組織のポリシー（使えないチャネル）、
@@ -80,7 +80,7 @@ const statusText = (label: string, status: SettingSaveState) =>
 
 /**
  * 処理されなかったことが確かな失敗（destructive）と、権限不足・競合・結果の不明（warning）を区別して示す（Settings の SettingSaveStatus と同じ）。
- * 結果の不明と競合は「確認する」でサーバーの値を取得する。同じ保存を送り直さない
+ * 結果の不明と競合は「保存されたかを確認」でサーバーの値を取得する。同じ保存を送り直さない
  */
 function StatusText({ label, status, onVerify }: { label: string; status: SettingSaveState; onVerify: () => void }) {
   const definite = status.state === "failed" || status.state === "invalid"
@@ -90,8 +90,8 @@ function StatusText({ label, status, onVerify }: { label: string; status: Settin
         {statusText(label, status)}
       </p>
       {(status.state === "unknown" || status.state === "conflict") && (
-        <Button variant="outline" size="sm" onClick={onVerify} aria-label={`${label}を確認する`} data-testid="ntf-setting-verify">
-          確認する
+        <Button variant="outline" size="sm" onClick={onVerify} aria-label={`${label}が保存されたかを確認`} data-testid="ntf-setting-verify">
+          保存されたかを確認
         </Button>
       )}
     </div>
@@ -152,7 +152,7 @@ function MatrixForm({
       // 権限不足は、前の保存の結果が不明なため結果の不明として示す場合（cause が forbidden）も、権限を取り直す（Settings と同じ）
       if (status.state === "forbidden" || (status.state === "unknown" && status.cause === "forbidden")) onPermissionDenied?.()
     },
-    // 「確認する」の結果（saved：保存されていた、failed：保存されていなかった、unknown：確かめられなかった）
+    // 「保存されたかを確認」の結果（saved：保存されていた、failed：保存されていなかった、unknown：確かめられなかった）
     onVerified: (key, status) => announce(key, status),
   })
 
