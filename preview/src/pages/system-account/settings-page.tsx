@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { UnsavedChangesProvider } from "@/patterns/unsaved-changes"
 
 import { memberships, roles, users, workspaces, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
 import type { MockOutcome } from "../../data/system-account/mock"
@@ -10,6 +11,7 @@ import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
 import { DemoControls, DemoFrame, Mock, Radio, Rules } from "../data-browsing/doc-parts"
+import { describeUnsavedSettings } from "./settings-parts"
 import { DisplaySettingsSection, ProfileSection, SettingsArea, type SettingsCategoryId, type SettingsScope } from "./settings-screens"
 
 // Patterns / System & Account / Settings の資料のページ。
@@ -209,17 +211,20 @@ function SettingsDemo({ c, setC }: { c: ServerControls; setC: (c: ServerControls
           </DemoControls>
         </div>
         <div className={narrow ? "max-w-[360px]" : undefined} data-testid="set-demo-area">
-          <SettingsArea
-            scope={scope}
-            api={settingsApi}
-            category={category}
-            onCategoryChange={setCategory}
-            hrefFor={(id) => (id ? `#/settings?category=${id}` : "#/settings")}
-            // 保存が権限不足で拒否されたら、サーバーから最新の権限を取り直す（製品の責務の例）
-            onPermissionDenied={() => setPermissions(permissionsOf(workspaceId, userId))}
-            saveContract={c.contract}
-            headingLevel={3}
-          />
+          {/* カテゴリの移動の前の確認は Unsaved Changes（Forms & Workflows）の部品で行う。製品では画面に 1 つ置く */}
+          <UnsavedChangesProvider labels={{ description: describeUnsavedSettings }}>
+            <SettingsArea
+              scope={scope}
+              api={settingsApi}
+              category={category}
+              onCategoryChange={setCategory}
+              hrefFor={(id) => (id ? `#/settings?category=${id}` : "#/settings")}
+              // 保存が権限不足で拒否されたら、サーバーから最新の権限を取り直す（製品の責務の例）
+              onPermissionDenied={() => setPermissions(permissionsOf(workspaceId, userId))}
+              saveContract={c.contract}
+              headingLevel={3}
+            />
+          </UnsavedChangesProvider>
         </div>
       </div>
     </DemoFrame>

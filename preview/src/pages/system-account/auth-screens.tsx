@@ -39,7 +39,7 @@ import {
   type SignInResult,
 } from "../../data/system-account/auth-server"
 import { MockRequestError, isAbortError } from "../../data/system-account/mock"
-import { orgSettings, workspaces } from "../../data/system-account/model"
+import { orgNameOf, orgPolicyOf } from "../../data/system-account/settings-server"
 import { ProductMark } from "../app-structure/structure-sidebar"
 
 // Authentication の画面の部品（プレビュー）。資料のページと、統合の検証画面（account-app.tsx）で使う。
@@ -96,7 +96,7 @@ export type SignInMethods = {
 }
 
 export function signInMethodsFor(org: AuthOrg, product: "password" | "magic-link" = "password"): SignInMethods {
-  const policy = orgSettings[org]
+  const policy = orgPolicyOf(org)
   if (policy.requireSso) return { password: false, providers: [], passkey: false, sso: true, magicLink: false }
   if (product === "magic-link") return { password: false, providers: [], passkey: false, sso: false, magicLink: true }
   return { password: true, providers: policy.allowSocialLogin ? ["google", "microsoft"] : [], passkey: true, sso: false, magicLink: false }
@@ -520,7 +520,7 @@ export function SignInScreen({
     )
   }
 
-  const orgName = workspaces[org].name
+  const orgName = orgNameOf(org)
   const anyAlternative = methods.passkey || methods.providers.length > 0
   return (
     <AuthLayout
@@ -1588,10 +1588,23 @@ export type ReauthScreenProps = AuthScreenLayout & {
   onAuthenticated: (userId: string) => void
   /** 保持している作業を、同じアカウントでのログインの後に復元するか（説明の文を変える） */
   keepsWork?: boolean
+  /** keepsWork が false で、保存していない入力を破棄した（復元しない）ことを知らせる。既定は false */
+  discardedInput?: boolean
   testId?: string
 }
 
-export function ReauthScreen({ api, org, user, onAuthenticated, keepsWork = true, layout = "minimal", headingLevel = 1, aside, testId = "auth-reauth" }: ReauthScreenProps) {
+export function ReauthScreen({
+  api,
+  org,
+  user,
+  onAuthenticated,
+  keepsWork = true,
+  discardedInput = false,
+  layout = "minimal",
+  headingLevel = 1,
+  aside,
+  testId = "auth-reauth",
+}: ReauthScreenProps) {
   return (
     <SignInScreen
       api={api}
@@ -1601,7 +1614,9 @@ export function ReauthScreen({ api, org, user, onAuthenticated, keepsWork = true
       description={
         keepsWork
           ? "セッションの有効期限が切れました。同じアカウントでログインすると、権限を確かめてから、保存していない入力内容を復元します。"
-          : "セッションの有効期限が切れました。続けるには、もう一度ログインしてください。"
+          : discardedInput
+            ? "セッションの有効期限が切れました。保存していない入力は破棄されました。続けるには、もう一度ログインしてください。"
+            : "セッションの有効期限が切れました。続けるには、もう一度ログインしてください。"
       }
       onAuthenticated={(userId) => onAuthenticated(userId)}
       layout={layout}

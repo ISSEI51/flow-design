@@ -61,28 +61,73 @@ export const pagePermission: Record<AccountPage, Permission | null> = {
   status: null,
 }
 
+/** 設定のカテゴリと、閲覧に必要な権限（設定の画面の settingsCategories と同じ判断） */
+const settingsCategoryPermission: Record<string, Permission | null> = {
+  profile: null,
+  display: null,
+  notifications: null,
+  security: null,
+  organization: "settings.org.view",
+  members: "members.view",
+}
+
 /**
- * 認証の後の移動先（auth-server の destinationFor が検証したパス）を、この画面の URL に変える。
- * /w/hq/home、/w/hq/customers、/w/hq/customers/C-00001、/w/hq/settings/members に対応する。
+ * 認証の後の移動先（検証したパス）を、この画面の URL に変える。
+ * /w/hq/home、/w/hq/customers、/w/hq/customers/C-00001、/w/hq/settings/members（メンバーと権限）、
+ * /w/hq/settings/category/profile（設定のカテゴリ）、/w/hq/settings、/w/hq/notifications、/w/hq/jobs、/w/hq/status に対応する。
+ * 対応しないパスは null（呼び出し側がホームへ移す）。
  */
-export function routeFromPath(path: string): Partial<AccountRoute> {
-  const m = /^\/w\/([^/?#]+)(\/[^?#]*)?/.exec(path)
-  if (!m) return { page: "home" }
+export function parseAccountPath(path: string): (Partial<AccountRoute> & { ws: string; page: AccountPage }) | null {
+  const m = /^\/w\/([^/?#]+)(\/[^?#]*)?$/.exec(path)
+  if (!m) return null
   const ws = m[1]
   const rest = m[2] ?? "/home"
   const customer = /^\/customers\/([A-Z]-\d{5})$/.exec(rest)
   if (customer) return { ws, page: "customer", id: customer[1] }
-  if (rest === "/customers") return { ws, page: "customers" }
+  const category = /^\/settings\/category\/([a-z-]+)$/.exec(rest)
+  if (category && Object.hasOwn(settingsCategoryPermission, category[1])) return { ws, page: "settings", cat: category[1] }
   if (rest === "/settings/members") return { ws, page: "members" }
-  return { ws, page: "home" }
+  const simple: Record<string, AccountPage> = {
+    "/home": "home",
+    "/customers": "customers",
+    "/settings": "settings",
+    "/notifications": "notifications",
+    "/jobs": "jobs",
+    "/status": "status",
+  }
+  return Object.hasOwn(simple, rest) ? { ws, page: simple[rest] } : null
 }
 
-/** 再認証の後に戻る位置（同じ利用者の場合だけ使う） */
+/** 認証の後の移動先（検証したパス）を、この画面の URL に変える。対応しないパスはホーム */
+export function routeFromPath(path: string): Partial<AccountRoute> {
+  const ws = /^\/w\/([^/?#]+)/.exec(path)?.[1]
+  return parseAccountPath(path) ?? (ws ? { ws, page: "home" } : { page: "home" })
+}
+
+/**
+ * 再認証の後に戻る位置（同じ利用者の場合だけ使う）。設定のカテゴリ、お知らせ、処理の状況、稼働状況も含める
+ * （含めないと、設定の画面で入力していた利用者がホームへ移り、入力が失われたことに気づきにくい）
+ */
 export function pathFromRoute(route: AccountRoute) {
-  if (route.page === "customer" && route.id) return `/w/${route.ws}/customers/${route.id}`
-  if (route.page === "customers") return `/w/${route.ws}/customers`
-  if (route.page === "members") return `/w/${route.ws}/settings/members`
-  return `/w/${route.ws}/home`
+  const base = `/w/${route.ws}`
+  if (route.page === "customer" && route.id) return `${base}/customers/${route.id}`
+  if (route.page === "customers") return `${base}/customers`
+  if (route.page === "members") return `${base}/settings/members`
+  if (route.page === "settings") return route.cat && Object.hasOwn(settingsCategoryPermission, route.cat) ? `${base}/settings/category/${route.cat}` : `${base}/settings`
+  if (route.page === "notifications" || route.page === "jobs" || route.page === "status") return `${base}/${route.page}`
+  return `${base}/home`
+}
+
+/**
+ * 認証の後の復帰先を、この利用者が開いてよいか（resolveReturnTo の isAllowed）。所属、ページの権限（pagePermission）、
+ * 設定のカテゴリの権限を、現在の認可（permissionsOf）で判断する。ページのアクセスの判断と同じ表を使う（AUTH-1、AUTH-2）。
+ */
+export function canOpenAccountPath(userId: UserId, path: string, permissionsOf: (userId: UserId, workspaceId: WorkspaceId) => readonly Permission[]) {
+  const target = parseAccountPath(path)
+  if (!target || !canEnterWorkspace(userId, target.ws)) return false
+  const permissions = permissionsOf(userId, target.ws)
+  const needed = [pagePermission[target.page], target.page === "settings" && target.cat ? settingsCategoryPermission[target.cat] : null]
+  return needed.every((p) => p === null || permissions.includes(p))
 }
 
 /** 利用者が所属しているワークスペースか。所属していないワークスペースの URL を、そのまま信頼しない */

@@ -40,7 +40,6 @@ import { TableScrollArea } from "@/patterns/table-scroll-area"
 
 import { MockRequestError, MockUnknownError } from "../../data/system-account/mock"
 import {
-  orgSettings,
   permissionLabels,
   plans,
   roles as modelRoles,
@@ -65,6 +64,7 @@ import {
   type PermissionScope,
 } from "../../data/system-account/permission-data"
 import type { AccessResponse, PermissionApi, PermissionRequestRecord, RecordResponse } from "../../data/system-account/permission-server"
+import { orgPolicyOf } from "../../data/system-account/settings-server"
 
 // Permission States の画面の部品。統合の検証画面でも使えるよう、スコープ（利用者とワークスペース）、模擬のサーバーの API、
 // コールバックを props で受け取る。模擬のサーバーの状態は持たない（permission-server.ts）。
@@ -767,7 +767,8 @@ export function OrgSecuritySettings({ scope, access }: { scope: PermissionScope;
   const content = resolveContentAccess(access, { view: ["settings.org.view"], edit: ["settings.org.edit"] })
   if (content.mode === "hidden") return null
   if (content.mode === "pending") return <p className="text-ui text-muted-foreground">{pendingText[content.status]}</p>
-  const org = orgSettings[scope.workspaceId]
+  // 組織のポリシーの正本は Settings の模擬のサーバー（保存した値を示す）
+  const org = orgPolicyOf(scope.workspaceId)
   // 表示の判断であり、操作の判断ではない。契約プランの機能だけを確かめる。
   const ssoEntitled = access.grants!.features.includes("sso")
   const ssoReason: Restriction<Permission, Feature> = { kind: "entitlement", feature: "sso", missing: [] }

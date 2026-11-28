@@ -138,6 +138,11 @@ const permissionsOf = (scope: string): Permission[] => {
   return [...roles[m.role].permissions, ...extra.filter((p) => !roles[m.role].permissions.includes(p))]
 }
 const has = (scope: string, p: Permission) => permissionsOf(scope).includes(p)
+/**
+ * 現在の認可（サーバーで保持するロールと、個別に付与した権限）。統合の検証画面の、認証の後の復帰先の判定に使う
+ * （製品では、復帰先の判定もサーバーの現在の認可で行う。ロールの初期値（model.ts）では判定しない）
+ */
+export const currentPermissionsOf = (userId: UserId, workspaceId: WorkspaceId): Permission[] => permissionsOf(`${userId}:${workspaceId}`)
 const canSeeRecord = (scope: string, c: PermissionCustomer) =>
   c.workspaceId === parse(scope).workspaceId && has(scope, "customers.view") && (c.visibleTo === null || c.visibleTo.includes(parse(scope).userId))
 const workspaceScopes = (workspaceId: WorkspaceId) => state.memberships.filter((m) => m.workspaceId === workspaceId).map((m) => scopeKeyOf(m))

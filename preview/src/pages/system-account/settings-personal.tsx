@@ -37,7 +37,7 @@ import {
   timezones,
   useOrgData,
   usePersonalData,
-  useReportDirty,
+  useSettingsFormUnsaved,
   userName,
   workspaceName,
   actionError,
@@ -443,8 +443,9 @@ function ProfileForm({ scope, api, onDirtyChange, onPermissionDenied, initial }:
     onSettled: (s) => s.state === "forbidden" && onPermissionDenied?.(),
   })
   const [showErrors, setShowErrors] = useState(false)
-  useReportDirty("profile", form.dirty, onDirtyChange)
   const nameError = form.values.name.trim() === "" ? "表示名を入力してください" : null
+  // 移動の確認の対象にする。「保存して移動」は、入力に誤りがない場合だけ示す
+  useSettingsFormUnsaved({ unit: "profile", label: "プロフィール", form, onDirtyChange, canSave: !nameError })
   const submit = (e: FormEvent) => {
     e.preventDefault()
     setShowErrors(true)

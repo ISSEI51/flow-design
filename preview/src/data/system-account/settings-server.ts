@@ -209,6 +209,30 @@ function resetStore() {
 }
 resetStore()
 
+// ---------------------------------------------------------------- 組織の設定の正本
+// 組織の名前とセキュリティのポリシーの正本は、この模擬のサーバーの orgs だけにする（model.ts の orgSettings は初期値）。
+// 認証の模擬のサーバー（auth-server.ts の多要素認証、SSO、外部アカウントの判定）と、統合の検証画面の組織名の表示は、ここから読む。
+// 保存した組織の設定が、ログインの判定と Sidebar の組織名に反映されないことがあった（Patterns Integration Review の SET-3）。
+const orgListeners = new Set<() => void>()
+let orgVersion = 0
+function notifyOrg() {
+  orgVersion++
+  for (const l of orgListeners) l()
+}
+/** 組織の設定の変更を購読する（useSyncExternalStore 用）。戻り値は購読の解除 */
+export function subscribeOrgSettings(listener: () => void) {
+  orgListeners.add(listener)
+  return () => {
+    orgListeners.delete(listener)
+  }
+}
+/** 組織の設定の版（useSyncExternalStore の getSnapshot 用） */
+export const orgSettingsVersion = () => orgVersion
+/** 現在保存されている組織の名前（正本） */
+export const orgNameOf = (workspaceId: WorkspaceId) => orgs[workspaceId].info.name
+/** 現在保存されている組織のセキュリティのポリシー（正本）。認証の模擬のサーバーが読む */
+export const orgPolicyOf = (workspaceId: WorkspaceId): SecurityPolicy => ({ ...orgs[workspaceId].security })
+
 export const settingsServer: ServerConfig & {
   reset: () => void
   /** サーバーで保持するロールを変える（画面の権限には、製品が取り直すまで反映しない） */
@@ -236,6 +260,7 @@ export const settingsServer: ServerConfig & {
   reset() {
     Object.assign(settingsServer, initialConfig())
     resetStore()
+    notifyOrg()
   },
   setRole(workspaceId: WorkspaceId, userId: UserId, role: RoleId) {
     settingsServer.roles[`${workspaceId}:${userId}`] = role
@@ -252,6 +277,7 @@ export const settingsServer: ServerConfig & {
   },
   setSecurityElsewhere(workspaceId: WorkspaceId, patch: Partial<SecurityPolicy>) {
     orgs[workspaceId].security = { ...orgs[workspaceId].security, ...patch }
+    notifyOrg()
   },
   versionOf: (itemKey: string) => versions[itemKey] ?? 0,
   heldRequests: () => held.map((h) => ({ seq: h.seq, kind: h.kind, key: h.key, value: h.value, processed: h.processed })),
@@ -508,6 +534,7 @@ export const settingsApi = {
       () => {
         authorize(workspaceId, userId, "settings.org.edit")
         orgs[workspaceId].info = { ...info }
+        notifyOrg()
         orgs[workspaceId].history.unshift({ id: `h-${++historySeq}`, by: users[userId].name, at: nowLabel(), summary: "組織の情報を変更しました" })
         settingsServer.applied.push({ scope: workspaceId, key: "info", value: info })
       },
@@ -522,6 +549,7 @@ export const settingsApi = {
         authorize(workspaceId, userId, "settings.org.edit")
         if (security.requireSso && orgs[workspaceId].plan !== "business") throw new MockRequestError("この契約プランでは使えません", "plan")
         orgs[workspaceId].security = { ...security }
+        notifyOrg()
         orgs[workspaceId].history.unshift({ id: `h-${++historySeq}`, by: users[userId].name, at: nowLabel(), summary: "セキュリティのポリシーを変更しました" })
         settingsServer.applied.push({ scope: workspaceId, key: "security", value: security })
       },
