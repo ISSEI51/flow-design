@@ -138,12 +138,29 @@ type SettingAccess = {
   editable: boolean
   /** 変更できない理由。visible が false の場合は null（理由も示さない） */
   reason: string | null
-  /** 変更できない原因 */
-  restriction: "none" | "policy" | "plan" | "permission" | "hidden"
+  /**
+   * 変更できない原因。unresolved：最新の権限を確認していない（取得中、取得の失敗、再確認中、再確認の失敗）。
+   * unresolved は v0.1 の Patterns Integration Review で追加した（既存の値は変わらない）
+   */
+  restriction: "none" | "policy" | "plan" | "permission" | "hidden" | "unresolved"
+}
+
+/** 最新の権限を確認していない状態（access-decision の AccessSnapshot の status のうち、ready 以外） */
+type SettingAccessUnresolved = "loading" | "error" | "refreshing" | "stale"
+
+const unresolvedReasons: Record<SettingAccessUnresolved, string> = {
+  loading: "権限を確認しています。確認できるまで変更できません。",
+  error: "権限を確認できませんでした。確認できるまで変更できません。",
+  refreshing: "最新の権限を確認しています。確認できるまで変更できません。",
+  stale: "最新の権限を確認できませんでした。確認できるまで変更できません。",
 }
 
 /**
- * 閲覧と変更の可否。閲覧の権限がなければ表示しない。変更できない理由は、ポリシー、契約プラン、権限の順に判断する。
+ * 閲覧と変更の可否。閲覧の権限がなければ表示しない。変更できない理由は、ポリシー、契約プラン、権限、権限の未確定の順に判断する
+ * （decideAccess と同じ順序。前の権限でも変更できない場合は、その理由を示す）。
+ * unresolved を渡すと、前の権限では変更できる場合も editable を false にする（最新の権限を確認するまで変更を許可しない）。
+ * 閲覧の可否（visible）は canView で決める。最新の権限を確認していない間に保護された値を表示するかは、
+ * resolveContentAccess（access-decision）で製品が決める（この関数は値を隠さない）。
  * 権限の判定は表示の制御であり、実際の認可はバックエンドが行う（製品の責務）。
  */
 function settingAccess({
@@ -152,6 +169,8 @@ function settingAccess({
   lockReason = null,
   planReason = null,
   noPermissionReason = "変更する権限がありません。管理者に依頼してください。",
+  unresolved = null,
+  unresolvedReason,
 }: {
   canView: boolean
   canEdit: boolean
@@ -160,11 +179,16 @@ function settingAccess({
   /** 契約プランで利用できない理由 */
   planReason?: string | null
   noPermissionReason?: string
+  /** 最新の権限を確認していない状態。確認済みの場合は null か省略（既定） */
+  unresolved?: SettingAccessUnresolved | null
+  /** unresolved の場合の理由の文（既定は日本語の例） */
+  unresolvedReason?: string
 }): SettingAccess {
   if (!canView) return { visible: false, editable: false, reason: null, restriction: "hidden" }
   if (lockReason) return { visible: true, editable: false, reason: lockReason, restriction: "policy" }
   if (planReason) return { visible: true, editable: false, reason: planReason, restriction: "plan" }
   if (!canEdit) return { visible: true, editable: false, reason: noPermissionReason, restriction: "permission" }
+  if (unresolved) return { visible: true, editable: false, reason: unresolvedReason ?? unresolvedReasons[unresolved], restriction: "unresolved" }
   return { visible: true, editable: true, reason: null, restriction: "none" }
 }
 
@@ -239,6 +263,7 @@ export type {
   ResetPlan,
   ResolvedSetting,
   SettingAccess,
+  SettingAccessUnresolved,
   SettingLayers,
   SettingSearchEntry,
   SettingSearchItem,
