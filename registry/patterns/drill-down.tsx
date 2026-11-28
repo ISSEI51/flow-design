@@ -6,6 +6,7 @@ import { ChevronRight } from "lucide-react"
 import { toDateString } from "@/lib/date"
 import type { AnalysisPeriod, Bucket, ComparisonRange, PeriodContext, ResolvedPeriod } from "@/patterns/analysis-period"
 import { isValidTimeZone, nextDayStart, zonedStartOfDay } from "@/patterns/analysis-time"
+import { watchUserInteraction } from "@/patterns/list-detail"
 import { cn } from "@/lib/utils"
 
 // Flow Design Drill-down（Patterns / Data Analysis）
@@ -260,15 +261,39 @@ function useAnalysisPositionRestore({
   onRestored?: (result: { focused: "origin" | "section" | "fallback" | "none" }) => void
 }) {
   const done = React.useRef<AnalysisPosition | null>(null)
+  // 復元の前に利用者が操作した記録（useListPositionRestore と同じ規則。フォーカスとスクロールを奪わない）
+  const cancelled = React.useRef<AnalysisPosition | null>(null)
+  const stopWatching = React.useRef<(() => void) | null>(null)
   const fallbackRef = React.useRef(fallbackFocus)
-  fallbackRef.current = fallbackFocus
   const restoredRef = React.useRef(onRestored)
-  restoredRef.current = onRestored
+  React.useLayoutEffect(() => {
+    fallbackRef.current = fallbackFocus
+    restoredRef.current = onRestored
+  })
+
+  // 記録した位置があり、まだ復元していない間は、利用者の操作（クリック、キー、ホイール、タッチ、フォーカスの移動）を監視する。
+  // 操作があれば復元を取りやめる（読み込みの間に条件を変え始めた場合などに、フォーカスとスクロールを奪わない）
+  React.useEffect(() => {
+    if (!position || done.current === position || cancelled.current === position) return
+    const stop = watchUserInteraction(() => {
+      cancelled.current = position
+      restoredRef.current?.({ focused: "none" })
+    })
+    stopWatching.current = stop
+    return () => {
+      stop()
+      if (stopWatching.current === stop) stopWatching.current = null
+    }
+  }, [position])
 
   React.useEffect(() => {
-    if (!position || !ready || done.current === position) return
+    if (!position || !ready || done.current === position || cancelled.current === position) return
     const frame = requestAnimationFrame(() => {
+      if (cancelled.current === position || done.current === position) return
       done.current = position
+      // 自分で移すフォーカスを、利用者の操作として扱わない
+      stopWatching.current?.()
+      stopWatching.current = null
       const scroller = scrollElement.current
       const area = root.current
       if (scroller) scroller.scrollTop = position.scrollTop
