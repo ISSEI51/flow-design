@@ -79,7 +79,7 @@ shadcn/ui の Base UI 版の Drawer は、Base UI の `Drawer` を使ってい�
 - 横にスクロールする要素など、スワイプさせたくない要素には `data-base-ui-swipe-ignore` を付ける（Base UI）。
 - ソフトウェアキーボードが開いたときは、Base UI の `VirtualKeyboardProvider` が、フォーカスした入力欄を表示範囲に保つ。`DrawerContent` が内部で使う。
 - 動きを減らす設定では、移動せずに表示し、開閉の時間を 0ms にする。スワイプ中は指の位置に合わせて動く。
-- `DrawerFooter` の表示中は、Toast を Footer の上に表示する（`--toast-offset-overlay`。[toast.md](toast.md)）。上から開く Drawer では行わない。Drawer の中で完結する操作の結果は、Toast ではなく Drawer の中に示す。
+- `DrawerFooter` の表示中は、Toast を Drawer の上に表示する（`--toast-offset-overlay`。下から開く Drawer は面全体の高さ、上限は画面の高さ − 9rem。[toast.md](toast.md)）。上から開く Drawer では行わない。Drawer の中で完結する操作の結果は、Toast ではなく Drawer の中に示す。
 
 ## 6. Anti-patterns
 

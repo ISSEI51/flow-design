@@ -257,6 +257,7 @@ function DrawerFooter({ className, ref, ...props }: React.ComponentProps<"div">)
 
 // ---------------------------------------------------------------- Toast との重なり
 // 画面の下に接する Footer（下から開く Drawer、下・左右の Sheet）の表示中は、Toast を Footer の上に表示する。
+// 下から開く Drawer では、Drawer の面全体の上に表示する（上限は画面の高さ − 9rem。Patterns Integration Review で変更）。
 // Footer の高さを --toast-offset-overlay に設定する（toast.tsx が --toast-offset-bottom と大きい方を使う）。
 // 画面の下に固定の操作を置く製品のコードが使う --toast-offset-bottom とは別の変数にし、互いに上書きしない。
 // 対象は、表示中の Footer のうち、Toast の表示の範囲（狭い画面では下の全幅、sm 以上では右下の 22.5rem）と横に重なるもの。
@@ -282,7 +283,12 @@ function updateToastOverlayOffset() {
     const left = side === "left" ? 0 : side === "right" ? vw - width : rect.left
     const right = side === "left" ? width : side === "right" ? vw : rect.right
     if (right <= toastLeft || left >= toastRight) continue
-    offset = Math.max(offset, el.offsetHeight)
+    // 下から開く Drawer は、Footer だけでなく Drawer の面全体を避ける（入力欄も Toast に隠れないようにする）。
+    // Toast が画面の外に出ないよう、画面の高さから Toast の表示に必要な高さ（9rem）を引いた値を上限にする。
+    // 上限を超える高い Drawer では、Toast が Drawer の上端の付近に重なる（操作の Footer と入力欄の大部分は隠れない）
+    const surface = side === "bottom" ? el.closest<HTMLElement>("[data-slot=drawer-popup]") : null
+    const height = surface ? Math.min(surface.offsetHeight, Math.max(el.offsetHeight, window.innerHeight - 9 * rem)) : el.offsetHeight
+    offset = Math.max(offset, height)
   }
   if (offset > 0) root.style.setProperty("--toast-offset-overlay", `${offset}px`)
   else root.style.removeProperty("--toast-offset-overlay")
@@ -297,6 +303,9 @@ function useToastOverlayOffset(ref: React.RefObject<HTMLElement | null>, sideOf:
     updateToastOverlayOffset()
     const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateToastOverlayOffset)
     ro?.observe(el)
+    // 下から開く Drawer の面の高さの変化（入力による伸縮、ソフトウェアキーボード）も反映する
+    const surface = el.closest<HTMLElement>("[data-slot=drawer-popup]")
+    if (surface) ro?.observe(surface)
     window.addEventListener("resize", updateToastOverlayOffset)
     return () => {
       ro?.disconnect()

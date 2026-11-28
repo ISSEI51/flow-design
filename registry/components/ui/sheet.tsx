@@ -286,7 +286,12 @@ function updateToastOverlayOffset() {
     const left = side === "left" ? 0 : side === "right" ? vw - width : rect.left
     const right = side === "left" ? width : side === "right" ? vw : rect.right
     if (right <= toastLeft || left >= toastRight) continue
-    offset = Math.max(offset, el.offsetHeight)
+    // 下から開く Drawer は、Footer だけでなく Drawer の面全体を避ける（入力欄も Toast に隠れないようにする）。
+    // Toast が画面の外に出ないよう、画面の高さから Toast の表示に必要な高さ（9rem）を引いた値を上限にする。
+    // 上限を超える高い Drawer では、Toast が Drawer の上端の付近に重なる（操作の Footer と入力欄の大部分は隠れない）
+    const surface = side === "bottom" ? el.closest<HTMLElement>("[data-slot=drawer-popup]") : null
+    const height = surface ? Math.min(surface.offsetHeight, Math.max(el.offsetHeight, window.innerHeight - 9 * rem)) : el.offsetHeight
+    offset = Math.max(offset, height)
   }
   if (offset > 0) root.style.setProperty("--toast-offset-overlay", `${offset}px`)
   else root.style.removeProperty("--toast-offset-overlay")
