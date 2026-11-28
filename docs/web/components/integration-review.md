@@ -259,4 +259,4 @@ skip の 149 件は、次のテストである。
 - Patterns：ページの移動での未保存の変更の確認、Overlay の中のフォームの検証、Tabs の中の Chart など、複数の部品を組み合わせた画面の型として扱う。
 - Registry & Gallery：Next.js（App Router）で `"use client"` の境界と SSR を確かめる。実機の iOS Safari、Android、VoiceOver、NVDA の検品を計画する。
 - Base UI と Recharts の更新時は、7 章の依存の一覧に沿って検品する。Playwright を更新したときは、WebKit の座標が NaN のイベントの条件（版 27.x）を確かめ直す。
-- 読み込み中の表示の高さ：Data Table を画面の上部に置く製品では、`loadingRowCount` を表示件数に合わせると、読み込みの後に下の内容が移動しない（4 章）。
+- 読み込み中の表示の高さ：Data Table を画面の上部に置く製品では、`loadingRowCount` を表示件数に合わせると、読み込みの後に下の内容が移動しない（4 章）。Patterns Integration Review で、Data Browsing と Data Display のプレビューを、総件数がわかる場合は `min(ページサイズ, 残りの件数)`、わからない場合はページサイズにする規則にした（[data-states.md](../patterns/data-states.md)）。

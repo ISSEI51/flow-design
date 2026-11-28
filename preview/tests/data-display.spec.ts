@@ -890,7 +890,7 @@ test.describe("Data Table: checkbox hit areas by density", { tag: "@webkit" }, (
   ] as const) {
     test(`${density}: cell-wide target, no overlap, header, indeterminate, disabled, row click`, async ({ page, isMobile }) => {
       await open(page, "data-table")
-      // 上にある「サーバー側の処理を模擬」の表は、0.4〜0.8 秒後に初回の取得を終え、読み込み中の行が 50 行に変わる。
+      // 上にある「サーバー側の処理を模擬」の表は、0.4〜0.8 秒後に初回の取得を終え、読み込み中の行（ページサイズの 50 行）が取得した行に変わる。
       // 押している間にその表の高さが変わると、スクロールの位置の補正が起き、WebKit は mouseup と click を <html> へ送る。
       // ページの初回の読み込みが終わってから操作する
       const server = page.getByTestId("server").locator("[data-slot=data-table]")
