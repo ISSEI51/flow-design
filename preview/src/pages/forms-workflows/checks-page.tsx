@@ -8,6 +8,7 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/components/ui/toast"
 import { ConfirmActionDialog, useUndoableAction, type UndoHandle } from "@/patterns/confirm-action"
 import { FormSaveError, submitOnEnter, useFormState, type FormFields, type FormSaveResult } from "@/patterns/form-state"
 import { useAutosave, useInstantSave } from "@/patterns/save-modes"
@@ -20,6 +21,7 @@ import { UnsavedChangesProvider, useNavigationGuard, useUnsavedChanges } from "@
 //   #/forms-checks?case=scope    保存、即時保存、自動保存、Undo、確認の Dialog の古い結果とスコープ
 //   #/forms-checks?case=unsaved  保存して移動（一部の失敗、保存中の入力）、移動の失敗の後の保護、新しい変更、
 //                                確認の表示中の対象の消滅、cancelNavigation、releaseAll（認可の失効）、保存の結果が不明な単位
+//   #/forms-checks?case=toast    Toast の mousedown のフォーカスの維持（通常の通知、Undo、入力欄を含む通知、モーダルの表示中）
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void }
 function deferred<T>(): Deferred<T> {
@@ -602,6 +604,83 @@ function UnsavedInner() {
   )
 }
 
+// ---------------------------------------------------------------- Toast のフォーカス
+// Toast は、ポインターで押してもボタン（本体、閉じる、操作）にフォーカスを移さない。入力欄（input、textarea、select、
+// contenteditable）は除く（押して入力できるようにする）。モーダルの表示中は、Toast に入力欄を置かない（資料の注意）。
+// この画面は、その既存の設計の回帰の検品のためだけに、入力欄を含む通知を出す
+function ToastFields() {
+  return (
+    <span className="mt-2 flex flex-col gap-2" data-testid="toast-fields">
+      <input aria-label="通知の中の入力欄" data-testid="toast-input" className="h-8 rounded-sm border border-border px-2" />
+      <textarea aria-label="通知の中の複数行の入力欄" data-testid="toast-textarea" className="rounded-sm border border-border px-2" rows={2} />
+      <select aria-label="通知の中の選択" data-testid="toast-select" className="h-8 rounded-sm border border-border px-2">
+        <option>A</option>
+        <option>B</option>
+      </select>
+      <span contentEditable suppressContentEditableWarning role="textbox" aria-label="通知の中の編集できる領域" data-testid="toast-editable" className="block min-h-8 rounded-sm border border-border px-2">
+        編集できる
+      </span>
+    </span>
+  )
+}
+
+function ToastButtons({ prefix, onAction }: { prefix: string; onAction: (s: string) => void }) {
+  const { toast } = useToast()
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button size="sm" variant="secondary" data-testid={`${prefix}-plain`} onClick={() => toast({ title: "通常の通知", timeout: 0 })}>
+        通常の通知
+      </Button>
+      <Button
+        size="sm"
+        variant="secondary"
+        data-testid={`${prefix}-undo`}
+        onClick={() => toast({ variant: "success", title: "アーカイブしました", action: { label: "元に戻す", onClick: () => onAction(`${prefix}:undo`) } })}
+      >
+        元に戻せる通知
+      </Button>
+      <Button size="sm" variant="secondary" data-testid={`${prefix}-fields`} onClick={() => toast({ title: "入力欄のある通知", timeout: 0, description: <ToastFields /> })}>
+        入力欄のある通知
+      </Button>
+    </div>
+  )
+}
+
+function ToastCase() {
+  const [dialog, setDialog] = useState(false)
+  const [log, setLog] = useState<string[]>([])
+  const add = (s: string) => setLog((l) => [...l, s])
+  return (
+    <div className="flex flex-col gap-4">
+      <Field>
+        <FieldLabel>ページの入力欄</FieldLabel>
+        <Input data-testid="t-base" />
+      </Field>
+      <ToastButtons prefix="t" onAction={add} />
+      <Button variant="secondary" data-testid="t-open-dialog" onClick={() => setDialog(true)}>
+        モーダルを開く
+      </Button>
+      <Dialog open={dialog} onOpenChange={setDialog}>
+        <DialogContent data-testid="t-dialog">
+          <DialogHeader>
+            <DialogTitle>モーダル</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <div className="flex flex-col gap-4">
+              <Field>
+                <FieldLabel>モーダルの入力欄</FieldLabel>
+                <Input data-testid="t-dialog-input" />
+              </Field>
+              <ToastButtons prefix="td" onAction={add} />
+            </div>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+      <Out testId="toast-log" value={log} />
+    </div>
+  )
+}
+
 export function FormsChecksPage() {
   const [, setN] = useState(0)
   useEffect(() => {
@@ -616,6 +695,7 @@ export function FormsChecksPage() {
       {kind === "async" && <AsyncCase />}
       {kind === "submit" && <SubmitCase />}
       {kind === "scope" && <ScopeCase />}
+      {kind === "toast" && <ToastCase />}
       {kind === "unsaved" && (
         <UnsavedChangesProvider>
           <UnsavedInner />

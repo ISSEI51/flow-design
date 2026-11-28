@@ -1602,6 +1602,114 @@ test.describe("toast focus with overlays", { tag: "@webkit" }, () => {
   })
 })
 
+// Toast の mousedown のフォーカスの維持（12.5）。ボタン（本体、閉じる、操作）はフォーカスを移さない。
+// 入力できる要素（input、textarea、select、contenteditable）は例外で、押すとフォーカスを移す（既存の設計の回帰の検品）。
+// 検品用の画面：#/forms-checks?case=toast（preview/src/pages/forms-workflows/checks-page.tsx の ToastCase）
+test.describe("toast focus: buttons keep focus, editable elements take it", { tag: "@webkit" }, () => {
+  const toastOf = (page: Page, title: string) => page.locator("[data-slot=toast]", { hasText: title })
+  const toastLog = async (page: Page) => JSON.parse((await page.getByTestId("toast-log").textContent()) ?? "[]") as string[]
+  const editables = ["toast-input", "toast-textarea", "toast-select", "toast-editable"] as const
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/#/forms-checks?case=toast")
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("toast")
+  })
+
+  test("without a modal: the toast body, close and action buttons keep focus; input, textarea, select and contenteditable take it", async ({ page }) => {
+    const base = page.getByTestId("t-base")
+    await page.getByTestId("t-plain").click()
+    await base.click()
+    await toastOf(page, "通常の通知").locator("[data-slot=toast-title]").click()
+    await expect(base).toBeFocused()
+    await toastOf(page, "通常の通知").locator("[data-slot=toast-close]").click()
+    await expect(toastOf(page, "通常の通知")).toHaveCount(0)
+    await expect(base).toBeFocused()
+
+    await page.getByTestId("t-undo").click()
+    await base.click()
+    await toastOf(page, "アーカイブしました").getByRole("button", { name: "元に戻す" }).click()
+    await expect.poll(() => toastLog(page)).toEqual(["t:undo"])
+    await expect(base).toBeFocused()
+
+    await page.getByTestId("t-fields").click()
+    const toast = toastOf(page, "入力欄のある通知")
+    await expect(toast).toBeVisible()
+    for (const id of editables) {
+      await base.click()
+      await toast.getByTestId(id).click()
+      await expect(toast.getByTestId(id)).toBeFocused()
+    }
+    await toast.getByTestId("toast-input").click()
+    await page.keyboard.type("abc")
+    await expect(toast.getByTestId("toast-input")).toHaveValue("abc")
+  })
+
+  test("with a modal open: toast buttons keep focus in the modal; editable elements in the toast take focus out of the modal", async ({ page }) => {
+    await page.getByTestId("t-open-dialog").click()
+    const dialog = page.getByTestId("t-dialog")
+    await expect(dialog).toBeVisible()
+    const inside = page.getByTestId("t-dialog-input")
+    await page.getByTestId("td-undo").click()
+    await inside.click()
+    // Toast はモーダルの上にあり、押せる（クリックの位置の確認を省かない）
+    await toastOf(page, "アーカイブしました").locator("[data-slot=toast-title]").click()
+    await expect(inside).toBeFocused()
+    await toastOf(page, "アーカイブしました").getByRole("button", { name: "元に戻す" }).click()
+    await expect.poll(() => toastLog(page)).toEqual(["td:undo"])
+    await expect(inside).toBeFocused()
+    await expect(dialog).toBeVisible()
+    // 閉じた通知が DOM から消えるまで待つ（閉じる動きの間は、残りの通知の位置が動く）
+    await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+
+    await page.getByTestId("td-fields").click()
+    const toast = toastOf(page, "入力欄のある通知")
+    await expect(toast).toBeVisible()
+    for (const id of editables) {
+      await inside.click()
+      await toast.getByTestId(id).click()
+      // 入力できる要素は例外のため、フォーカスはモーダルの外（Toast の中）へ移る。
+      // そのため、モーダルの表示中は Toast に入力欄を置かない（docs/web/components/toast.md）
+      await expect(toast.getByTestId(id)).toBeFocused()
+      expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(false)
+    }
+    await expect(dialog).toBeVisible()
+  })
+
+  test("keyboard: F6 moves to the toasts; Tab reaches the buttons and the input; Enter runs the action; Space closes", async ({ page, isMobile }) => {
+    test.skip(isMobile, "F6 と Tab はハードウェアキーボードの操作のため、デスクトップで確かめる")
+    const base = page.getByTestId("t-base")
+    const tabTo = async (target: Locator) => {
+      for (let i = 0; i < 8 && !(await target.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("Tab")
+      await expect(target).toBeFocused()
+    }
+    await page.getByTestId("t-undo").click()
+    await base.click()
+    await page.keyboard.press("F6")
+    await expect.poll(() => page.locator("[data-slot=toaster]").evaluate((el) => el.contains(document.activeElement))).toBe(true)
+    await tabTo(toastOf(page, "アーカイブしました").getByRole("button", { name: "元に戻す" }))
+    await page.keyboard.press("Enter")
+    await expect.poll(() => toastLog(page)).toEqual(["t:undo"])
+    await expect(toastOf(page, "アーカイブしました")).toHaveCount(0)
+    await expect.poll(() => base.evaluate((el) => el === document.activeElement)).toBe(true)
+
+    await page.getByTestId("t-plain").click()
+    await base.click()
+    await page.keyboard.press("F6")
+    await tabTo(toastOf(page, "通常の通知").locator("[data-slot=toast-close]"))
+    await page.keyboard.press("Space")
+    await expect(toastOf(page, "通常の通知")).toHaveCount(0)
+    await expect.poll(() => base.evaluate((el) => el === document.activeElement)).toBe(true)
+
+    await page.getByTestId("t-fields").click()
+    await base.click()
+    await page.keyboard.press("F6")
+    const input = toastOf(page, "入力欄のある通知").getByTestId("toast-input")
+    await tabTo(input)
+    await page.keyboard.type("k")
+    await expect(input).toHaveValue("k")
+  })
+})
+
 test.describe("stacking with feedback components", { tag: "@webkit" }, () => {
   async function expectToastUsable(page: Page, behind: Locator) {
     const toast = page.locator("[data-slot=toast]").first()
