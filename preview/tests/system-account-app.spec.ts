@@ -934,6 +934,11 @@ test.describe("Account app: settings, permissions and navigation (integration re
 
   test("PERM-5: a notification delivered while permissions are re-checked is held, not inserted with the previous permission scope", async ({ page }) => {
     await signInAs(page, sato)
+    // 最初の一覧の取得が終わってから始める（取得中に届けると、その通知は一覧の応答に含まれる）
+    await trigger(page).click()
+    await expect(page.getByTestId("ntf-center").locator("[data-notification-id=n-101]")).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(page.getByTestId("ntf-center")).toHaveCount(0)
     await page.evaluate(() => {
       const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
       s.hold.access = true
