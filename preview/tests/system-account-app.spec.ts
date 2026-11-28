@@ -887,6 +887,34 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
   })
 
+  test("SYS-3: while offline, instant settings saves and mark-all-read are not sent; the reason is not 'unknown'", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=display")
+    await expect(page.getByTestId("set-display")).toBeVisible()
+    await openVerify(page)
+    await page.getByTestId("acct-verify").getByRole("radio", { name: "切断した" }).check()
+    await expect(page.locator("[data-slot=system-banner]")).toContainText("オフラインです", { timeout: 8000 })
+    const before = await setServer(page, (s) => s.requests.filter((r) => r.kind === "instant").length)
+    // 送らずに元の設定に戻すため、選んだ直後に選択が戻る（check() は状態の変化を待つため click を使う）
+    await page.getByTestId("set-theme").getByRole("radio", { name: "ダーク" }).click()
+    await expect(page.getByTestId("set-theme").getByRole("radio", { name: "ダーク" })).not.toBeChecked()
+    // 送っていないため、結果の不明ではなく、確定した失敗として元の設定に戻す
+    await expect(page.getByTestId("set-theme-status")).toHaveText(/元の設定に戻しました/)
+    expect(await setServer(page, (s) => s.requests.filter((r) => r.kind === "instant").length)).toBe(before)
+    const ntfRequests = () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __fdSaNotificationsServer: { requests: { kind: string }[] } }).__fdSaNotificationsServer.requests.filter(
+            (r) => r.kind === "read" || r.kind === "readAll"
+          ).length
+      )
+    const ntfBefore = await ntfRequests()
+    await trigger(page).click()
+    await page.getByTestId("ntf-center").getByRole("button", { name: "すべて既読にする" }).click()
+    await settle(page)
+    expect(await ntfRequests()).toBe(ntfBefore)
+  })
+
   test("AUTH-1: the return path after re-authentication is checked with the current role, not the initial role", async ({ page }) => {
     await signInAs(page, sato)
     await go(page, "page=members&ws=hq")
