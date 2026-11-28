@@ -292,10 +292,15 @@ function useNotificationFeed<T extends NotificationLike>({
   const hasUnread = unreadCount !== null ? unreadCount > 0 : knownUnread ? true : null
   const loadedUnread = countUnread(items)
 
+  // 操作の処理（既読の更新、一括既読、受信）が読む値。commit の時点で更新する（描画の中で書き換えない）。
+  // 新しいスコープへの transition が commit されずに保留している間に、表示中のスコープの操作が、
+  // commit されていない描画の関数（別のスコープの updateRead）と値を使わないため。
   const unreadRef = React.useRef(unreadCount)
-  unreadRef.current = unreadCount
   const refs = React.useRef({ updateRead, markAllRead, classifyError, data, local, items, pending, readAllBy, resultContract, enabled, verifyingIds })
-  refs.current = { updateRead, markAllRead, classifyError, data, local, items, pending, readAllBy, resultContract, enabled, verifyingIds }
+  React.useLayoutEffect(() => {
+    unreadRef.current = unreadCount
+    refs.current = { updateRead, markAllRead, classifyError, data, local, items, pending, readAllBy, resultContract, enabled, verifyingIds }
+  })
 
   // 確定の後に始めた取得の結果が届いたら、確定と確認中の記録を消す（取得の結果が反映している。記録を増やし続けない）
   React.useEffect(() => {

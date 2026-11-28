@@ -343,8 +343,12 @@ function useUnsavedChanges({
 }) {
   const registry = React.useContext(UnsavedChangesContext)
   const id = React.useId()
+  // 描画の中で書き換えない。transition が commit されずに保留している間に「保存して移動」を押しても、
+  // commit されていない描画の onSave（別のスコープの保存）を呼ばないため、commit の時点で更新する
   const handlers = React.useRef({ onSave, onDiscard })
-  handlers.current = { onSave, onDiscard }
+  React.useLayoutEffect(() => {
+    handlers.current = { onSave, onDiscard }
+  })
   const entry = React.useMemo(
     () => ({
       label,
@@ -358,7 +362,9 @@ function useUnsavedChanges({
     [label, dirty, saving, revision, canSave, onSave]
   )
   const entryRef = React.useRef(entry)
-  entryRef.current = entry
+  React.useLayoutEffect(() => {
+    entryRef.current = entry
+  })
   React.useEffect(() => {
     if (!registry) return
     // 登録と解除は、マウントとアンマウントだけで行う（registry の関数は変わらない）

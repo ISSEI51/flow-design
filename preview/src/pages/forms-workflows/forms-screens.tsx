@@ -533,16 +533,15 @@ const text = <V extends FormValues>(form: FormState<V>, name: keyof V & string, 
 })
 
 export function InstantSwitch({ label, description, initial, kind, ws = "hq" }: { label: string; description: string; initial: boolean; kind: string; ws?: string }) {
-  const [saved, setSaved] = useState(() => readSetting(ws, kind, initial))
-  useEffect(() => setSaved(readSetting(ws, kind, initial)), [ws, kind, initial])
+  // 取得したサーバーの値。ワークスペースと組で持ち、ワークスペースが変わった描画から、前のワークスペースの値を渡さない。
+  // 保存した値はこの画面では持たない（保存の結果は useInstantSave が持つ。同じ保存を 2 か所で管理しない）
+  const [fetched, setFetched] = useState(() => ({ ws, value: readSetting(ws, kind, initial) }))
+  const saved = fetched.ws === ws ? fetched.value : readSetting(ws, kind, initial)
+  useEffect(() => setFetched({ ws, value: readSetting(ws, kind, initial) }), [ws, kind, initial])
   const s = useInstantSave<boolean>({
     value: saved,
     scopeKey: ws,
-    // スコープの変更で中止された後は、この画面の状態を変えない（新しいワークスペースの値を、古い保存の結果で上書きしない）
-    save: async (next, { signal }) => {
-      await saveSetting(kind, next, { mode: formsServer.instantMode, ws })
-      if (!signal.aborted) setSaved(next)
-    },
+    save: (next) => saveSetting(kind, next, { mode: formsServer.instantMode, ws }),
     // 結果が不明な場合に、サーバーの値を読み直す
     verify: () => fetchSetting(kind, initial, ws),
   })

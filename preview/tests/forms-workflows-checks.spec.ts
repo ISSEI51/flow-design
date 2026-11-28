@@ -121,6 +121,11 @@ test.describe("async validation", { tag: "@webkit" }, () => {
     await resolve(page, "check", null)
     await expect.poll(async () => (await asyncState(page)).status).toBe("valid")
     await page.getByTestId("toggle-scope").click()
+    // スコープが変わったら、前のスコープの入力値を引き継がない（initialValues から始める。9.4）
+    await expect(page.getByTestId("code")).toHaveValue("")
+    expect((await asyncState(page)).canSubmit).toBe(false)
+    // 同じ値を入れ直しても、前のスコープの検証の結果（valid）を使わず、新しいスコープで確かめ直す
+    await page.getByTestId("code").fill("C1")
     await waitCount(page, "check", 1)
     expect((await asyncState(page)).canSubmit).toBe(false)
   })
@@ -684,6 +689,12 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
     await page.locator("[data-testid=forms-verify] summary").click()
     await page.getByTestId("external-ws-kyushu").click()
     await expect(page.getByTestId("forms-main")).toHaveAttribute("data-ws", "kyushu")
+    // 前のワークスペースで入力した値を、新しいワークスペースのフォームに引き継がない（9.4）。前の検証の結果も示さない
+    await expect(page.locator("#new-code")).toHaveValue("")
+    await expect(page.getByTestId("new-code-error")).toHaveCount(0)
+    // 同じコードを入れ直すと、新しいワークスペースで重複を確かめ直す
+    await page.locator("#new-code").fill("C-0001")
+    await page.locator("#new-code").blur()
     await expect(page.getByTestId("new-code-status")).toHaveText("このコードは使えます")
   })
 

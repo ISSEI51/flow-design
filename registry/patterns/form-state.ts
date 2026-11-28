@@ -2,6 +2,8 @@
 
 import * as React from "react"
 
+import { useScopeGuard } from "@/patterns/scope-guard"
+
 // Flow Design Form State（Patterns / Forms & Workflows）
 // 1 つの保存の単位（フォーム）の状態を持つ hook。定義と判断基準は docs/web/patterns/create-and-edit.md を参照。
 //
@@ -154,10 +156,13 @@ type State<V extends FormValues> = {
   submittedFields: readonly (keyof V)[]
   /** reset とスコープの変更の回数。非同期の検証を、同じキーでも始め直すために使う */
   epoch: number
+  /** この状態が属するスコープ（useScopeGuard の値）。A → B → A の最初の A と最後の A は別のオブジェクト */
+  owner: object | null
 }
 
-const emptyState = <V extends FormValues>(values: V, epoch = 0): State<V> => ({
+const emptyState = <V extends FormValues>(values: V, epoch = 0, owner: object | null = null): State<V> => ({
   epoch,
+  owner,
   values,
   baseline: values,
   interacted: new Set(),
@@ -245,10 +250,18 @@ export function useFormState<V extends FormValues>({
   /** 編集のフォーム。変更がない間は保存しない（Button、Enter、requestSubmit、handleSubmit のすべて） */
   requireChanges?: boolean
 }) {
-  const [state, setState] = React.useState<State<V>>(() => emptyState(initialValues))
-  const stateRef = React.useRef(state)
-  stateRef.current = state
+  // スコープの境界。スコープごとに別のオブジェクトになり（A → B → A でも別）、古い描画の関数からの操作の照合に使う
+  const guard = useScopeGuard(scopeKey)
+  const [rawState, setState] = React.useState<State<V>>(() => emptyState(initialValues, 0, guard))
+  // スコープが変わった描画の initialValues から始めた状態（新しいスコープの値は initialValues で渡す）
+  const scopeStart = React.useMemo(() => emptyState(initialValues, 0, guard), [guard])
+  // 新しいスコープの最初の描画から、前のスコープの値、基準値、エラー、保存の状態を返さない（effect を待たない）。
+  // 送信もできない（handleSubmit は commit されたスコープの値でだけ送る）。
+  const state: State<V> = rawState.owner === guard ? rawState : { ...scopeStart, epoch: rawState.epoch + 1 }
+  // commit された状態。描画の中では書き換えない（commit されていない描画の状態で送信や検証をしないため）
+  const stateRef = React.useRef(rawState)
   const fieldsRef = React.useRef(fields)
+  // 描画の中の検証（evaluate）が、その描画の fields を使うため、描画の中で更新する
   fieldsRef.current = fields
   const names = React.useMemo(() => Object.keys(fields) as (keyof V & string)[], [fields])
   // 世代。reset、スコープの変更、アンマウントで進める。古い世代の処理の結果は使わない
@@ -256,7 +269,11 @@ export function useFormState<V extends FormValues>({
   const scopeRef = React.useRef(scopeKey)
   const submittingRef = React.useRef(false)
   const optionsRef = React.useRef({ requireChanges })
-  optionsRef.current = { requireChanges }
+
+  React.useLayoutEffect(() => {
+    stateRef.current = rawState
+    optionsRef.current = { requireChanges }
+  })
 
   const update = React.useCallback((fn: (s: State<V>) => State<V>) => {
     setState((s) => {
@@ -265,6 +282,20 @@ export function useFormState<V extends FormValues>({
       return next
     })
   }, [])
+
+  /**
+   * この描画のスコープが commit されたスコープと同じ場合だけ、状態を変える。
+   * 前のスコープの画面、Toast、Dialog に残った関数（古い closure）からの操作は、現在のスコープの状態を変えない。
+   */
+  const isLive = React.useCallback(() => stateRef.current.owner === guard && guard.isCurrent(guard.capture()), [guard])
+  const updateLive = React.useCallback(
+    (fn: (s: State<V>) => State<V>) => {
+      if (!isLive()) return false
+      update((s) => (s.owner === guard ? fn(s) : s))
+      return true
+    },
+    [guard, isLive, update]
+  )
 
   // ---------------------------------------------------------------- 計算（描画のたびに現在の値から）
   const normalizeOf = React.useCallback((name: keyof V, value: unknown) => {
@@ -371,23 +402,17 @@ export function useFormState<V extends FormValues>({
     }
     jobs.current.clear()
   }, [])
-  // スコープの変更：古いスコープの処理の結果を使わず、エラーと保存の状態を捨てる（非同期の検証の effect より先に実行する）
-  React.useEffect(() => {
-    if (scopeRef.current === scopeKey) return
+  // スコープの変更の commit：古いスコープの処理の結果を使わず、値、基準値、エラー、保存の状態を、
+  // スコープが変わった描画の initialValues から始め直す。commit の時点（layout effect）で行う
+  // （passive effect まで待つと、その間に届いた古い保存の結果を受け付け、前のスコープの状態が 1 回 commit される）
+  React.useLayoutEffect(() => {
     scopeRef.current = scopeKey
+    if (stateRef.current.owner === guard) return
     generation.current++
     cancelJobs()
     submittingRef.current = false
-    update((s) => ({
-      ...s,
-      async: {} as State<V>["async"],
-      server: {} as State<V>["server"],
-      formError: null,
-      status: "idle",
-      submitted: null,
-      epoch: s.epoch + 1,
-    }))
-  }, [scopeKey, cancelJobs, update])
+    update((s) => (s.owner === guard ? s : { ...scopeStart, epoch: s.epoch + 1 }))
+  }, [guard, scopeKey, scopeStart, cancelJobs, update])
 
   const asyncKeys = names.map((name) => [name, state.composing.has(name) ? null : ev.asyncKey(name)] as const)
   // epoch を含める：reset とスコープの変更の後は、同じキーでも検証を始め直す（取り消した検証の結果を待ち続けない）
@@ -450,7 +475,7 @@ export function useFormState<V extends FormValues>({
   }, [asyncSignature, asyncDebounceMs, update])
 
 
-  React.useEffect(
+  React.useLayoutEffect(
     () => () => {
       // アンマウント：実行中の処理の結果を使わない
       generation.current++
@@ -462,7 +487,7 @@ export function useFormState<V extends FormValues>({
   // ---------------------------------------------------------------- 操作
   const setValue = React.useCallback(
     <K extends keyof V>(name: K, value: V[K], options: { composing?: boolean; commit?: boolean } = {}) => {
-      update((s) => ({
+      updateLive((s) => ({
         ...s,
         values: { ...s.values, [name]: value },
         interacted: add(s.interacted, name),
@@ -473,47 +498,57 @@ export function useFormState<V extends FormValues>({
         status: s.status === "succeeded" ? "idle" : s.status,
       }))
     },
-    [update]
+    [updateLive]
   )
 
   /** 入力を終えた（フォーカスが外れた）。値を変えた項目だけ、エラーを表示する */
   const blur = React.useCallback(
     (name: keyof V) => {
-      update((s) => (s.interacted.has(name) && !s.composing.has(name) ? { ...s, shown: add(s.shown, name) } : s))
+      updateLive((s) => (s.interacted.has(name) && !s.composing.has(name) ? { ...s, shown: add(s.shown, name) } : s))
     },
-    [update]
+    [updateLive]
   )
 
-  const compositionStart = React.useCallback((name: keyof V) => update((s) => ({ ...s, composing: add(s.composing, name) })), [update])
+  const compositionStart = React.useCallback((name: keyof V) => void updateLive((s) => ({ ...s, composing: add(s.composing, name) })), [updateLive])
 
   /** 指定した項目のエラーを表示する（複数のステップの、表示中のステップだけ、など） */
-  const reveal = React.useCallback((fieldNames: (keyof V)[]) => update((s) => ({ ...s, shown: add(s.shown, ...fieldNames) })), [update])
+  const reveal = React.useCallback((fieldNames: (keyof V)[]) => void updateLive((s) => ({ ...s, shown: add(s.shown, ...fieldNames) })), [updateLive])
 
   /** すべての項目のエラーを表示する（保存を試みたとき） */
   const revealAll = React.useCallback(() => reveal(Object.keys(fieldsRef.current) as (keyof V)[]), [reveal])
 
   /** 非同期の検証をやり直す（検証できなかった、結果が古い可能性がある） */
   const revalidate = React.useCallback(
-    (name: keyof V) => update((s) => ({ ...s, rechecks: { ...s.rechecks, [name]: (s.rechecks[name] ?? 0) + 1 } })),
-    [update]
+    (name: keyof V) => void updateLive((s) => ({ ...s, rechecks: { ...s.rechecks, [name]: (s.rechecks[name] ?? 0) + 1 } })),
+    [updateLive]
   )
 
   /**
    * 値と基準値を置き換え、操作の履歴、エラー、保存の状態を消す（別のレコードを開いた、連続して登録する）。
-   * 世代を進めるため、それまでに始めた保存、検証、自動補完の結果は、新しい状態を変えない
+   * 世代を進めるため、それまでに始めた保存、検証、自動補完の結果は、新しい状態を変えない。
+   * 前のスコープの描画の関数から呼んだ場合は何もしない（false）
    */
   const reset = React.useCallback(
     (values?: V) => {
+      if (!isLive()) return false
       generation.current++
       cancelJobs()
       submittingRef.current = false
-      update((s) => emptyState(values ?? s.baseline, s.epoch + 1))
+      update((s) => (s.owner === guard ? emptyState(values ?? s.baseline, s.epoch + 1, guard) : s))
+      return true
     },
-    [cancelJobs, update]
+    [cancelJobs, guard, isLive, update]
   )
 
-  /** 値を最後に保存した値（基準値）に戻す。未保存の変更の破棄に使う */
-  const discard = React.useCallback(() => reset(), [reset])
+  /**
+   * 値を最後に保存した値（基準値）に戻す。未保存の変更の破棄に使う。
+   * 保存中と、保存の結果が不明な間は破棄しない（false）。送信した値（submittedValues）は、保存されたかを確かめるために残す
+   */
+  const discard = React.useCallback(() => {
+    const status = stateRef.current.status
+    if (submittingRef.current || status === "submitting" || status === "unknown") return false
+    return reset()
+  }, [reset])
 
   /**
    * 自動補完を始める時点の記録。応答が届いたら applyAutofill に渡す。
@@ -522,20 +557,22 @@ export function useFormState<V extends FormValues>({
   const captureEdits = React.useCallback((fieldNames: (keyof V)[]): AutofillToken<V> => {
     const s = stateRef.current
     return {
-      generation: generation.current,
+      // 前のスコープの描画の関数から作った記録は、どの世代とも一致しない
+      generation: isLive() ? generation.current : -1,
       edits: Object.fromEntries(fieldNames.map((n) => [n, s.edits[n] ?? 0])) as Partial<Record<keyof V, number>>,
       fills: Object.fromEntries(fieldNames.map((n) => [n, s.fills[n] ?? 0])) as Partial<Record<keyof V, number>>,
     }
-  }, [])
+  }, [isLive])
 
   const applyAutofill = React.useCallback(
     (token: AutofillToken<V>, patch: Partial<V>) => {
-      if (token.generation !== generation.current) return [] as (keyof V)[]
+      if (token.generation !== generation.current || !isLive()) return [] as (keyof V)[]
       // 入れる項目は、最新の状態で同期に決める（更新の関数は副作用を持たない）
       const ok = (s: State<V>, key: keyof V) => (s.edits[key] ?? 0) === (token.edits[key] ?? 0) && (s.fills[key] ?? 0) === (token.fills[key] ?? 0)
       const applied = (Object.keys(patch) as (keyof V)[]).filter((key) => key in token.edits && ok(stateRef.current, key))
       if (!applied.length) return applied
       update((s) => {
+        if (s.owner !== guard) return s
         const keys = applied.filter((key) => ok(s, key))
         if (!keys.length) return s
         const values = { ...s.values }
@@ -549,7 +586,7 @@ export function useFormState<V extends FormValues>({
       })
       return applied
     },
-    [update]
+    [guard, isLive, update]
   )
 
   /** 送信する値。表示していない（active が false の）項目は含めない */
@@ -580,6 +617,9 @@ export function useFormState<V extends FormValues>({
     ) =>
       async (event?: { preventDefault: () => void }): Promise<boolean> => {
         event?.preventDefault()
+        // 前のスコープの描画で作った送信の処理（古い画面、Dialog、Toast の closure）、commit の前、アンマウントの後は送らない。
+        // 送ると、新しいスコープの値を、古いスコープの save（古いレコードの ID など）に渡すことになる
+        if (!isLive()) return false
         const s = stateRef.current
         const scope = scopeRef.current
         if (submittingRef.current || s.status === "submitting" || s.status === "unknown" || s.composing.size > 0) return false
@@ -648,20 +688,21 @@ export function useFormState<V extends FormValues>({
         update((prev) => ({ ...prev, status: outcome.status, submitted: outcome.status === "unknown" ? snapshot : null, formError: outcome.formError }))
         return false
       },
-    [dirtyOf, getSubmitValues, listBlockers, normalizeOf, revealAll, update]
+    [dirtyOf, getSubmitValues, isLive, listBlockers, normalizeOf, revealAll, update]
   )
 
   /** 製品が別の経路で保存した値を、基準値にする（下書きの再開、即時保存との組み合わせなど） */
-  const markSaved = React.useCallback((values: V) => update((s) => ({ ...s, baseline: values })), [update])
+  const markSaved = React.useCallback((values: V) => updateLive((s) => ({ ...s, baseline: values })), [updateLive])
 
   /**
    * 保存の結果が不明な状態を、製品が確かめた結果で解く。メッセージを消すだけでは解かない（clearFormError では解けない）。
    * saved：サーバーに保存されていた。values（既定は送信した値）を基準値にする。送信の後に変えた値は未保存のまま残る。
    * not-saved：保存されていなかった。もう一度保存できる状態に戻す
+   * 照会は、現在のスコープの認可で行う（製品の責務）。前のスコープの描画の関数から呼んだ場合は何もしない（false）
    */
   const resolveUnknown = React.useCallback(
     (result: { saved: true; values?: V } | { saved: false }) =>
-      update((s) => {
+      updateLive((s) => {
         if (s.status !== "unknown") return s
         if (result.saved) {
           // 送信した項目だけを基準値にする（送信していない非表示の項目は、以前の基準値のまま）
@@ -672,7 +713,7 @@ export function useFormState<V extends FormValues>({
         }
         return { ...s, status: "idle", submitted: null, formError: null }
       }),
-    [update]
+    [updateLive]
   )
 
   /** テキストの入力欄（Input、Textarea）に渡す props。IME の変換と Blur を扱う */
@@ -744,7 +785,7 @@ export function useFormState<V extends FormValues>({
      * フォーム全体のエラーの文を消す（利用者が閉じたとき）。保存の結果が不明な状態は解かない（文だけを消し、保存できないまま。resolveUnknown で解く）
      */
     clearFormError: () =>
-      update((s) =>
+      updateLive((s) =>
         s.status === "unknown" || s.status === "submitting" ? { ...s, formError: null } : { ...s, formError: null, status: "idle" }
       ),
   }

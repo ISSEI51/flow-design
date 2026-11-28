@@ -3,6 +3,7 @@
 import * as React from "react"
 
 import { FormSaveError, stableKey } from "@/patterns/form-state"
+import { useScopeGuard } from "@/patterns/scope-guard"
 
 // Flow Design Save Modes（Patterns / Forms & Workflows）
 // 明示的な保存（useFormState）以外の 2 つの保存の方式。定義は docs/web/patterns/create-and-edit.md の「保存の方式」を参照。
@@ -39,111 +40,118 @@ export function useInstantSave<T>({
   verify,
   scopeKey,
 }: {
-  /** サーバーが保存している値。再取得などで変わった場合は、保存中でなければ表示に反映する */
+  /**
+   * サーバーが保存している値。再取得などで変わった場合は、保存中でなければ表示に反映する。
+   * 結果が不明な間に変わった場合は、その値で確かめたとして解く。そのため、保存より前に始めた取得の応答を渡さない
+   * （保存が終わった後に始めた取得の値だけを渡す。製品の責務）
+   */
   value: T
   save: (next: T, context: { signal: AbortSignal }) => Promise<void>
-  /** サーバーの値を読み直す（結果が不明の後の確認） */
+  /** サーバーの値を読み直す（結果が不明の後の確認）。現在のスコープの認可で照会する（製品の API の責務） */
   verify?: (context: { signal: AbortSignal }) => Promise<T>
-  /** アカウント、ワークスペースなど。変わったら、古い保存の結果を使わず、value の値から始め直す */
+  /** アカウント、ワークスペース、認可の範囲、レコードなど。変わったら、古い保存の結果を使わず、value の値から始め直す */
   scopeKey?: string
 }) {
-  const [value, setValue] = React.useState(savedValue)
-  const [status, setStatus] = React.useState<InstantSaveStatus>("idle")
-  const confirmed = React.useRef(savedValue)
-  const busy = React.useRef(false)
-  const unknownRef = React.useRef(false)
-  const controller = React.useRef<AbortController | null>(null)
-  const generation = React.useRef(0)
-  const scopeRef = React.useRef(scopeKey)
+  // スコープの境界は useScopeGuard で扱う（commit の時点で世代を進める。古い描画の関数からの開始を拒否する）。
+  const guard = useScopeGuard(scopeKey)
+  const [raw, setRaw] = React.useState<{ owner: object; value: T; status: InstantSaveStatus }>(() => ({
+    owner: guard,
+    value: savedValue,
+    status: "idle",
+  }))
+  // 状態はスコープ（guard。A → B → A の最初の A と最後の A は別のオブジェクト）と組で持つ。
+  // 新しいスコープの最初の描画から、前のスコープの値と状態を表示しない（effect を待たない）。
+  const view = raw.owner === guard ? raw : { owner: guard, value: savedValue, status: "idle" as InstantSaveStatus }
+  // 処理中の判定と、最後に保存できた値。commit されたスコープのものだけを持つ（layout effect で作り直す）
+  const slotRef = React.useRef<{ owner: object | null; confirmed: T; busy: boolean; unknown: boolean }>({
+    owner: null,
+    confirmed: savedValue,
+    busy: false,
+    unknown: false,
+  })
 
+  // スコープの変更の commit（とマウント）：その時点の value から始め直す
+  React.useLayoutEffect(() => {
+    if (slotRef.current.owner === guard) return
+    slotRef.current = { owner: guard, confirmed: savedValue, busy: false, unknown: false }
+    setRaw({ owner: guard, value: savedValue, status: "idle" })
+  }, [guard])
+
+  // 同じスコープでサーバーの値が変わった：保存中でなければ表示に反映する
   React.useEffect(() => {
-    const scopeChanged = scopeRef.current !== scopeKey
-    scopeRef.current = scopeKey
-    if (scopeChanged) {
-      generation.current++
-      controller.current?.abort()
-      busy.current = false
-      unknownRef.current = false
-      setStatus("idle")
-    } else if (busy.current) return
-    confirmed.current = savedValue
-    setValue(savedValue)
-    if (unknownRef.current) {
-      // サーバーの値を受け取った：結果が不明な状態を、その値で解く
-      unknownRef.current = false
-      setStatus("idle")
-    }
-  }, [savedValue, scopeKey])
-
-  React.useEffect(
-    () => () => {
-      generation.current++
-      controller.current?.abort()
-    },
-    []
-  )
+    const slot = slotRef.current
+    if (slot.owner !== guard || slot.busy) return
+    slot.confirmed = savedValue
+    const wasUnknown = slot.unknown
+    slot.unknown = false
+    setRaw((r) => (r.owner !== guard ? r : { owner: guard, value: savedValue, status: wasUnknown ? "idle" : r.status }))
+  }, [savedValue, guard])
 
   const change = React.useCallback(
     (next: T) => {
-      if (busy.current || unknownRef.current) return false
-      busy.current = true
-      const gen = generation.current
-      const c = new AbortController()
-      controller.current = c
-      setValue(next)
-      setStatus("saving")
-      save(next, { signal: c.signal }).then(
+      const slot = slotRef.current
+      // 古い描画の関数（前のスコープ、A → B → A の最初の A）、commit の前、アンマウントの後からは始めない
+      if (slot.owner !== guard || slot.busy || slot.unknown) return false
+      const ticket = guard.begin("instant-save")
+      if (!guard.isCurrent(ticket)) return false
+      slot.busy = true
+      setRaw({ owner: guard, value: next, status: "saving" })
+      save(next, { signal: ticket.signal }).then(
         () => {
-          if (gen !== generation.current) return
-          busy.current = false
-          confirmed.current = next
-          setStatus("saved")
+          if (!guard.isLatest(ticket)) return
+          guard.release(ticket)
+          slot.busy = false
+          slot.confirmed = next
+          setRaw({ owner: guard, value: next, status: "saved" })
         },
         (error) => {
-          if (gen !== generation.current) return
-          busy.current = false
+          if (!guard.isLatest(ticket)) return
+          guard.release(ticket)
+          slot.busy = false
           if (outcomeOf(error) === "failed") {
             // 保存できなかった値を表示し続けない。最後に保存できた値に戻す
-            setValue(confirmed.current)
-            setStatus("failed")
+            setRaw({ owner: guard, value: slot.confirmed, status: "failed" })
             return
           }
           // 結果が不明：表示を戻すと、サーバーの値も戻ったと誤解させるため、値は変えずに不明であることを示す
-          unknownRef.current = true
-          setStatus("unknown")
+          slot.unknown = true
+          setRaw((r) => ({ owner: guard, value: r.owner === guard ? r.value : next, status: "unknown" }))
         }
       )
       return true
     },
-    [save]
+    [guard, save]
   )
 
   /** 結果が不明な場合に、サーバーの値を読んで表示をそろえる。確かめられたら true */
   const check = React.useCallback(async () => {
-    if (!verify || busy.current) return false
-    busy.current = true
-    const gen = generation.current
-    const c = new AbortController()
-    controller.current = c
-    setStatus("checking")
+    const slot = slotRef.current
+    if (!verify || slot.owner !== guard || slot.busy) return false
+    const ticket = guard.begin("instant-save")
+    if (!guard.isCurrent(ticket)) return false
+    slot.busy = true
+    setRaw((r) => ({ ...(r.owner === guard ? r : { owner: guard, value: slot.confirmed }), status: "checking" }))
     try {
-      const actual = await verify({ signal: c.signal })
-      if (gen !== generation.current) return false
-      busy.current = false
-      unknownRef.current = false
-      confirmed.current = actual
-      setValue(actual)
-      setStatus("idle")
+      const actual = await verify({ signal: ticket.signal })
+      // 別のスコープ（古い画面からの照会を含む）の結果を、現在の表示に反映しない
+      if (!guard.isLatest(ticket)) return false
+      guard.release(ticket)
+      slot.busy = false
+      slot.unknown = false
+      slot.confirmed = actual
+      setRaw({ owner: guard, value: actual, status: "idle" })
       return true
     } catch {
-      if (gen !== generation.current) return false
-      busy.current = false
-      setStatus("unknown")
+      if (!guard.isLatest(ticket)) return false
+      guard.release(ticket)
+      slot.busy = false
+      setRaw((r) => ({ ...(r.owner === guard ? r : { owner: guard, value: slot.confirmed }), status: slot.unknown ? "unknown" : "idle" }))
       return false
     }
-  }, [verify])
+  }, [guard, verify])
 
-  return { value, status, pending: status === "saving" || status === "checking", unknown: status === "unknown", change, check }
+  const status = view.status
+  return { value: view.value, status, pending: status === "saving" || status === "checking", unknown: status === "unknown", change, check }
 }
 
 export type AutosaveStatus = "saved" | "unsaved" | "saving" | "failed" | "unknown"
@@ -176,17 +184,22 @@ export function useAutosave<T>({
   const [saving, setSaving] = React.useState(false)
   const [failure, setFailure] = React.useState<{ key: string; outcome: "failed" | "unknown" } | null>(null)
   const [savedAt, setSavedAt] = React.useState<Date | null>(null)
+  // 描画の中で ref を書き換えない。commit されていない描画（中断された transition など）の値と save で保存しないため、
+  // commit の時点（layout effect）で更新する。
   const latest = React.useRef({ value, key, save })
-  latest.current = { value, key, save }
   const inflight = React.useRef<Promise<boolean> | null>(null)
   const savedKeyRef = React.useRef(savedKey)
-  savedKeyRef.current = savedKey
+  React.useLayoutEffect(() => {
+    latest.current = { value, key, save }
+    savedKeyRef.current = savedKey
+  })
   const unknownRef = React.useRef(false)
   const generation = React.useRef(0)
   const scopeRef = React.useRef(scopeKey)
   const controllerRef = React.useRef<AbortController | null>(null)
 
-  React.useEffect(() => {
+  // スコープの変更は commit の時点で反映する（passive effect まで待つと、その間に届いた古い保存の結果を受け付ける）
+  React.useLayoutEffect(() => {
     if (scopeRef.current === scopeKey) return
     scopeRef.current = scopeKey
     generation.current++
@@ -200,7 +213,7 @@ export function useAutosave<T>({
     setSavedAt(null)
   }, [scopeKey])
 
-  React.useEffect(
+  React.useLayoutEffect(
     () => () => {
       generation.current++
       controllerRef.current?.abort()

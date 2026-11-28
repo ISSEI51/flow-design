@@ -18,6 +18,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/toast"
 import { FormSaveError } from "@/patterns/form-state"
+import { useScopeGuard } from "@/patterns/scope-guard"
 
 // Flow Design Confirmation（Patterns / Forms & Workflows）
 // 操作の前の確認と、取り消し（Undo）。定義と判断基準は docs/web/patterns/confirmation.md を参照。
@@ -123,7 +124,8 @@ function ConfirmActionDialog({
       setPending(false)
     }
   }
-  React.useEffect(() => {
+  // 開閉の commit の時点で世代を進める（passive effect まで待つと、その間に届いた古い結果を受け付ける）
+  React.useLayoutEffect(() => {
     generation.current++
     running.current = false
   }, [open])
@@ -277,7 +279,14 @@ function useUndoableAction({ windowMs = 10_000, scopeKey }: { windowMs?: number;
   const scopeRef = React.useRef(scopeKey)
   const openIds = React.useRef(new Map<string, string | undefined>())
   const toastRef = React.useRef({ toast, dismiss })
-  toastRef.current = { toast, dismiss }
+  // 古い結果と古い Toast の「元に戻す」の照合は、scopeKey の文字列ではなく、スコープと世代で行う
+  // （A → B → A の最初の A の Toast から、最後の A のデータを戻さない）
+  const guard = useScopeGuard(scopeKey)
+  const guardRef = React.useRef(guard)
+  React.useLayoutEffect(() => {
+    toastRef.current = { toast, dismiss }
+    guardRef.current = guard
+  })
 
   React.useEffect(() => {
     if (scopeRef.current === scopeKey) return
@@ -328,13 +337,20 @@ function useUndoableAction({ windowMs = 10_000, scopeKey }: { windowMs?: number;
       staleTitle?: string
       /** 期限の後に戻す方法（「アーカイブ済みの一覧から戻せます」） */
       expiredDescription?: string
-    }): Promise<{ ok: true; handle: UndoHandle } | { ok: false; outcome: "failed" | "unknown" | "stale" }> => {
+    }): Promise<
+      | { ok: true; handle: UndoHandle }
+      | { ok: false; outcome: "failed" | "unknown" }
+      // stale：実行の間にスコープが変わった。performed は実行の結果（succeeded と unknown は、サーバーで処理された可能性がある）
+      | { ok: false; outcome: "stale"; performed: "succeeded" | "failed" | "unknown" }
+    > => {
       const scope = scopeRef.current
+      const g = guardRef.current
+      const snapshot = g.capture()
       let result: T
       try {
         result = await perform()
       } catch (e) {
-        if (scopeRef.current !== scope) return { ok: false, outcome: "stale" }
+        if (!g.isCurrent(snapshot)) return { ok: false, outcome: "stale", performed: e instanceof FormSaveError ? e.outcome : "unknown" }
         const outcome = e instanceof FormSaveError ? e.outcome : "unknown"
         toastRef.current.toast({
           variant: outcome === "failed" ? "destructive" : "warning",
@@ -344,7 +360,7 @@ function useUndoableAction({ windowMs = 10_000, scopeKey }: { windowMs?: number;
         return { ok: false, outcome }
       }
       // 実行の間にスコープが変わった場合は、新しいスコープに通知を出さない
-      if (scopeRef.current !== scope) return { ok: false, outcome: "stale" }
+      if (!g.isCurrent(snapshot)) return { ok: false, outcome: "stale", performed: "succeeded" }
       const baseId = `undo-${instance}-${++seq.current}`
       // 表示中の通知の id。取り消しに失敗して再試行の通知を出すたびに、新しい id にする
       // （閉じた通知と同じ id を使うと、閉じる途中の通知として扱われ、操作できない）
@@ -360,7 +376,7 @@ function useUndoableAction({ windowMs = 10_000, scopeKey }: { windowMs?: number;
       timers.current.add(timer)
       const doUndo = async () => {
         if (state !== "open") return false
-        if (scopeRef.current !== scope) {
+        if (!g.isCurrent(snapshot)) {
           toastRef.current.dismiss(id)
           toastRef.current.toast({ variant: "warning", title: staleTitle, description: expiredDescription })
           return false
@@ -377,7 +393,7 @@ function useUndoableAction({ windowMs = 10_000, scopeKey }: { windowMs?: number;
         try {
           await undo(result)
           state = "done"
-          if (scopeRef.current === scope) toastRef.current.toast({ variant: "success", title: undoneTitle })
+          if (g.isCurrent(snapshot)) toastRef.current.toast({ variant: "success", title: undoneTitle })
           return true
         } catch (e) {
           const outcome = e instanceof FormSaveError ? e.outcome : "unknown"
