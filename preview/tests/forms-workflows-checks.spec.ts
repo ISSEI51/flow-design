@@ -401,6 +401,39 @@ test.describe("scope boundaries and stale results", { tag: "@webkit" }, () => {
     await expect(page.locator("[data-slot=toast]").getByRole("button", { name: "元に戻す" })).toHaveCount(0)
   })
 
+  // D8：アンマウントしたら、表示中の「元に戻す」の通知を閉じる
+  test("undo: unmounting the hook closes its open undo toasts", async ({ page }) => {
+    await page.getByTestId("u-first").click()
+    const toast = page.locator("[data-slot=toast]", { hasText: "操作1を実行しました" })
+    await expect(toast).toBeVisible()
+    await page.getByTestId("undo-mount-toggle").click()
+    await expect(toast).toHaveCount(0)
+  })
+
+  // D9：A → B → A の後に、最初の A の取り消し（画面に残した handle）で、現在の A のデータを戻さない
+  test("undo: after A → B → A, the handle from the first A is refused", async ({ page }) => {
+    await page.getByTestId("u-first").click()
+    await expect(page.locator("[data-slot=toast]", { hasText: "操作1を実行しました" })).toBeVisible()
+    await page.getByTestId("scope-toggle").click()
+    await page.getByTestId("scope-toggle").click()
+    await expect(page.getByTestId("scope-toggle")).toContainText("（A）")
+    await page.getByTestId("u-handle-undo").click()
+    await expect.poll(() => state<unknown[]>(page, "undo-results")).toEqual([{ ok: true }, { handleUndo: false }])
+    expect(await count(page, "undo")).toBe(0)
+    expect(await state(page, "undo-state")).toEqual([])
+    await expect(page.locator("[data-slot=toast]", { hasText: "表示している範囲（ワークスペースなど）が変わったため、元に戻せません" })).toBeVisible()
+  })
+
+  // D9：実行の間にスコープが変わった場合は、新しいスコープに通知を出さず、実行の結果（performed）を返す
+  test("undo: a result arriving after a scope change is stale, reports what was performed and shows no toast", async ({ page }) => {
+    await page.getByTestId("u-slow").click()
+    await waitCount(page, "perform", 1)
+    await page.getByTestId("scope-toggle").click()
+    await resolve(page, "perform", undefined)
+    await expect.poll(() => state<unknown[]>(page, "undo-results")).toEqual([{ ok: false, outcome: "stale", performed: "succeeded" }])
+    await expect(page.locator("[data-slot=toast]", { hasText: "操作3を実行しました" })).toHaveCount(0)
+  })
+
   test("undo: a failed undo can be retried from the toast within the window; an unknown undo is not offered again", async ({ page }) => {
     const toasts = page.locator("[data-slot=toast]")
     await page.getByTestId("u-first").click()
@@ -463,6 +496,56 @@ test.describe("confirm dialog unknown result", { tag: "@webkit" }, () => {
     await page.getByTestId("c-open-y").click()
     await expect(dialog.getByRole("button", { name: "Yを削除" })).toBeEnabled()
     expect(await state(page, "confirm-state")).toEqual([])
+  })
+
+  // D4：結果が不明になると実行のボタンを取り除く。フォーカスを body に落とさず、知らせに移す
+  test("an unknown result moves the focus from the removed confirm button to the notice", async ({ page }) => {
+    const dialog = page.getByTestId("c-dialog")
+    await page.getByTestId("c-open-x").click()
+    const confirm = dialog.getByRole("button", { name: "Xを削除" })
+    await confirm.focus()
+    await page.keyboard.press("Enter")
+    await waitCount(page, "confirm", 1)
+    await resolve(page, "confirm", { unknown: "削除されたかを確かめられていません" })
+    const notice = dialog.locator("[data-slot=confirm-action-unknown]")
+    await expect(notice).toBeFocused()
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false)
+    await page.keyboard.press("Tab")
+    await expect(dialog.getByRole("button", { name: "閉じる" })).toBeFocused()
+  })
+
+  // PERM-2：権限の不足などで実行できない間は、理由を示し、実行のボタンを Focusable Disabled にする
+  test("blockedReason: the confirm button is focusable disabled with the reason and cannot run by click, Enter or Space", async ({ page }) => {
+    await page.getByTestId("c-block").click()
+    await page.getByTestId("c-open-x").click()
+    const dialog = page.getByTestId("c-dialog")
+    const confirm = dialog.getByRole("button", { name: "Xを削除" })
+    await expect(confirm).toHaveAttribute("aria-disabled", "true")
+    await expect(confirm).toHaveAccessibleDescription("削除する権限がなくなりました。管理者に権限を確認してください。")
+    await confirm.focus()
+    await expect(confirm).toBeFocused()
+    await page.keyboard.press("Enter")
+    await page.keyboard.press("Space")
+    await confirm.click({ force: true })
+    expect(await count(page, "confirm")).toBe(0)
+    await expect(dialog).toBeVisible()
+  })
+
+  // D16：progress="external" は、閉じるまでの間の 2 回目の押下で二重に実行しない
+  test("external progress: two presses before the dialog closes run once", async ({ page }) => {
+    await page.getByTestId("e-open").click()
+    await expect(page.getByTestId("e-dialog")).toBeVisible()
+    await page.evaluate(() => {
+      const button = [...document.querySelectorAll<HTMLButtonElement>("[data-testid=e-dialog] button")].find((b) => b.textContent === "3件を削除")!
+      button.click()
+      button.click()
+    })
+    await expect(page.getByTestId("e-dialog")).toBeHidden()
+    await expect.poll(() => state(page, "external-runs")).toBe(1)
+    // 開き直すと、もう一度実行できる
+    await page.getByTestId("e-open").click()
+    await page.getByTestId("e-dialog").getByRole("button", { name: "3件を削除" }).click()
+    await expect.poll(() => state(page, "external-runs")).toBe(2)
   })
 })
 

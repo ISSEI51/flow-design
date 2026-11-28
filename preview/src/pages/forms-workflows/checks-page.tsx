@@ -7,7 +7,7 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { ConfirmActionDialog, useUndoableAction } from "@/patterns/confirm-action"
+import { ConfirmActionDialog, useUndoableAction, type UndoHandle } from "@/patterns/confirm-action"
 import { FormSaveError, submitOnEnter, useFormState, type FormFields, type FormSaveResult } from "@/patterns/form-state"
 import { useAutosave, useInstantSave } from "@/patterns/save-modes"
 import { UnsavedChangesProvider, useNavigationGuard, useUnsavedChanges } from "@/patterns/unsaved-changes"
@@ -249,6 +249,7 @@ type One = { value: string; hidden: string; show: boolean }
 function ScopeCase() {
   const [scope, setScope] = useState("A")
   const [mounted, setMounted] = useState(true)
+  const [undoMounted, setUndoMounted] = useState(true)
   const [log, setLog] = useState<string[]>([])
   const add = (s: string) => setLog((l) => [...l, s])
   return (
@@ -260,12 +261,16 @@ function ScopeCase() {
         <Button size="sm" variant="secondary" onClick={() => setMounted((m) => !m)} data-testid="mount-toggle">
           フォームを{mounted ? "外す" : "戻す"}
         </Button>
+        <Button size="sm" variant="secondary" onClick={() => setUndoMounted((m) => !m)} data-testid="undo-mount-toggle">
+          Undo の部品を{undoMounted ? "外す" : "戻す"}
+        </Button>
       </div>
       {mounted && <ScopeForm scope={scope} onEvent={add} />}
       <InstantCase scope={scope} />
       <AutosaveCase scope={scope} />
-      <UndoCase scope={scope} />
+      {undoMounted && <UndoCase scope={scope} />}
       <ConfirmCase />
+      <ExternalConfirmCase />
       <Out testId="scope-log" value={log} />
     </div>
   )
@@ -362,17 +367,28 @@ function UndoCase({ scope }: { scope: string }) {
   const first = useUndoableAction({ scopeKey: scope, windowMs: 60_000 })
   const second = useUndoableAction({ scopeKey: scope, windowMs: 60_000 })
   const [undone, setUndone] = useState<string[]>([])
-  const act = (inst: typeof first, name: string) =>
-    void inst.run({
-      perform: async () => ({ name, scope }),
+  const [results, setResults] = useState<unknown[]>([])
+  const handle = useRef<UndoHandle | null>(null)
+  const act = (inst: typeof first, name: string, slow = false) =>
+    void inst
+      .run({
+        // slow：実行の結果を検品から返す（実行の間のスコープの変更）
+        perform: async () => {
+          if (slow) await hold<void>("perform")
+          return { name, scope }
+        },
       undo: async (r) => {
         checks.calls.push({ key: "undo", args: r })
         await hold<void>("undo")
         setUndone((u) => [...u, `${r.name}@${r.scope}`])
       },
-      title: `${name}を実行しました`,
-      undoneTitle: `${name}を元に戻しました`,
-    })
+        title: `${name}を実行しました`,
+        undoneTitle: `${name}を元に戻しました`,
+      })
+      .then((r) => {
+        if (r.ok) handle.current = r.handle
+        setResults((l) => [...l, r.ok ? { ok: true } : r])
+      })
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="secondary" onClick={() => act(first, "操作1")} data-testid="u-first">
@@ -381,7 +397,15 @@ function UndoCase({ scope }: { scope: string }) {
       <Button size="sm" variant="secondary" onClick={() => act(second, "操作2")} data-testid="u-second">
         操作2
       </Button>
+      <Button size="sm" variant="secondary" onClick={() => act(first, "操作3", true)} data-testid="u-slow">
+        操作3（実行の結果を待つ）
+      </Button>
+      {/* 画面に残した戻す手段（run が返す handle.undo）。古いスコープの handle で、現在のスコープを変えないことを確かめる */}
+      <Button size="sm" variant="secondary" onClick={() => void handle.current?.undo().then((ok) => setResults((l) => [...l, { handleUndo: ok }]))} data-testid="u-handle-undo">
+        最後の操作を画面から元に戻す
+      </Button>
       <Out testId="undo-state" value={undone} />
+      <Out testId="undo-results" value={results} />
     </div>
   )
 }
@@ -389,8 +413,12 @@ function UndoCase({ scope }: { scope: string }) {
 function ConfirmCase() {
   const [target, setTarget] = useState<string | null>(null)
   const [done, setDone] = useState<string[]>([])
+  const [blocked, setBlocked] = useState(false)
   return (
     <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="secondary" onClick={() => setBlocked((b) => !b)} data-testid="c-block">
+        実行できない理由を{blocked ? "外す" : "示す"}（blockedReason）
+      </Button>
       <Button size="sm" variant="secondary" onClick={() => setTarget("X")} data-testid="c-open-x">
         X を削除
       </Button>
@@ -407,6 +435,7 @@ function ConfirmCase() {
         confirmLabel={`${target ?? ""}を削除`}
         targetKey={target ?? undefined}
         variant="destructive"
+        blockedReason={blocked ? "削除する権限がなくなりました。管理者に権限を確認してください。" : undefined}
         data-testid="c-dialog"
         onConfirm={async ({ targetKey }) => {
           // 検品から { unknown: "..." } や { error: "..." } を渡すと、その結果を返す
@@ -416,6 +445,31 @@ function ConfirmCase() {
         }}
       />
       <Out testId="confirm-state" value={done} />
+    </div>
+  )
+}
+
+// 一括の操作（progress="external"）。実行の開始時に閉じる。閉じるまでの 2 回目の押下で、二重に実行しないこと
+function ExternalConfirmCase() {
+  const [open, setOpen] = useState(false)
+  const [runs, setRuns] = useState(0)
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="secondary" onClick={() => setOpen(true)} data-testid="e-open">
+        一括の削除
+      </Button>
+      <ConfirmActionDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="3件を削除しますか？"
+        confirmLabel="3件を削除"
+        targetKey="a,b,c"
+        variant="destructive"
+        progress="external"
+        data-testid="e-dialog"
+        onConfirm={() => setRuns((n) => n + 1)}
+      />
+      <Out testId="external-runs" value={runs} />
     </div>
   )
 }
