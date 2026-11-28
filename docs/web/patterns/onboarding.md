@@ -353,7 +353,7 @@ const restricted = trialEnded && !checklist.requirementsMet
 
 ## 統合時に確認する事項
 
-Forms & Workflows は未統合（`origin/feat/forms-and-workflows-patterns`、確認した版は 40df108）。次の内容は、そのブランチのファイルを読んで確かめた（このブランチには持ち込んでいない。再実装していない）。
+この節を書いた時点（v0.1）では、Forms & Workflows は未統合だった（`origin/feat/forms-and-workflows-patterns`、確認した版は 40df108）。その後 main に統合され、このブランチに取り込んだ（system-and-account.md の `b5ea769`）。Patterns Integration Review（2026-11-28）の時点の状況：顧客の登録の Sheet の破棄の確認は `DiscardChangesAlert` に置き換えた。組織の作成（`CreateOrganizationSetup`）の Multi-step Workflow への置き換えは行っていない（`step-flow.ts`、`stepper.tsx`、`form-state.ts` を別の担当が並行して変更しており、API の確定を待つため。下の手順は、置き換えの手順として残す）。組織の作成の手順の位置の表示は「手順 n / m・必須」「任意」のまま、必須の手順と任意の手順を区別して示している。
 
 - **Multi-step Workflow（`registry/patterns/step-flow.ts` の `useStepFlow`、`stepper.tsx` の `Stepper`）**：組織の作成（`CreateOrganizationSetup`）を次のように置き換える。
   - 手順の並びと移動：`setupStepsOf` と `SetupDraft.step`、`moveTo`、`back` を、`useStepFlow({ steps, isComplete, initial })` の `next`、`back`、`goTo` に置き換える。`steps` には現在の条件で必要な手順だけを渡す（「自分だけで使う」では招待の手順を除く）。表示中の手順が不要になった場合の移動先は、現在の `steps.includes(draft.step) ? draft.step : "data"` を廃止し、`useStepFlow` の規則（同じ位置、手前に未完了があればそこへ）に合わせる。
@@ -363,7 +363,7 @@ Forms & Workflows は未統合（`origin/feat/forms-and-workflows-patterns`、�
   - 途中の入力と再開：`SetupDraft` の `step` を `flow.snapshot()`（`current`、`reached`、`completed`）に置き換え、再開は `flow.restore(snapshot)` と `form.reset(values)` で行う。再開の時点の権限と選択肢で、到達していた手順を確かめ直す（`form.reveal`）。
   - 最終の送信：`create` を `handleSubmit` に置き換え、確定した失敗は `FormSaveError`（`failed`）で返す。作成の要求の ID（`SetupDraft.requestId`）、結果が不明な場合の「作成されたかを確認する」（`findCreated`）、二重の実行の防止は保つ。
   - 置き換えの後も保つもの：手順の見出しへのフォーカス（`useStepFlow` の `headingRef`）、作成の後に成功の画面を挟まないこと、アンマウントと利用者の変更の後の応答を反映しないこと（`useScopeGuard`）。
-- **Create & Edit、Unsaved Changes（`unsaved-changes.tsx` の `useUnsavedChanges`、`DiscardChangesAlert`）**：顧客の登録の Sheet の `unsavedChanges` とプレビューの `DiscardAlert` を置き換える。組織の作成の「画面を閉じる」も、手順の中の保存していない入力がある場合は Unsaved Changes で確かめる（現在は手順の境界でだけ保存し、閉じると現在の手順の入力は失われる）。
+- **Create & Edit、Unsaved Changes（`unsaved-changes.tsx` の `useUnsavedChanges`、`DiscardChangesAlert`）**：顧客の登録の Sheet の `unsavedChanges` とプレビューの `DiscardAlert` を置き換える（Patterns Integration Review で `DiscardChangesAlert` に置き換えた。`useUnsavedChanges` への登録は未実施）。組織の作成の「画面を閉じる」も、手順の中の保存していない入力がある場合は Unsaved Changes で確かめる（現在は手順の境界でだけ保存し、閉じると現在の手順の入力は失われる）。
 - **Import & Export（`import-review.tsx` の `ImportResultSummary`、`importOutcome`）**：「既存の顧客を取り込む」の画面は、模擬の CSV を取り込むだけの例である。統合後は Import & Export の画面へ移るようにし、完了は取り込みの結果（成功した件数が 1 件以上）で判定する。
 - **即時の保存（`save-modes.ts` の `useInstantSave`）**：Checklist の表示の状態の保存（`useGettingStarted` の `setVisibility`）は、即時の保存と同じ性質（保存中、失敗、結果が不明、確認）を持つ。統合後に `useInstantSave` と比べ、共通化に価値がある場合だけ置き換える。世代の管理（`useScopeGuard`）と責務が重なる箇所も、統合後に比べる。
 - **Authentication**：`resolveFirstScreen` の前後の遷移（認証の後の戻り先、多要素認証の設定の画面）を [authentication.md](authentication.md) と合わせる。
