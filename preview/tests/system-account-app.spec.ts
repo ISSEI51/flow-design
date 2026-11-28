@@ -887,6 +887,19 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
   })
 
+  test("SET-4: the time zone has one source: after changing it in the personal settings, quiet hours use the new time zone", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=display")
+    await page.getByTestId("set-timezone").click()
+    await page.getByRole("option", { name: "アメリカ（ロサンゼルス）", exact: true }).click()
+    await expect(page.getByTestId("set-timezone-status").getByRole("status")).toHaveText("保存しました")
+    await go(page, "page=settings&ws=hq&cat=notifications")
+    await expect(page.getByTestId("ntf-settings")).toBeVisible()
+    await page.getByTestId("ntf-quiet").click()
+    await expect(page.getByTestId("ntf-quiet-summary")).toContainText("（America/Los_Angeles）")
+    await expect(page.getByTestId("ntf-quiet-summary")).not.toContainText("Asia/Tokyo")
+  })
+
   test("SYS-3: while offline, instant settings saves and mark-all-read are not sent; the reason is not 'unknown'", async ({ page }) => {
     await signInAs(page, sato)
     await go(page, "page=settings&ws=hq&cat=display")

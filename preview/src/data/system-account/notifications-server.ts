@@ -12,6 +12,7 @@ import type { NotificationPage } from "@/patterns/notification-feed"
 import { isInReadAllRange, type ChannelDelivery, type ReadAllRange } from "@/patterns/notification-state"
 
 import { MockRequestError, MockUnknownError, mockRequest, type MockOutcome } from "./mock"
+import { settingsServer } from "./settings-server"
 import {
   defaultPersonalSettings,
   mandatoryNotifications,
@@ -344,6 +345,10 @@ function settingsOf(userId: UserId) {
     s = cloneSettings(defaultPersonalSettings)
     store.settings.set(userId, s)
   }
+  // タイムゾーンの正本は個人の設定（Settings の模擬のサーバーの表示の設定）。通知の設定には複製を持たない（SET-4）。
+  // 個人の設定でタイムゾーンを変えると、通知を控える時間の判定と表示も、そのタイムゾーンになる。
+  const timezone = settingsServer.personalOf(userId)?.display.timezone
+  if (timezone) s.timezone = timezone
   return s
 }
 

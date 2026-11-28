@@ -712,6 +712,8 @@ function SettingsPage({ userId, route, permissions, access, monitor, notificatio
             // 模擬：実際の Notification.requestPermission() は呼ばない
             onRequestBrowserPermission={() => setBrowserPermission("granted")}
             headingLevel={3}
+            // 保存が権限不足で拒否された：最新の権限を取り直す（個人の設定と同じ）
+            onPermissionDenied={access.reload}
           />
         }
       />
