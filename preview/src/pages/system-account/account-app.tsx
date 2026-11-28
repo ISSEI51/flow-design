@@ -6,6 +6,7 @@ import { planReauthentication, resolveReturnTo } from "@/patterns/auth-flow"
 import { MinimalShell } from "@/patterns/app-shell"
 import { ServiceUnavailable } from "@/patterns/service-state"
 import { summarizeIssues } from "@/patterns/system-status"
+import { UnsavedChangesProvider } from "@/patterns/unsaved-changes"
 
 import { authApi, authServer, demoInvitation, homePathOf, type SentEmail } from "../../data/system-account/auth-server"
 import { currentPermissionsOf } from "../../data/system-account/permission-server"
@@ -268,19 +269,22 @@ export function AccountApp() {
   if (phase.kind === "create-org") {
     return (
       <AuthFrame verify={verify} wide>
-        <CreateOrganizationSetup
-          userId={phase.userId as UserId}
-          api={onboardingApi}
-          titleAs="h1"
-          onComplete={({ start }) =>
-            setPhase({
-              kind: "new-org",
-              start,
-              // 作成した組織の管理者。権限は、組織を作成した利用者の管理者のロール
-              viewer: { userId: phase.userId as UserId, workspaceId: NEW_WORKSPACE_ID, permissions: roles.admin.permissions, joinedBy: "created" },
-            })
-          }
-        />
+        {/* 前回の手順の保存の後に入力した内容を、再読み込みの前に確かめる（beforeunload） */}
+        <UnsavedChangesProvider>
+          <CreateOrganizationSetup
+            userId={phase.userId as UserId}
+            api={onboardingApi}
+            titleAs="h1"
+            onComplete={({ start }) =>
+              setPhase({
+                kind: "new-org",
+                start,
+                // 作成した組織の管理者。権限は、組織を作成した利用者の管理者のロール
+                viewer: { userId: phase.userId as UserId, workspaceId: NEW_WORKSPACE_ID, permissions: roles.admin.permissions, joinedBy: "created" },
+              })
+            }
+          />
+        </UnsavedChangesProvider>
       </AuthFrame>
     )
   }
