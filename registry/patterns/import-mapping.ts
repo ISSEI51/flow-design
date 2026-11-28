@@ -191,21 +191,45 @@ export type ImportResult = {
 const countKeys = ["created", "updated", "skipped", "failed", "unknown", "total"] as const
 const isCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0
 
-/** 結果の種類。件数が負の数、小数、NaN、Infinity の場合と、合計が処理の対象と一致しない場合は、結果が不明として扱う */
-export function importOutcome(r: ImportResult): "success" | "partial" | "failed" | "unknown" {
+export type ImportOutcome = "success" | "partial" | "failed" | "unknown"
+
+/**
+ * 結果の種類。件数が負の数、小数、NaN、Infinity の場合と、合計が処理の対象と一致しない場合は、結果が不明として扱う。
+ * integrity（reconcileImportResult の照合の結果）を渡すと、件数を確かめられなかった照合（形式が正しくない件数、
+ * サーバーが返さなかった件数、合計の不一致、結果が返らなかった行）も結果が不明として扱う。
+ * サーバーの応答を照合した結果を判定する場合は、必ず integrity を渡す（件数だけでは、返さなかった件数を 0 と区別できない）
+ */
+export function importOutcome(r: ImportResult, integrity?: ImportIntegrity): ImportOutcome {
   if (!countKeys.every((k) => isCount(r[k]))) return "unknown"
   const accounted = r.created + r.updated + r.skipped + r.failed + r.unknown
   if (r.unknown > 0 || accounted !== r.total) return "unknown"
+  if (integrity && !countsConfirmed(integrity)) return "unknown"
   if (r.failed === 0) return "success"
   return r.created + r.updated > 0 ? "partial" : "failed"
+}
+
+/**
+ * 処理の対象のすべての行の結果が、件数として確定しているか。
+ * false：形式が正しくない件数、サーバーが返さなかった件数、合計の不一致、結果が返らなかった行のどれかがある。
+ * 重なった結果、対象ではない行の結果、件数と行ごとの結果の不一致は、行ごとの結果で数え直しているため、ここでは false にしない
+ * （complete は false のまま。表示では成功として示さない）
+ */
+function countsConfirmed(i: ImportIntegrity) {
+  return i.invalidCounts.length === 0 && (i.missingCounts?.length ?? 0) === 0 && !i.totalMismatch && i.missingRows.length === 0
 }
 
 export type ImportRowOutcome = "created" | "updated" | "skipped" | "failed" | "unknown"
 export type ImportRowResult = { row: number; outcome: ImportRowOutcome; reason?: string }
 
 export type ImportIntegrity = {
-  /** 件数の形式が正しくない項目（負の数、小数、NaN、Infinity、数ではない） */
+  /** 件数の形式が正しくない項目（負の数、小数、NaN、Infinity、数ではない）。値はあるが使えない */
   invalidCounts: string[]
+  /**
+   * 件数だけの結果で、サーバーが返さなかった件数（created、updated、skipped、failed）。0 とみなさず、結果が不明として扱う
+   * （残りの件数の合計が処理の対象と一致しても、返さなかった件数が 0 であることは確かめられていない）。
+   * reconcileImportResult は必ず設定する。製品が組み立てた照合の結果との互換のため、省略できる（省略は空の配列と同じ）
+   */
+  missingCounts?: string[]
   /** 件数の合計が、処理の対象の件数と一致しない */
   totalMismatch: boolean
   /** 行ごとの結果で、結果が返らなかった行 */
@@ -224,7 +248,9 @@ const rowOutcomes = new Set<ImportRowOutcome>(["created", "updated", "skipped", 
 
 /**
  * 取り込みの結果を、処理の対象と照合する（Data Browsing の reconcileBulkResults と同じ考え方）。結果が足りない場合に、成功として扱わない。
- * - 件数だけの結果：負の数、小数、NaN、Infinity を 0 とみなして記録し、合計が処理の対象と一致しなければ、足りない分を結果が不明にする。
+ * - 件数だけの結果：負の数、小数、NaN、Infinity（invalidCounts）と、返さなかった件数（missingCounts）は 0 として合計し、
+ *   合計が処理の対象と一致しなければ、足りない分を結果が不明にする。invalidCounts か missingCounts があれば、
+ *   合計が一致しても outcome は unknown になる（不足している件数を 0 として成功させない）。unknown の件数は省略してよい（0）。
  * - 行ごとの結果（rows）：対象の行ごとに結果を 1 つずつ求める。返らなかった行は結果が不明。同じ行の重なりは 1 つとして数え、
  *   異なる結果が重なった行は結果が不明。対象ではない行の結果は件数に含めない。行ごとの結果から件数を数える（サーバーの件数より優先する）。
  * target.rows には、処理の対象の行番号（元のファイルの行番号）を渡す。行ごとの結果がない API では省略する。
@@ -232,10 +258,12 @@ const rowOutcomes = new Set<ImportRowOutcome>(["created", "updated", "skipped", 
 export function reconcileImportResult(target: { total: number; rows?: readonly number[] }, response: unknown) {
   const raw = (response && typeof response === "object" ? response : {}) as Record<string, unknown>
   const invalidCounts: string[] = []
+  const missingCounts: string[] = []
   const count = (k: (typeof countKeys)[number]) => {
     const v = raw[k] ?? (k === "unknown" ? 0 : undefined)
     if (isCount(v)) return v
-    invalidCounts.push(k)
+    if (v === undefined) missingCounts.push(k)
+    else invalidCounts.push(k)
     return 0
   }
   let rowResults: ImportRowResult[] | null = null
@@ -285,12 +313,28 @@ export function reconcileImportResult(target: { total: number; rows?: readonly n
   const totalMismatch = accounted !== target.total
   const integrity: ImportIntegrity = {
     invalidCounts,
+    missingCounts,
     totalMismatch,
     missingRows,
     duplicateRows,
     unexpectedRows,
     countsDisagree,
-    complete: invalidCounts.length === 0 && !totalMismatch && missingRows.length === 0 && duplicateRows.length === 0 && unexpectedRows.length === 0 && !countsDisagree,
+    complete: false,
   }
-  return { result, rows: rowResults, integrity }
+  integrity.complete = isIntegrityComplete(integrity)
+  /** outcome：importOutcome(result, integrity)。照合の結果で判定した、結果の種類 */
+  return { result, rows: rowResults, integrity, outcome: importOutcome(result, integrity) }
+}
+
+/** 照合に矛盾がないか（ImportIntegrity の complete の計算）。製品が照合の結果を組み合わせ直した場合（再処理、状態の確認）に使う */
+export function isIntegrityComplete(i: Omit<ImportIntegrity, "complete">) {
+  return (
+    i.invalidCounts.length === 0 &&
+    (i.missingCounts?.length ?? 0) === 0 &&
+    !i.totalMismatch &&
+    i.missingRows.length === 0 &&
+    i.duplicateRows.length === 0 &&
+    i.unexpectedRows.length === 0 &&
+    !i.countsDisagree
+  )
 }

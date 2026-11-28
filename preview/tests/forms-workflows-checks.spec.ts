@@ -734,6 +734,31 @@ test.describe("pure helpers v0.1", () => {
     expect(importOutcome({ created: 1, updated: 0, skipped: 0, failed: 0, unknown: 0, total: Number.NaN })).toBe("unknown")
   })
 
+  // D6：サーバーが一部の件数しか返さない場合に、返さなかった件数を 0 として成功させない
+  test("reconcileImportResult: counts the server did not return are missing, not zero; the outcome is unknown", () => {
+    const partial = reconcileImportResult({ total: 10 }, { created: 10 })
+    expect(partial.integrity.missingCounts).toEqual(["updated", "skipped", "failed"])
+    expect(partial.integrity.invalidCounts).toEqual([])
+    expect(partial.integrity.complete).toBe(false)
+    expect(partial.outcome).toBe("unknown")
+    expect(importOutcome(partial.result, partial.integrity)).toBe("unknown")
+    // すべての件数がそろえば成功（unknown の件数は省略してよい）
+    const full = reconcileImportResult({ total: 10 }, { created: 8, updated: 0, skipped: 2, failed: 0 })
+    expect(full.integrity).toMatchObject({ missingCounts: [], complete: true })
+    expect(full.outcome).toBe("success")
+    // 形式が正しくない件数（値はある）は invalidCounts、返さなかった件数は missingCounts
+    const mixed = reconcileImportResult({ total: 3 }, { created: "3", updated: 0, skipped: 0 })
+    expect(mixed.integrity).toMatchObject({ invalidCounts: ["created"], missingCounts: ["failed"] })
+    expect(mixed.outcome).toBe("unknown")
+    // 行ごとの結果がすべての対象にあれば、重なった同じ結果と対象ではない行の結果は complete を false にするが、件数で判定する
+    const rows = reconcileImportResult(
+      { total: 2, rows: [2, 3] },
+      { rows: [{ row: 2, outcome: "created" }, { row: 2, outcome: "created" }, { row: 3, outcome: "failed" }, { row: 99, outcome: "created" }] }
+    )
+    expect(rows.integrity).toMatchObject({ duplicateRows: [2], unexpectedRows: [99], missingRows: [], complete: false })
+    expect(rows.outcome).toBe("partial")
+  })
+
   test("sanitizeMapping: unknown columns are dropped, unknown field ids become skip", () => {
     const columns = createImportColumns(["会社名", "電話"], [["a", "b"]])
     const r = sanitizeMapping({ "col-0": "company", "col-1": "nope", "col-9": "phone" }, columns, [{ id: "company", label: "会社名" }])

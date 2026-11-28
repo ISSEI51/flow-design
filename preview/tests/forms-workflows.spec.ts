@@ -1172,6 +1172,45 @@ test.describe("Import & Export", () => {
     for (const line of failed) expect(line).toMatch(/^(12|24|30) 行目/)
   })
 
+  // D7：状態の確認で対象のすべての行の結果が確定したら、件数で判定する。応答の矛盾は一覧に残し、確定した失敗だけを再処理できる
+  test("inconsistent response: after the status check the counts decide the outcome, the inconsistencies stay listed, only confirmed failures are retried", async ({ page }) => {
+    await server(page, (s) => (s.importMode = "inconsistent"))
+    await loadSample(page)
+    await resolveMapping(page)
+    await page.getByTestId("ie-next").click()
+    await page.getByTestId("ie-validate").click()
+    await page.getByTestId("ie-next").click()
+    await page.getByTestId("ie-run").click()
+    const result = ie(page).locator("[data-slot=import-result]")
+    await expect(result).toHaveAttribute("data-outcome", "unknown", { timeout: 5000 })
+    await expect(result).toContainText("処理の途中で結果を受け取れなかった行があり")
+    await expect(result.getByRole("button", { name: /再処理/ })).toHaveCount(0)
+    await expect(ie(page).getByRole("button", { name: "顧客の一覧へ" })).toHaveCount(0)
+    await result.getByRole("button", { name: "状態を確認" }).click()
+    await expect(result).toHaveAttribute("data-outcome", "partial", { timeout: 5000 })
+    await expect(result).toHaveAttribute("data-complete", "false")
+    await expect(result).toContainText("処理の対象37件")
+    await expect(result).toContainText("失敗1件")
+    await expect(result).not.toContainText(/結果が不明\d+件/)
+    await expect(result).not.toContainText("結果の件数の合計が、処理の対象の件数と一致しません")
+    await expect(result.locator("[data-slot=import-integrity]")).toContainText("取り込みの対象ではない 1行の結果が返されました")
+    await expect(result).toContainText("処理の対象のすべての行の結果は確定しています")
+    await expect(result.getByRole("button", { name: "状態を確認" })).toHaveCount(0)
+    await expect(ie(page).getByRole("button", { name: "顧客の一覧へ" })).toBeVisible()
+    // 確定した失敗（1 行）だけを再処理する
+    await server(page, (s) => (s.importMode = "success"))
+    const before = (await requests(page, "run-import")).length
+    await result.getByRole("button", { name: "失敗した 1件だけを再処理" }).click()
+    await expect(result).toHaveAttribute("data-outcome", "success", { timeout: 5000 })
+    const runs = await requests(page, "run-import")
+    expect(runs.length).toBe(before + 1)
+    expect((runs.at(-1)!.payload as { rows: number[] }).rows).toHaveLength(1)
+    // 応答の矛盾は残るため、成功の形（success の色、role="status"）では示さない
+    await expect(result).toHaveAttribute("data-complete", "false")
+    await expect(result).toHaveAttribute("data-variant", "warning")
+    await expect(result).toHaveAttribute("role", "alert")
+  })
+
   test("unknown result offers a status check, not a retry", async ({ page }) => {
     await server(page, (s) => (s.importMode = "unknown"))
     await loadSample(page)

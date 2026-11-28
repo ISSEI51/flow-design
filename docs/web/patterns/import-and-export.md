@@ -25,7 +25,7 @@
 | 保存した対応付けの照合 | `sanitizeMapping(mapping, columns, fields)` | 存在しない列の対応付けを捨て、対象外の項目 ID を「取り込まない」にする |
 | 検証の結果 | `ImportValidationSummary`、`ImportIssueTable` | 正常、要確認、エラーの件数と絞り込み。行番号、状態、項目、原因と直し方 |
 | 実行の前の確認 | 製品の表示（`dl`） | 新規登録、更新、登録しない（重複）、取り込まない（エラー）の件数 |
-| 結果の照合 | `reconcileImportResult(target, response)` | サーバーの応答を処理の対象と照合し、`result`（`ImportResult`）、`rows`（行ごとの結果）、`integrity`（`ImportIntegrity`）を返す |
+| 結果の照合 | `reconcileImportResult(target, response)` | サーバーの応答を処理の対象と照合し、`result`（`ImportResult`）、`rows`（行ごとの結果）、`integrity`（`ImportIntegrity`）、`outcome`（`importOutcome(result, integrity)`）を返す |
 | 結果 | `ImportResultSummary`（`result`、`integrity`）、`importOutcome` | 新規登録、更新、スキップ、失敗、結果が不明、処理の対象の件数。照合で矛盾があれば、成功として示さず、件数に含めなかった結果と理由を示す |
 | 書き出しの設定 | 製品の Dialog（例：`ExportDialog`）、`defaultExportScope`、`exportScopeLabel`、`exportFileName`、`escapeCsvCell(value, { mode })` | 対象の範囲、出力する列、形式 |
 | 直接のダウンロード | 製品のメニューの項目（例：「検索結果の 8件を CSV でダウンロード」） | 対象と形式が明確で、個人情報を含まない出力 |
@@ -134,17 +134,20 @@
 
 - ファイルの選択済み、アップロード中・完了、解析中・完了、検証中・完了、取り込み中、成功、一部失敗、失敗、結果が不明を分ける。
 - 正確な進捗を取得できる場合だけ、進捗率を示す（例：「取り込んでいます（20 / 35 行）」と Progress）。
-- 新規登録、更新、スキップ、失敗の件数を分けて示す（`ImportResultSummary`）。件数の合計を処理の対象と一致させる。`importOutcome` は、合計が処理の対象と一致しない場合と、件数の形式が正しくない場合（負の数、小数、NaN、Infinity、数ではない値）、結果が不明として扱う。
+- 新規登録、更新、スキップ、失敗の件数を分けて示す（`ImportResultSummary`）。件数の合計を処理の対象と一致させる。`importOutcome(result, integrity)` は、合計が処理の対象と一致しない場合と、件数の形式が正しくない場合（負の数、小数、NaN、Infinity、数ではない値）、結果が不明として扱う。`integrity`（`reconcileImportResult` の照合の結果）を渡すと、サーバーが返さなかった件数（`missingCounts`）、形式が正しくない件数（`invalidCounts`）、合計の不一致（`totalMismatch`）、結果が返らなかった行（`missingRows`）がある場合も、結果が不明として扱う。サーバーの応答を判定する場合は、必ず `integrity` を渡す（`reconcileImportResult` の戻り値の `outcome` は、`importOutcome(result, integrity)` の値）。`integrity` を省略した `importOutcome(result)` は、件数だけで判定する（返さなかった件数を 0 と区別できない）。
 
 | `importOutcome` | 条件 | 表示 |
 | --- | --- | --- |
-| `success` | 失敗も結果が不明もない | 「取り込みが終わりました」（success、`role="status"`） |
+| `success` | 失敗も結果が不明もない | 「取り込みが終わりました」（success、`role="status"`）。照合に矛盾がある場合（`complete` が false）は「取り込みが終わりました。サーバーの応答に矛盾がありました」（warning、`role="alert"`） |
 | `partial` | 失敗があり、新規登録か更新が 1 件以上 | 「一部の行を取り込めませんでした」（warning、`role="alert"`） |
 | `failed` | 失敗があり、新規登録も更新もない | 「取り込めませんでした」（destructive、`role="alert"`） |
-| `unknown` | 結果が不明な行がある、または件数の合計が合わない | 「結果を確かめられていない行があります」（warning、`role="alert"`） |
+| `unknown` | 結果が不明な行がある、件数の合計が合わない、または照合で件数を確かめられなかった（返さなかった件数、形式が正しくない件数、返らなかった行） | 「結果を確かめられていない行があります」（warning、`role="alert"`）と、事実に合う理由（「処理の途中で結果を受け取れなかった行があり…」「サーバーが「更新」「スキップ」「失敗」の件数を返さなかったため…」「結果の件数の合計が、処理の対象の件数と一致しません。」など） |
+
+- `ImportResultSummary` の `integrity` を省略すると、件数を照合していないものとして扱い、件数の上で成功でも `unknown`（「処理の対象と結果を照合していないため…」）として示す。サーバーの応答を示す場合は、必ず `reconcileImportResult` の `integrity` を渡す。
 
 - 失敗の理由と再処理の方法を示す。確定した失敗の行だけを再処理できる（「失敗した N件だけを再処理」）。成功した行と、結果が不明な行は再処理の対象にしない（製品が対象を絞る）。失敗した行はファイルで書き出せる。
-- 結果が不明な場合は、再処理のボタンを置かず、状態の確認を優先する（「状態を確認」）。例では、行ごとの結果（照合の後）で結果が不明な行だけを確かめる。登録されていた行は成功として扱い、再処理の対象にしない。登録されていなかった行だけを失敗として扱い、再処理できるようにする。行の位置から推測しない。状態の確認そのものが失敗した場合は、結果が不明のまま残す。
+- 結果が不明な場合は、再処理のボタンを置かず、状態の確認を優先する（「状態を確認」）。例では、行ごとの結果（照合の後）で結果が不明な行だけを確かめる。登録されていた行は成功として扱い、再処理の対象にしない。登録されていなかった行だけを失敗として扱い、再処理できるようにする。行の位置から推測しない。状態の確認そのものが失敗した場合は、結果が不明のまま残し、「状態を確認できませんでした。時間をおいて、もう一度確認してください。」を示す。
+- 状態の確認の後に、結果が不明な行がなくなれば、件数で判定した結果（`success`、`partial`、`failed`）を示す。応答の矛盾（重なった結果、対象ではない行の結果、件数と行ごとの結果の不一致）は一覧に残し、成功の形にはしない。確定した失敗があれば、その行だけを再処理できる。「顧客の一覧へ」は、照合の結果で判定した `outcome` が `unknown` ではない場合だけ示す（件数だけの `importOutcome(result)` で判定しない）。検品：「inconsistent response: after the status check the counts decide the outcome, the inconsistencies stay listed, only confirmed failures are retried」。v0.1 の途中では、状態の確認の後も `unknown` のままで「合計が一致しません」と事実と異なる文を示し、「状態を確認」が何もせず、確定した失敗を再処理できなかった。
 - 取り込みの要求が例外で終わった（応答がない）場合は、送ったすべての行を結果が不明として扱う（例では、すべての行を `unknown` とした応答を `reconcileImportResult` に渡す）。サーバーで処理が終わっている行があるかもしれないため、自動で再実行しない。進捗の表示は `finally` で必ず閉じる。
 - 取り込みの実行中と実行の後は、Stepper から前のステップへ移れない。
 - 安全に続けられる裏の処理がある場合だけ、処理中の画面からの離脱を許す。例では、実行中は Unsaved Changes の保存中として扱う。
@@ -155,7 +158,8 @@
 
 | 応答 | 扱い | `ImportIntegrity` |
 | --- | --- | --- |
-| 件数だけの結果で、件数の形式が正しくない（負の数、小数、NaN、Infinity、数ではない値） | その件数を 0 とみなして記録する | `invalidCounts`（項目の名前） |
+| 件数だけの結果で、件数の形式が正しくない（負の数、小数、NaN、Infinity、数ではない値） | その件数を 0 として合計し、記録する。`outcome` は `unknown` | `invalidCounts`（項目の名前） |
+| 件数だけの結果で、サーバーが件数を返さなかった（`created`、`updated`、`skipped`、`failed` のどれかがない。`unknown` は省略してよい） | その件数を 0 として合計し、記録する。残りの件数の合計が処理の対象と一致しても、`outcome` は `unknown`（返さなかった件数が 0 であることは確かめられていない） | `missingCounts`（項目の名前） |
 | 件数だけの結果で、合計が処理の対象より少ない | 足りない件数を結果が不明に加える | |
 | 件数だけの結果で、合計が処理の対象より多い | 矛盾として記録し、結果が不明として扱う | `totalMismatch` |
 | 行ごとの結果で、結果が返らなかった行 | 結果が不明（「結果が返されませんでした」） | `missingRows` |
@@ -163,9 +167,20 @@
 | 行ごとの結果で、処理の対象ではない行の結果 | 件数に含めない | `unexpectedRows` |
 | 行ごとの結果と、サーバーが返した件数が一致しない | 行ごとの結果から数える | `countsDisagree` |
 
-- `integrity.complete` は、`invalidCounts`、`totalMismatch`、`missingRows`、`duplicateRows`、`unexpectedRows`、`countsDisagree` のどれにも当たらない場合だけ true になる。件数だけの結果の不足は `complete` を変えないが、足りない件数が `result.unknown` に入るため、`importOutcome` は `unknown` を返す。
-- `ImportResultSummary` に `integrity` を渡すと、矛盾がある場合（`complete` が false）は、件数の上で成功か一部失敗でも、成功として示さない（「結果を確かめられていない行があります」）。件数に含めなかった結果と理由（「1行の結果が返されませんでした（結果が不明として数えています）」「取り込みの対象ではない 1行の結果が返されました（件数に含めていません）」など）を一覧で示す。
-- 例：「検証用の操作」の「取り込みの結果」の「結果に矛盾がある」（同じ行の異なる結果、対象ではない行の結果、結果の不足、行の結果と合わない件数を返す）。
+- `integrity.complete` は、`invalidCounts`、`missingCounts`、`totalMismatch`、`missingRows`、`duplicateRows`、`unexpectedRows`、`countsDisagree` のどれにも当たらない場合だけ true になる（`isIntegrityComplete`。製品が照合の結果を組み合わせ直す場合に使う）。件数だけの結果の合計の不足は `complete` を変えないが、足りない件数が `result.unknown` に入るため、`importOutcome` は `unknown` を返す。
+
+部分的な件数の契約（Patterns Integration Review で明確にした）：
+
+| `ImportIntegrity` | 対象の行の結果 | `outcome` | `ImportResultSummary` |
+| --- | --- | --- | --- |
+| `complete` が true | すべて確定 | 件数で判定 | 件数の結果。成功は success の形 |
+| `invalidCounts`、`missingCounts`、`totalMismatch`、`missingRows` のどれか | 確定していない行か件数がある | `unknown` | 「結果を確かめられていない行があります」、理由、「状態を確認」。再処理のボタンは置かない |
+| `duplicateRows`、`unexpectedRows`、`countsDisagree` だけ（結果が不明な行はない） | すべて確定（行ごとの結果で数え直している） | 件数で判定 | 件数の結果。成功の形（success の色、`role="status"`）にはせず、矛盾の一覧と「処理の対象のすべての行の結果は確定しています。応答の矛盾は、サーバーの記録で確認してください。」を示す |
+
+- 変更の記録：以前は、件数だけの結果で返さなかった件数を `invalidCounts` に入れて 0 とし、合計が一致すれば `importOutcome(result)` が `success` を返していた（`complete` は false）。また、`ImportResultSummary` は `integrity` を省略すると件数だけで成功を示した。理由：不足している件数を無条件に 0 として成功させないため（Patterns Integration Review の確認事項）。影響の範囲：`ImportIntegrity` に `missingCounts`（省略できる）を加え、`importOutcome` に第 2 引数 `integrity` を加え、`reconcileImportResult` の戻り値に `outcome` を加えた（いずれも追加）。`integrity` を省略した `ImportResultSummary` は、件数の上で成功でも成功として示さない（動作の変更）。代替案：返さなかった件数を合計の不足として `unknown` に加える方式は、残りの件数の合計が処理の対象と一致する場合に加える件数がないため採らない。`ImportResultSummary` の `integrity` を必須にする方式は、型の互換を壊すため採らず、省略時に成功として示さない動作にした。
+- `ImportResultSummary` に `integrity` を渡すと、件数に含めなかった結果と理由（「1行の結果が返されませんでした（結果が不明として数えています）」「サーバーが「更新」「スキップ」「失敗」の件数を返しませんでした（0 件とはみなしていません）」「取り込みの対象ではない 1行の結果が返されました（件数に含めていません）」など）を一覧で示す。
+- 例：「検証用の操作」の「取り込みの結果」の「結果に矛盾がある」（同じ行の異なる結果、対象ではない行の結果、結果の不足、行の結果と合わない件数を返し、最後の行を確定した失敗にする）。「状態を確認」の後は「一部の行を取り込めませんでした」になり、矛盾の一覧が残り、失敗した 1 件だけを再処理できる。
+- 検品：`forms-workflows-checks.spec.ts` の「reconcileImportResult: counts the server did not return are missing, not zero; the outcome is unknown」。
 
 ### 書き出しの対象
 
@@ -248,7 +263,7 @@
 
 `useColumnMapping` は、`sourceKey`、列の構成、項目の構成のどれかが変わったら、描画の中で前の対応付けを捨て、自動の対応付けからやり直す（`initialMapping` があれば、照合した保存の対応付けから始める）。利用者が選んだ列（`touched`）は、曖昧な列の解決として扱う。
 
-`ImportResult`、`importOutcome`、`reconcileImportResult`、型 `ImportRowResult`、`ImportRowOutcome`、`ImportIntegrity` は `import-mapping.ts` にある（React を使わないため、サーバーの処理でも使える）。`importOutcome` と `ImportResult` は `import-review.tsx` からも公開する。
+`ImportResult`、`importOutcome`、`reconcileImportResult`、`isIntegrityComplete`、型 `ImportOutcome`、`ImportRowResult`、`ImportRowOutcome`、`ImportIntegrity` は `import-mapping.ts` にある（React を使わないため、サーバーの処理でも使える）。`importOutcome`、`ImportOutcome`、`ImportResult` は `import-review.tsx` からも公開する。
 
 ## アクセシビリティ
 
@@ -291,7 +306,8 @@ const validationCurrent = validation?.key === mapping.key ? validation : null //
 
 // 実行：サーバーの応答を、処理の対象の行と照合する
 const raw = await api.runImport(targets)
-const { result, rows: rowResults, integrity } = reconcileImportResult({ total: targets.length, rows: targets.map((t) => t.row) }, raw)
+const { result, rows: rowResults, integrity, outcome } = reconcileImportResult({ total: targets.length, rows: targets.map((t) => t.row) }, raw)
+// 次の画面への移動などは outcome（照合の結果で判定）で決める。importOutcome(result) だけで決めない
 
 <ImportResultSummary
   result={result}
