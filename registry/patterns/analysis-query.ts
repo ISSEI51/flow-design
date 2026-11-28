@@ -60,7 +60,12 @@ type AnalysisQuery<F> = {
 type UseAnalysisQueryOptions<F> = {
   defaultQuery: Omit<AnalysisQuery<F>, "granularity" | "granularityMode" | "comparisonCustom"> &
     Partial<Pick<AnalysisQuery<F>, "granularity" | "granularityMode" | "comparisonCustom">>
-  /** 最初の値（URL や保存した分析の条件から読み取った値）。不正な部分は既定値に戻し、notice で知らせる */
+  /**
+   * 最初の値（URL や保存した分析の条件から読み取った値）。不正な部分は既定値に戻し、notice で知らせる。
+   * 対象は期間、比較、比較期間、集計単位。filters の値の検証（未知の値、画面で選べない組み合わせ、現在のスコープと権限に
+   * 合わない値）はこの部品では行わない（filters の型と意味は製品が決める）。製品が URL などから読み取るときに検証し、
+   * 外した値があれば製品が知らせてから渡す
+   */
   initialQuery?: Partial<AnalysisQuery<F>>
   /** 制御する場合の値。製品が URL などと同期する。不正な値なら status が invalid になる */
   query?: AnalysisQuery<F>
@@ -346,7 +351,8 @@ function scopeFilters<F extends object>(
   local: Partial<F>,
   { equals = sameValue }: { equals?: (a: unknown, b: unknown) => boolean } = {}
 ): ScopedFilters<F> {
-  const unknown = Object.keys(local).filter((k) => !(k in global))
+  // 全体条件の自身の項目だけを既知とする（in 演算子は toString などの継承した名前も既知としてしまう）
+  const unknown = Object.keys(local).filter((k) => !Object.prototype.hasOwnProperty.call(global, k))
   if (unknown.length) return { status: "invalid", unknown }
   const filters = { ...global }
   const narrowed: (keyof F)[] = []

@@ -54,18 +54,34 @@ import type { Nav } from "./forms-screens"
 // - 編集へ移る前に、一覧の条件、データ、位置を記録し、戻ったときに復元する（captureListPosition、useListPositionRestore）。
 // - エクスポート：表の右上から検索結果（直接のダウンロードと、項目を選ぶ Dialog）、一括操作のバーから選んだ行。
 
-type Snapshot = { ws: string; token: string; query: BrowseQuery<Record<string, never>>; position: ListPosition; page: { data: Page; key: string } | null }
+type Snapshot = {
+  ws: string
+  token: string
+  /** 記録したときに一覧から開いた画面の、履歴の項目の位置（history.state.fdFormsIdx） */
+  openedIdx: number
+  query: BrowseQuery<Record<string, never>>
+  position: ListPosition
+  page: { data: Page; key: string; fetchedAt: number | null; scope: string } | null
+}
 type Page = Awaited<ReturnType<typeof fetchCustomerPage>>
 
 // 一覧の記録（この画面のメモリだけ。製品は履歴の項目ごとに保存する）。一覧から編集や詳細へ移るときに記録し、
 // 一覧に戻ったとき（保存、キャンセル、ブラウザの戻る）に 1 回だけ使う。
-// 使うのは、編集から一覧に戻る URL（restore=1）か、記録した履歴の項目（history.state の印）に戻った場合だけ。
+// 使うのは、記録と同じワークスペースで、次のどちらかの場合だけ。
+// - 記録した履歴の項目（history.state の印）に、ブラウザの戻るで戻った
+// - 編集から一覧に戻る URL（restore=1）で、かつ、記録したときに一覧から開いた画面から移った（history.state.fdFormsFrom）。
+//   restore=1 だけでは使わない（ブックマーク、共有した URL、別の経路で開いた restore=1 の URL で、前の記録を復元しない）
 // Sidebar などから一覧を新しく開いた場合は、前の条件と位置を復元しない
 let snapshot: Snapshot | null = null
 let snapshotSeq = 0
-const markOf = (state: unknown) => ((state ?? {}) as { fdListSnapshot?: string }).fdListSnapshot
-export const hasListSnapshot = (ws: string, params: URLSearchParams) =>
-  snapshot !== null && snapshot.ws === ws && (params.get("restore") === "1" || markOf(window.history.state) === snapshot.token)
+type HistoryMarks = { fdListSnapshot?: string; fdFormsIdx?: number; fdFormsFrom?: number }
+const marksOf = (state: unknown) => (state ?? {}) as HistoryMarks
+export const hasListSnapshot = (ws: string, params: URLSearchParams) => {
+  if (snapshot === null || snapshot.ws !== ws) return false
+  const marks = marksOf(window.history.state)
+  if (marks.fdListSnapshot === snapshot.token) return true
+  return params.get("restore") === "1" && marks.fdFormsFrom !== undefined && marks.fdFormsFrom === snapshot.openedIdx
+}
 function takeListSnapshot(ws: string) {
   const s = snapshot && snapshot.ws === ws ? snapshot : null
   snapshot = null
@@ -89,6 +105,7 @@ declare global {
   interface Window {
     __fdFormsChangeWhileConfirm?: boolean
     __fdFormsClearSelection?: () => void
+    __fdFormsSetSelected?: (id: string, selected: boolean) => void
   }
 }
 
@@ -101,8 +118,11 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
   // 検証用：一括操作のバーの選択を、ほかの処理が解除したことを再現する（エクスポートの範囲が広がらないことの検品）
   useEffect(() => {
     window.__fdFormsClearSelection = () => selection.clear()
+    // 検証用：確認の表示中に、選んだ行がほかの処理で入れ替わったことを再現する
+    window.__fdFormsSetSelected = (id, selected) => selection.setSelected(id, selected)
     return () => {
       delete window.__fdFormsClearSelection
+      delete window.__fdFormsSetSelected
     }
   })
   const browse = useBrowseQuery<Record<string, never>>({
@@ -155,8 +175,11 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
   const [confirm, setConfirm] = useState<null | { kind: "bulk" } | { kind: "one"; id: string; name: string }>(null)
   const bulkTarget: BulkTarget<typeof q> | null = confirm?.kind === "bulk" ? selection.snapshot() : null
   const bulkCount = bulkTarget ? (bulkTarget.kind === "ids" ? bulkTarget.ids.length : bulkTarget.expectedCount) : null
-  // 対象のキー：ID の一覧（件数が同じでも ID が違えば変わる）、全件の選択は条件と除外した ID
-  const bulkKey = bulkTarget ? JSON.stringify(bulkTarget.kind === "ids" ? [...bulkTarget.ids].sort() : [bulkTarget.queryKey, bulkTarget.excludedIds]) : undefined
+  // 対象のキー：スコープと、ID の一覧（件数が同じでも ID が違えば変わる）、全件の選択は条件、除外した ID、件数
+  // （件数が変わった場合も、確認の表示と実行の対象が一致しないため、確かめ直させる）
+  const keyOfTarget = (t: BulkTarget<typeof q>) =>
+    JSON.stringify(t.kind === "ids" ? ["ids", t.scope, [...t.ids].sort()] : ["query", t.scope, t.queryKey, [...t.excludedIds].sort(), t.expectedCount])
+  const bulkKey = bulkTarget ? keyOfTarget(bulkTarget) : undefined
   // 検証用：確認の表示中に、ほかの利用者が対象の 1 件を削除する（選択から外れ、対象が変わる）
   useEffect(() => {
     if (confirm?.kind !== "bulk" || !window.__fdFormsChangeWhileConfirm) return
@@ -181,9 +204,12 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
     snapshot = {
       ws,
       token,
+      // 一覧から開く画面は、次の履歴の項目になる（Router の navigate は pushState で位置を 1 つ進める）
+      openedIdx: (marksOf(window.history.state).fdFormsIdx ?? 0) + 1,
       query: q,
       position: captureListPosition({ scrollElement: mainRef.current, root: root.current, rowId }),
-      page: data.isCurrent && page && data.dataKey ? { data: page, key: data.dataKey } : null,
+      // 取得したときのスコープと時刻も記録する（useBrowseData は、別のスコープの initialData を使わない）
+      page: data.isCurrent && page && data.dataKey ? { data: page, key: data.dataKey, fetchedAt: data.fetchedAt, scope: ws } : null,
     }
   }
   useListPositionRestore({ position: initial?.position ?? null, ready: data.isCurrent, root, scrollElement: mainRef })
@@ -347,7 +373,7 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
           {selection.hasSelection ? (
             <DataTableSelectionBar
               disabled={locked}
-              disabledReason={data.refreshFailed ? "再取得するまで操作できません" : undefined}
+              disabledReason={data.refreshFailed ? "再試行するまで操作できません" : undefined}
               selectedCount={selection.mode === "ids" ? (selection.count ?? 0) : 0}
               hiddenCount={selection.hiddenCount ?? 0}
               onClearSelection={selection.clear}
@@ -405,9 +431,9 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
         <DataTablePagination table={table} pageSizeOptions={[5, 20]} disabled={locked} />
         {data.refreshFailed && (
           <p role="alert" className="text-ui text-destructive">
-            一覧を最新にできませんでした。再取得するまで、変更の操作はできません。
+            一覧を最新にできませんでした。再試行するまで、変更の操作はできません。
             <Button variant="link" className="ml-2 h-auto min-h-0 p-0" onClick={data.reload}>
-              再取得
+              再試行
             </Button>
           </p>
         )}
@@ -426,9 +452,14 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
         confirmLabel={bulkCount === null ? "すべて削除" : `${fmt(bulkCount)}件を削除`}
         targetKey={bulkKey}
         data-testid="customers-delete-dialog"
-        onConfirm={() => {
-          // 確かめた対象（確認の表示と同じ選択）で実行する
-          void action.start("削除", selection.snapshot(), { kind: "delete" })
+        onConfirm={({ targetKey }) => {
+          // 確かめた対象（確認の表示と同じ選択）で実行する。実行の時点の対象が、確かめた対象と異なる場合は実行しない
+          const target = selection.snapshot()
+          if (keyOfTarget(target) !== targetKey) {
+            toast({ title: "削除を実行していません", description: "選択が変わりました。選択を確かめてから、もう一度実行してください。" })
+            return
+          }
+          void action.start("削除", target, { kind: "delete" })
         }}
       >
         {bulkTarget?.kind === "ids" && (
@@ -466,6 +497,16 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
           kind="顧客"
           columns={exportColumns}
           counts={{ selected: selectedIds.length, page: rows.length, results: total, all: listCustomers(false, ws).length + listCustomers(true, ws).length }}
+          // 個人情報の確認の対象に、範囲の中身を含める（選んだ行の ID、検索の条件、表示中のページの ID）
+          targetOf={(scope) =>
+            scope === "selected"
+              ? JSON.stringify([...selectedIds].sort())
+              : scope === "page"
+                ? JSON.stringify(rows.map((r) => r.id))
+                : scope === "results"
+                  ? JSON.stringify(q.search)
+                  : `all:${ws}`
+          }
           getRows={async (scope) => {
             if (scope === "selected") {
               // 実行の時点の選択で出す。選択がなくなった場合に、検索結果へ広げない

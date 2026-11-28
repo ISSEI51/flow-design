@@ -29,6 +29,44 @@ async function tabTo(page: Page, target: Locator) {
   throw new Error("target was not reached with Tab")
 }
 
+// 「起きないこと」の確認に使う。固定の時間を待たず、イベントの処理と描画が終わった後の状態を見る。
+// React の更新は、イベントの処理の後のマイクロタスクか、Scheduler の MessageChannel のタスクで反映される。
+// MessageChannel のタスクを 1 回通し、さらに 2 フレームを待つ（page.clock で時計を止めている間は使わない）。
+async function settle(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const c = new MessageChannel()
+        c.port1.onmessage = () => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        c.port2.postMessage(null)
+      })
+  )
+}
+// page.clock で時計を止めている間の描画の待機（requestAnimationFrame は時計に従うため、MessageChannel のタスクだけを通す）。
+async function flushTasks(page: Page) {
+  for (let i = 0; i < 2; i++)
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const c = new MessageChannel()
+          c.port1.onmessage = () => resolve()
+          c.port2.postMessage(null)
+        })
+    )
+}
+// 時計を止める。止める前に進める時間（ms）の間に予定されたタイマーは実行される。
+async function pauseClock(page: Page, ahead = 1000) {
+  const now = await page.evaluate(() => Date.now())
+  await page.clock.pauseAt(now + ahead)
+}
+// 色の変化（transition）が終わった後の値。変化の途中の値（oklab の補間）を測らない。
+async function settledCss(l: Locator, prop: string) {
+  await animationsDone(l)
+  return css(l, prop)
+}
+// Sidebar の開閉の状態（data-state）。幅の変化（transition）を待たずに、状態の変化の有無を確かめる。
+const sidebarState = (container: Locator) => container.locator("xpath=..")
+
 async function expectFocusRing(page: Page, target: Locator) {
   expect(await css(target, "outline-style")).toBe("solid")
   expect(await css(target, "outline-width")).toBe("2px")
@@ -123,8 +161,9 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     const nav = frame(page).getByRole("navigation", { name: "メインメニュー" })
     const other = nav.getByRole("link", { name: "請求書" })
     await other.hover()
-    await page.waitForTimeout(200)
-    const hover = await css(other, "background-color")
+    // ホバーの面に変わり、色の変化（transition）が終わってから測る
+    await expect.poll(async () => sameColor(await settledCss(other, "background-color"), await token(page, "--sidebar"))).toBe(false)
+    const hover = await settledCss(other, "background-color")
     const current = await css(nav.getByRole("link", { name: "顧客", exact: true }), "background-color")
     expect(sameColor(hover, current)).toBe(false)
     expect(sameColor(hover, await token(page, "--sidebar"))).toBe(false)
@@ -133,7 +172,8 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     // 現在位置の項目は、ホバーしても現在位置の面のまま
     const currentLink = nav.getByRole("link", { name: "顧客", exact: true })
     await currentLink.hover()
-    await page.waitForTimeout(200)
+    await settle(page)
+    await animationsDone(currentLink)
     expect(sameColor(await css(currentLink, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
     await page.mouse.move(0, 0)
     await tabTo(page, other)
@@ -191,6 +231,8 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
   })
 
   test("collapsed: parents open their children in a dropdown menu (mouse)", async ({ page }) => {
+    // Tooltip の遅延（700ms）を、時計を止めて進めて確かめる（固定の時間を待たない）
+    await page.clock.install()
     await open(page, "sidebar")
     const f = frame(page)
     await f.getByRole("button", { name: "メニュー", exact: true }).click()
@@ -198,9 +240,12 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     const nav = f.getByRole("navigation", { name: "メインメニュー" })
     const parent = nav.getByRole("button", { name: "契約", exact: true })
     // 子を持つ項目には Tooltip を付けない（メニューの見出しで名前がわかる）
+    await pauseClock(page)
     await parent.hover()
-    await page.waitForTimeout(900)
+    await page.clock.runFor(900)
+    await flushTasks(page)
     await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
+    await page.clock.resume()
     await parent.click()
     const menu = page.getByRole("menu")
     await expect(menu).toBeVisible()
@@ -268,25 +313,34 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
   })
 
   test("collapsed items show their name in a tooltip after 700ms", async ({ page }) => {
+    // 表示しないこと・表示する時期を、時計を止めて進めて確かめる（固定の時間を待たない）
+    await page.clock.install()
     await open(page, "sidebar")
     const f = frame(page)
     const nav = f.getByRole("navigation", { name: "メインメニュー" })
     const item = nav.getByRole("link", { name: "請求書" })
     // 展開時は名前が見えているため、Tooltip を表示しない
+    await pauseClock(page)
     await item.hover()
-    await page.waitForTimeout(900)
+    await page.clock.runFor(900)
+    await flushTasks(page)
     await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
+    await page.clock.resume()
     await f.getByRole("button", { name: "メニュー", exact: true }).click()
     await expect.poll(async () => (await box(container(f))).width).toBe(64)
     // 折りたたみの動き（項目の名前の非表示など）が終わってから、項目の上にポインターを置く
     await animationsDone(container(f))
     await page.mouse.move(0, 0)
+    await pauseClock(page)
     await item.hover()
-    // 700ms より前には表示しない（表示しないことの確認のため、時間を指定して待つ）
-    await page.waitForTimeout(300)
+    // 700ms より前には表示しない。時計を 300ms だけ進めて確かめ、さらに 500ms 進めると表示する
+    await page.clock.runFor(300)
+    await flushTasks(page)
     await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0)
+    await page.clock.runFor(500)
     const tip = page.locator("[data-slot=tooltip-content]")
     await expect(tip).toBeVisible({ timeout: 2000 })
+    await page.clock.resume()
     await expect(tip).toHaveText("請求書")
     // 項目の右に表示し、名前は変わらない（Tooltip は視覚的な補助）
     expect((await box(tip)).x).toBeGreaterThan((await box(item)).x + (await box(item)).width)
@@ -358,7 +412,8 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     await expect.poll(async () => (await box(c)).width).toBe(240)
     await page.getByRole("textbox", { name: "会社名" }).focus()
     await page.keyboard.press(`${mod}+b`)
-    await page.waitForTimeout(400)
+    await settle(page)
+    await expect(sidebarState(c)).toHaveAttribute("data-state", "expanded")
     expect((await box(c)).width).toBe(240)
   })
 
@@ -408,7 +463,8 @@ test.describe("Sidebar (desktop)", { tag: "@webkit" }, () => {
     expect(sameColor(await css(primary, "background-color"), "#1e40af")).toBe(true)
     const appCurrent = page.getByRole("navigation", { name: "メインメニュー" }).getByRole("link", { name: "顧客", exact: true })
     await page.mouse.move(0, 0)
-    await page.waitForTimeout(300)
+    // ホバーが外れ、色の変化（transition）が終わった後の面
+    await expect.poll(async () => sameColor(await settledCss(appCurrent, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
     expect(sameColor(await css(appCurrent, "background-color"), await token(page, "--sidebar-accent"))).toBe(true)
   })
 })
@@ -719,8 +775,7 @@ test.describe("Card", { tag: "@webkit" }, () => {
     expect(hit).toBe("株式会社山田商事")
     if (!isMobile) {
       await card.hover()
-      await page.waitForTimeout(200)
-      expect(sameColor(await css(card, "background-color"), await token(page, "--accent"))).toBe(true)
+      await expect.poll(async () => sameColor(await settledCss(card, "background-color"), await token(page, "--accent"))).toBe(true)
     }
     await tabTo(page, card.getByRole("link"))
     await expectFocusRing(page, card)
@@ -920,7 +975,8 @@ test.describe("Sidebar shortcut control", { tag: "@webkit" }, () => {
     // キーを変えた Sidebar：その中にフォーカスがあるときに Ctrl / ⌘ + M
     await page.getByTestId("sidebar-shortcut").getByRole("link", { name: "請求書" }).focus()
     await page.keyboard.press(`${mod()}+b`)
-    await page.waitForTimeout(400)
+    await settle(page)
+    for (const c of [custom, basic]) await expect(sidebarState(c)).toHaveAttribute("data-state", "expanded")
     expect(await widthOf(custom)).toBe(240)
     expect(await widthOf(basic)).toBe(240)
     await page.keyboard.press(`${mod()}+m`)
@@ -929,7 +985,8 @@ test.describe("Sidebar shortcut control", { tag: "@webkit" }, () => {
     // 無効にした Sidebar の中では、どの Sidebar も開閉しない
     await page.getByTestId("sidebar-controlled").getByRole("link", { name: "請求書" }).focus()
     await page.keyboard.press(`${mod()}+b`)
-    await page.waitForTimeout(400)
+    await settle(page)
+    for (const c of [controlled, basic]) await expect(sidebarState(c)).toHaveAttribute("data-state", "expanded")
     for (const c of [controlled, basic]) expect(await widthOf(c)).toBe(240)
   })
 
@@ -945,10 +1002,12 @@ test.describe("Sidebar shortcut control", { tag: "@webkit" }, () => {
         },
         [init, prevent] as const
       )
-    await fire({ repeat: true })
-    await fire({ isComposing: true })
-    await fire({}, true)
-    await page.waitForTimeout(400)
+    // 1 回ずつ、イベントの処理と描画の後に、開閉の状態が変わっていないことを確かめる
+    for (const [init, prevent] of [[{ repeat: true }, false], [{ isComposing: true }, false], [{}, true]] as const) {
+      await fire(init, prevent)
+      await settle(page)
+      await expect(sidebarState(basic)).toHaveAttribute("data-state", "expanded")
+    }
     expect(await widthOf(basic)).toBe(240)
     // 比較：通常のキー操作では開閉する
     await fire({})
@@ -963,7 +1022,8 @@ test.describe("Sidebar shortcut control", { tag: "@webkit" }, () => {
     await page.getByRole("combobox", { name: "担当者" }).click()
     await expect(page.getByRole("listbox")).toBeVisible()
     await page.keyboard.press(`${mod()}+b`)
-    await page.waitForTimeout(400)
+    await settle(page)
+    await expect(sidebarState(c)).toHaveAttribute("data-state", "expanded")
     expect(await widthOf(c)).toBe(240)
     await page.keyboard.press("Escape")
   })
@@ -1034,7 +1094,7 @@ test.describe("Sidebar accessibility", { tag: "@webkit" }, () => {
     await disabled.focus()
     await expect(disabled).toBeFocused()
     await page.keyboard.press("Enter")
-    await page.waitForTimeout(200)
+    await settle(page)
     await expect(log).toHaveText("下書きを保存した")
     expect(page.url()).toBe(url)
     await expect(disabled).toHaveAttribute("aria-disabled", "true")

@@ -48,6 +48,7 @@ function ToastProvider({ limit = TOAST_LIMIT, ...props }: ToastPrimitive.Provide
 
 // 通知を表示する場所。デスクトップは右下、モバイルは下中央。
 // 画面下に固定の操作がある場合は、--toast-offset-bottom でその高さだけ上げる。
+// 下から開く Drawer と、下・左右の Sheet の Footer の表示中は、Footer が --toast-offset-overlay を設定する（大きい方を使う）。
 // 優先度 high（失敗）の通知は、Base UI が読み上げ用の領域で知らせ、F6 で通知の領域へ移動するまで
 // 見た目の通知を支援技術から隠す。重複して読み上げないため。
 function Toaster({ className, "aria-label": label = "通知", ...props }: ToastPrimitive.Viewport.Props) {
@@ -59,8 +60,8 @@ function Toaster({ className, "aria-label": label = "通知", ...props }: ToastP
         aria-label={label}
         className={cn(
           "fixed inset-x-4 z-50 mx-auto outline-none sm:inset-x-auto sm:right-6 sm:w-90",
-          "bottom-[calc(1rem+env(safe-area-inset-bottom)+var(--toast-offset-bottom,0px))]",
-          "sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom)+var(--toast-offset-bottom,0px))]",
+          "bottom-[calc(1rem+env(safe-area-inset-bottom)+max(var(--toast-offset-bottom,0px),var(--toast-offset-overlay,0px)))]",
+          "sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom)+max(var(--toast-offset-bottom,0px),var(--toast-offset-overlay,0px)))]",
           className
         )}
         {...props}

@@ -1,6 +1,8 @@
 "use client"
 
 import * as React from "react"
+
+import { useScopeGuard, type ScopeSnapshot } from "@/patterns/scope-guard"
 import type { OnChangeFn, RowSelectionState, Updater } from "@tanstack/react-table"
 
 // Flow Design Bulk Selection（Patterns / Data Browsing / Bulk Actions）
@@ -92,10 +94,14 @@ function useBulkSelection<Q>({ queryKey, query, scopeKey, visibleIds, total }: U
     }
   }, [scopeChanged, conditionChanged, scopeKey, setStored])
 
+  // 操作の処理が読む、commit された選択と表示中の行。描画の中では書き換えない
+  // （commit されていない描画（中断された transition）の選択で、snapshot や選択の変更を行わないため）。
   const stateRef = React.useRef(state)
-  stateRef.current = state
   const visibleRef = React.useRef(visibleIds)
-  visibleRef.current = visibleIds
+  React.useLayoutEffect(() => {
+    stateRef.current = state
+    visibleRef.current = visibleIds
+  })
 
   // 表に渡す選択。all の方式では、表示中の行のうち除外していない行を選択済みにする。
   const rowSelection = React.useMemo<RowSelectionState>(() => {
@@ -155,10 +161,16 @@ function useBulkSelection<Q>({ queryKey, query, scopeKey, visibleIds, total }: U
   const count = state.mode === "ids" ? selectedIds.length : total === null ? null : Math.max(0, total - excludedIds.length)
   const hiddenCount = count === null ? null : Math.max(0, count - visibleSelectedCount)
 
-  /** 実行の対象を固定する。返した値は、その後の選択や条件の変更の影響を受けない（ID の配列は写す） */
+  /**
+   * 実行の対象を固定する。返した値は、その後の選択や条件の変更の影響を受けない（ID の配列は写す）。
+   * この値を返した描画の選択から作る（描画の中で呼ぶと、その描画の選択。commit された画面の操作から呼ぶと、
+   * 表示中の選択。commit されていない描画の選択は使わない）
+   */
+  // この描画の選択に対応する版（snapshot は、選択と版を同じ時点のものにする）
+  const revisionAtRender = revision.current
   const snapshot = React.useCallback((): BulkTarget<Q> => {
-    const s = stateRef.current
-    const selectionRevision = revision.current
+    const s = state
+    const selectionRevision = revisionAtRender
     if (s.mode === "ids") return { kind: "ids", ids: Object.keys(s.ids), scope: s.scope, selectionRevision }
     return {
       kind: "query",
@@ -169,7 +181,7 @@ function useBulkSelection<Q>({ queryKey, query, scopeKey, visibleIds, total }: U
       excludedIds: Object.keys(s.excluded),
       expectedCount: total === null ? null : Math.max(0, total - Object.keys(s.excluded).length),
     }
-  }, [total])
+  }, [state, total, revisionAtRender])
 
   /**
    * 実行の結果を選択に反映する。完了した行と、結果が不明な行の選択を解除し、失敗した行の選択を残す。
@@ -466,12 +478,17 @@ function useBulkAction<Q = unknown, P = unknown>({
   // AbortSignal を無視する run でも、古い結果が新しい状態を書き換えない。
   const generation = React.useRef(0)
   const runSeq = React.useRef(0)
+  // 古い描画の start（A → B → A の最初の A の画面や Toast の closure）と、古い Snapshot からの開始を拒否する
+  const guard = useScopeGuard(scopeKey)
+  // 関数と commit されたスコープは、commit の時点で更新する（描画の中で書き換えない。commit されていない描画の
+  // スコープで、表示中のスコープの実行を拒否したり、結果を捨てたりしないため）
   const runRef = React.useRef(run)
-  runRef.current = run
   const settledRef = React.useRef(onSettled)
-  settledRef.current = onSettled
   const scopeNow = React.useRef(scopeKey)
-  scopeNow.current = scopeKey
+  React.useLayoutEffect(() => {
+    runRef.current = run
+    settledRef.current = onSettled
+  })
 
   const invalidate = () => {
     generation.current++
@@ -481,10 +498,9 @@ function useBulkAction<Q = unknown, P = unknown>({
   }
 
   // スコープが変わったら、実行中の待機を中止し、結果を表示しない。サーバーでの処理の扱いは製品の run が決める。
-  const scopeRef = React.useRef(scopeKey)
-  React.useEffect(() => {
-    if (scopeRef.current === scopeKey) return
-    scopeRef.current = scopeKey
+  React.useLayoutEffect(() => {
+    if (scopeNow.current === scopeKey) return
+    scopeNow.current = scopeKey
     invalidate()
     setRunning(null)
     setProgress(null)
@@ -492,15 +508,21 @@ function useBulkAction<Q = unknown, P = unknown>({
   }, [scopeKey])
 
   // アンマウントしたら、実行の待機を中止し、届いた結果を無効にする。
-  React.useEffect(() => () => invalidate(), [])
+  React.useLayoutEffect(() => () => invalidate(), [])
 
   /**
    * 実行する。実行中は何もしない（二重実行の防止。ボタンの無効化より前に、同じ描画の中の 2 回目の押下も止める）。
    * target の ID の配列は写して固定する。query と payload は、書き換えない値として扱う（不変のデータの契約）。
    * keepSummary：再試行のときは、結果が出るまで前の結果の表示を残す（押したボタンを消さない）。
+   * from：操作の入口（Toast の「元に戻す」、確認の Dialog）を作ったときに capture() で取った Snapshot。
+   *   スコープか世代が現在と異なる場合は実行しない（A → B → A の最初の A で作った入口からの実行を止める）。
+   * 戻り値：結果。実行しなかった場合と、実行したがスコープの変更やアンマウントで結果を捨てた場合は undefined
+   *   （後者はサーバーで処理された可能性がある。製品はスコープに戻ったときに取得し直して確かめる）。
    */
-  const start = React.useCallback(async (action: string, target: BulkTarget<Q>, payload: P, { keepSummary = false } = {}) => {
+  const start = React.useCallback(async (action: string, target: BulkTarget<Q>, payload: P, { keepSummary = false, from }: { keepSummary?: boolean; from?: ScopeSnapshot } = {}) => {
     if (busy.current) return undefined
+    // 前のスコープの描画の start、commit の前、アンマウントの後、古い Snapshot からは実行しない
+    if (!guard.isCurrent(from ?? guard.capture())) return undefined
     // 別のスコープで固定した対象（スコープを変えた後に押された「元に戻す」など）は実行しない。
     if (target.scope !== undefined && target.scope !== scopeNow.current) return undefined
     // 対象が 0 件の ID の実行はしない（「0件が完了しました」と知らせない）。
@@ -556,7 +578,7 @@ function useBulkAction<Q = unknown, P = unknown>({
     setSummary({ scope, value: result })
     settledRef.current?.(result)
     return result
-  }, [])
+  }, [guard])
 
   // 描画の時点で、現在のスコープの値だけを返す（効果が走るまでの描画でも、別のスコープの実行と結果を返さない）。
   const pick = <T,>(v: Scoped<T> | null) => (v && v.scope === scopeKey ? v.value : null)
@@ -581,6 +603,44 @@ function useBulkAction<Q = unknown, P = unknown>({
     )
   }, [summary, start])
 
+  /**
+   * 結果が不明な行を、製品が照会した結果（現在の認可で、サーバーの状態を確かめた結果）で解く。
+   * succeeded は完了に、failed は確定した失敗に移す（retryFailed の対象になる。retryable: false は除く）。
+   * 照会しても確かめられなかった行は渡さない（結果が不明のまま残す）。結果が不明な行を再実行するために使わない。
+   * from：照会を始めたときに capture() で取った Snapshot。スコープか世代が異なる場合（照会の間にワークスペースが変わった、
+   * A → B → A の最初の A の照会）は反映しない。戻り値は反映した行の数。
+   */
+  const resolveUnknown = React.useCallback(
+    (results: readonly { id: string; outcome: "succeeded" | "failed"; message?: string; retryable?: boolean }[], { from }: { from?: ScopeSnapshot } = {}) => {
+      if (!guard.isCurrent(from ?? guard.capture())) return 0
+      const current = summaryState && summaryState.scope === scopeNow.current ? summaryState.value : null
+      if (!current) return 0
+      const byId = new Map(results.map((r) => [r.id, r]))
+      const resolved = current.unknown.filter((i) => byId.has(i.id))
+      if (resolved.length === 0) return 0
+      const toItem = (i: BulkItemResult): BulkItemResult => {
+        const r = byId.get(i.id)!
+        return { id: i.id, outcome: r.outcome, ...(r.message !== undefined && { message: r.message }), ...(r.retryable !== undefined && { retryable: r.retryable }) }
+      }
+      const moved = resolved.map(toItem)
+      setSummary((prev) =>
+        prev && prev.value === current
+          ? {
+              scope: prev.scope,
+              value: {
+                ...current,
+                succeeded: [...current.succeeded, ...moved.filter((i) => i.outcome === "succeeded")],
+                failed: [...current.failed, ...moved.filter((i) => i.outcome === "failed")],
+                unknown: current.unknown.filter((i) => !byId.has(i.id)),
+              },
+            }
+          : prev
+      )
+      return resolved.length
+    },
+    [guard, summaryState]
+  )
+
   return {
     /** 実行中の操作と対象 */
     running,
@@ -589,8 +649,12 @@ function useBulkAction<Q = unknown, P = unknown>({
     /** 最後の実行の結果 */
     summary,
     start,
+    /** 操作の入口（Toast、確認の Dialog）を作るときのスコープと世代。start の from に渡す */
+    capture: guard.capture,
     retryFailed,
     /** 結果の表示を閉じる */
+    /** 結果が不明な行を、照会の結果で解く（上の resolveUnknown） */
+    resolveUnknown,
     dismiss: () => setSummary(null),
     /** 実行の待機の中止を要求する（signal を中止する）。サーバーでの処理の取り消しは保証しない。処理済みの行の扱いは製品の run が返す */
     cancel: () => controller.current?.abort(),

@@ -243,7 +243,7 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 | 低：製品名のリンクの修飾キー、機能群の `aria-current`、折りたたみ時の親の現在地、Safe Area の左右、Sticky の境界線の時期、アイコンの不一致、押しても何も起きない操作、名前の重複（補足）、不明な id、余白の個別の調整、SSR の画面の nav の名前、`__pycache__` | 対処した |
 | 低：`afterMobileMenuClosed` が Sidebar の Sheet だけを待つ | 変更していない。Header Shell の Sheet から移動した後も h1 にフォーカスが移ることを検品で確かめた（Base UI 1.9 の挙動に依存する） |
 | 低：Sticky の Page Header を 1 つの領域に 2 つ置くと、`scroll-padding-top` を上書きし合う | 変更していない。1 つの領域に 1 つまでと資料に書いた |
-| 低：モバイルの顧客の一覧で、表が横にスクロールできる手がかりが見えない | 変更していない。Table（Components）の既存の仕様の範囲。次のレビューで扱う |
+| 低：モバイルの顧客の一覧で、表が横にスクロールできる手がかりが見えない | 当時は変更していない。その後、横断の検品（Patterns Integration Review）で、検証画面の顧客の一覧の表を Data Browsing の `TableScrollArea` で囲んだ（スクロールできる方向の端に影を示す）。360px での検品を追加した |
 
 ### 未検証の事項
 
@@ -259,7 +259,7 @@ App Shell の 4 種類（Sidebar、Header、Hybrid、Minimal）は、1 つの部
 
 | 事項 | 引き継ぎ先 |
 | --- | --- |
-| Table の横スクロールの視覚的な手がかり（モバイルの顧客の一覧で、横にスクロールできることが見えない） | Data Browsing |
+| Table の横スクロールの視覚的な手がかり（モバイルの顧客の一覧で、横にスクロールできることが見えない） | Data Browsing の `TableScrollArea` で対処した（横断の検品）。Table（Components）は変更していない |
 | 未保存の変更がある場合のページの移動の確認 | Forms & Workflows |
 | ルーターに固有のスクロールの復元（`mainRef` を使う方法は資料に記載） | 製品の責務 |
 | 実機の iOS Safari、Android、VoiceOver、NVDA | 公開前の品質の検品 |

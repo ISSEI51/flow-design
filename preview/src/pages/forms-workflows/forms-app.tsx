@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { AppShell, AppShellBody, AppShellHeader, AppShellMain } from "@/patterns/app-shell"
 import type { NavGroup, NavItem } from "@/patterns/sidebar-nav"
-import { UnsavedChangesProvider } from "@/patterns/unsaved-changes"
+import { PageHeader, PageHeaderContent, PageHeaderTitle } from "@/patterns/page-header"
+import { PageLayout } from "@/patterns/page-layout"
+import { UnsavedChangesProvider, useNavigationGuard } from "@/patterns/unsaved-changes"
 
 import { structureLabels, structureNav, structureSettingsItem, structureUser } from "../../data/app-structure"
 import { formsServer, workspaces, type ActionMode, type CheckMode, type ImportMode, type SaveMode } from "../../data/forms-workflows/server"
@@ -33,6 +35,9 @@ import {
 // - ルーティングと、移動の前の未保存の変更の確認の接続（forms-router.ts）。
 // - ワークスペース（スコープ）の切り替え。上部の Select は移動と同じく確認を通す。
 //   「検証用の操作」の確認なしの切り替えは、別のタブでの切り替えやセッションの切り替えを再現する（スコープの境界の検品のため）。
+//   スコープが変わったら、表示中の移動の確認を取り消す（cancelNavigation。古いワークスペースの移動先へ移動しない）。
+// - ログアウト。Sidebar の「ログアウト」（利用者の操作）は、通常の移動と同じく未保存の変更を確かめる。
+//   認可の失効（401、セッションの期限切れ、別のアカウントへの切り替え）は、確かめずに移動する（releaseAll。破棄の確認で失効を遅らせない）。
 // - 保存、検証、取り込みの API（模擬のサーバー。window.__fdFormsServer で遅延と結果を切り替える）。
 
 function navFor(groups: NavGroup[], ws: string): NavGroup[] {
@@ -62,7 +67,22 @@ const navIdFor: Record<string, string> = {
 // 別のレコードの画面は、別のワークスペースには存在しない。ワークスペースを切り替えたら、その種類の一覧に移る
 const pageAfterSwitch: Record<string, string> = { customer: "customers", "customer-edit": "customers", archived: "archived" }
 
-function VerifyControls({ onExternalSwitch, ws }: { onExternalSwitch: (ws: string) => void; ws: string }) {
+function SignedOutScreen() {
+  return (
+    <PageLayout width="focused" data-testid="forms-signed-out">
+      <PageHeader>
+        <PageHeaderContent>
+          <PageHeaderTitle>もう一度ログインしてください</PageHeaderTitle>
+        </PageHeaderContent>
+      </PageHeader>
+      <p className="text-ui text-muted-foreground">
+        ログインの有効期限が切れたため、ログアウトしました。保存していない入力は、この画面に残していません。検証画面では、Sidebar から操作を続けられます。
+      </p>
+    </PageLayout>
+  )
+}
+
+function VerifyControls({ onExternalSwitch, onSessionExpired, ws }: { onExternalSwitch: (ws: string) => void; onSessionExpired: () => void; ws: string }) {
   const [, setN] = useState(0)
   const set = (fn: () => void) => {
     fn()
@@ -141,6 +161,11 @@ function VerifyControls({ onExternalSwitch, ws }: { onExternalSwitch: (ws: strin
             </button>
           ))}
         </DemoControls>
+        <DemoControls legend="認可の失効（サーバーが 401 を返した、別のアカウントでログインした）">
+          <button type="button" onClick={onSessionExpired} className="min-h-10 rounded-md px-3 underline underline-offset-4" data-testid="session-expired">
+            未保存の変更を確かめずに、ログアウトの画面へ移る
+          </button>
+        </DemoControls>
       </div>
     </details>
   )
@@ -148,6 +173,7 @@ function VerifyControls({ onExternalSwitch, ws }: { onExternalSwitch: (ws: strin
 
 function FormsAppInner() {
   const { route, navigate, linkProps, isPending, replaceSilently } = useFormsRouter()
+  const guard = useNavigationGuard()
   const [open, setOpen] = useState(true)
   const nav: Nav = useMemo(() => ({ navigate, linkProps, pending: isPending }), [navigate, linkProps, isPending])
   const labels = structureLabels(false)
@@ -156,6 +182,15 @@ function FormsAppInner() {
   // 移動のたび（route が変わるとき）に 1 回だけ判定する。一覧が記録を使った後の描画でも、同じ値を保つ
   const restore = useMemo(() => route.page === "customers" && hasListSnapshot(ws, route.params), [route])
   const wsExtra = ws === "hq" ? undefined : { ws }
+  // スコープ（ワークスペース）が変わったら、前のスコープで受けた移動の確認を取り消す。
+  // 残すと、確認の「変更を破棄」で前のワークスペースの URL へ移動する
+  const { cancelNavigation, releaseAll } = guard
+  useEffect(() => cancelNavigation(), [ws, cancelNavigation])
+  // 認可の失効：確認と beforeunload を止めてから移動する。保護された入力を残すことより、失効を優先する
+  const expireSession = () => {
+    releaseAll()
+    navigate(formsHref("signed-out"))
+  }
 
   const switchHref = (next: string) => {
     const page = pageAfterSwitch[route.page] ?? route.page
@@ -190,6 +225,9 @@ function FormsAppInner() {
       break
     case "import":
       body = <ImportScreen nav={nav} ws={ws} />
+      break
+    case "signed-out":
+      body = <SignedOutScreen />
       break
     default:
       body = <PlaceholderScreen title={labels[route.page] ?? "ページ"} />
@@ -240,7 +278,7 @@ function FormsAppInner() {
           data-ws={ws}
         >
           {body}
-          <VerifyControls ws={ws} onExternalSwitch={(next) => replaceSilently(switchHref(next))} />
+          <VerifyControls ws={ws} onExternalSwitch={(next) => replaceSilently(switchHref(next))} onSessionExpired={expireSession} />
         </AppShellMain>
       </AppShellBody>
     </AppShell>

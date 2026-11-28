@@ -21,6 +21,7 @@ import {
 import type { AuthLayoutVariant } from "@/patterns/auth-layout"
 import { useScopeGuard } from "@/patterns/scope-guard"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
+import { DiscardChangesAlert } from "@/patterns/unsaved-changes"
 
 import { authApi, authServer, canOpenPath, demoInvitation, demoRecoveryCodes, homePathOf, type AuthServerMode, type SentEmail } from "../../data/system-account/auth-server"
 import { customers } from "../../data/data-display/customers"
@@ -30,7 +31,6 @@ import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
 import { DemoControls, DemoFrame, Mock, Radio, Rules } from "../data-browsing/doc-parts"
-import { DiscardAlert } from "../overlays/discard-alert"
 import {
   EmailVerificationScreen,
   MfaScreen,
@@ -705,6 +705,9 @@ function SessionDemo() {
   const [log, setLog] = useState("")
   // 利用者とワークスペースが変わったら、前のスコープの保存と更新の結果を反映しない
   const guard = useScopeGuard(`${userId}:${workspaceId}`)
+  // セッションの境界。再認証と自動の更新でセッションが変わったら、前のセッションで始めた保存の失敗を、
+  // 現在のセッションの期限切れとして扱わない（セッションの ID の文字列を closure から比べない。AUTH-8）
+  const sessionGuard = useScopeGuard(sessionId ?? undefined)
   // 再認証の後の確認（利用者が変わってもスコープを変えない。最後の確認だけを反映する）
   const verifyGuard = useScopeGuard("session-verify")
   const verifyArgs = useRef<VerifyArgs | null>(null)
@@ -763,6 +766,7 @@ function SessionDemo() {
     }
     const text = draft
     const ticket = guard.begin("save")
+    const sessionTicket = sessionGuard.begin("save")
     setSaveState("saving")
     setMessage("")
     authApi
@@ -777,7 +781,9 @@ function SessionDemo() {
         },
         (e) => {
           if (isAbortError(e) || !guard.isLatest(ticket)) return
-          const sessionGone = !authApi.isSessionValid(sessionId)
+          // 保存を始めたセッションが現在のセッションで、そのセッションが切れた場合だけ、セッション切れとして扱う。
+          // 応答を待つ間に再認証した場合（新しいセッション）は、保存の失敗として示すだけにする
+          const sessionGone = sessionGuard.isSameScope(sessionTicket) && !authApi.isSessionValid(sessionId)
           if (e instanceof MockUnknownError) {
             // 応答が届かなかった：保存されたかどうかわからない。再認証の後に、再送信せずに確かめる
             setUnconfirmed(text)
@@ -796,6 +802,7 @@ function SessionDemo() {
       .finally(() => {
         saving.current = false
         guard.release(ticket)
+        sessionGuard.release(sessionTicket)
       })
   }
 
@@ -1014,7 +1021,7 @@ function SessionDemo() {
             <div className="flex flex-wrap items-center gap-4">
               {canEdit && (
                 <Button onClick={save} loading={saveState === "saving"} disabled={!dirty && saveState !== "failed"} data-testid="auth-session-save">
-                  保存
+                  保存する
                 </Button>
               )}
               <AuthStatus data-testid="auth-session-message">{message}</AuthStatus>
@@ -1199,7 +1206,7 @@ function AccountDemo() {
           <Button onClick={() => change({ userId: "u-sato", workspaceId: "hq" })}>佐藤 花子としてログインし直す（模擬）</Button>
         </div>
       )}
-      <DiscardAlert
+      <DiscardChangesAlert
         open={confirm !== null}
         onOpenChange={(open) => !open && setConfirm(null)}
         onDiscard={() => {
@@ -1207,7 +1214,7 @@ function AccountDemo() {
           setConfirm(null)
           action?.()
         }}
-        testId="auth-account-discard"
+        data-testid="auth-account-discard"
       />
     </DemoFrame>
   )

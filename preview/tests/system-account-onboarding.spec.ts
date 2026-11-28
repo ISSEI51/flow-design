@@ -15,6 +15,8 @@ const snapshot = (page: Page) => server(page, (s) => s.snapshot())
 
 const checklistDemo = (page: Page) => page.getByTestId("onb-checklist-demo")
 const setupDemo = (page: Page) => page.getByTestId("onb-setup-demo")
+/** 組織の作成の簡易の Stepper の現在地（見える文字「ステップ n / m」と、支援技術向けの現在のステップの名前） */
+const setupPosition = (root: Locator) => root.getByTestId("onb-setup-stepper").locator("[data-slot=stepper-current]")
 const invitedDemo = (page: Page) => page.getByTestId("onb-invited-demo")
 const checklistIn = (root: Locator) => root.getByTestId("onb-checklist")
 const item = (root: Locator, id: string) => checklistIn(root).locator(`[data-task-id="${id}"]`)
@@ -102,15 +104,25 @@ test.describe("Onboarding: create organization", () => {
     await open(page)
     const demo = setupDemo(page)
     const setup = demo.getByTestId("onb-setup")
-    await expect(demo.getByTestId("onb-setup-position")).toHaveText("手順 1 / 3・必須")
+    // 簡易の Stepper は番号と総数だけを見せ、手順の名前は直後の見出しで示す（重複させない）。支援技術には名前を伝える
+    await expect(setupPosition(demo)).toHaveText("ステップ 1 / 3（現在のステップ：組織を作成）")
+    await expect(setupPosition(demo).locator(":not(.sr-only)", { hasText: "組織を作成" })).toHaveCount(0)
+    await expect(demo.getByTestId("onb-setup-requirement")).toHaveAttribute("data-required", "true")
     await expect(demo.getByTestId("onb-setup-status")).toHaveAttribute("data-status", "not-started")
-    await demo.getByRole("button", { name: "次へ" }).click()
+    // 必須の項目が空の間は、次へを押せない（Focusable Disabled）。理由を示す
+    const nextButton = demo.getByTestId("onb-setup-next")
+    await expect(nextButton).toHaveAttribute("aria-disabled", "true")
+    await expect(demo.getByTestId("onb-setup-notice")).toHaveText("あと 1 項目を入力すると次へ進めます")
+    // Enter で次へを求めると、この手順の項目のエラーを示し、その項目へフォーカスを移す
+    await demo.getByTestId("onb-setup-name").press("Enter")
     await expect(demo.getByText("組織名を入力してください")).toBeVisible()
+    await expect(demo.getByTestId("onb-setup-name")).toBeFocused()
     await expect(setup).toHaveAttribute("data-step", "org")
     await demo.getByTestId("onb-setup-name").fill("株式会社テスト")
     await demo.getByRole("button", { name: "次へ" }).click()
     await expect(setup).toHaveAttribute("data-step", "invite")
-    await expect(demo.getByTestId("onb-setup-position")).toHaveText("手順 2 / 3・任意")
+    await expect(setupPosition(demo)).toHaveText("ステップ 2 / 3（現在のステップ：メンバーを招待（任意））")
+    await expect(demo.getByTestId("onb-setup-requirement")).toHaveAttribute("data-required", "false")
     await expect(demo.getByRole("heading", { name: "メンバーを招待" })).toBeFocused()
     await expect(demo.getByTestId("onb-setup-status")).toHaveAttribute("data-status", "in-progress")
     await demo.getByTestId("onb-setup-invites").fill("a@example.com")
@@ -121,9 +133,15 @@ test.describe("Onboarding: create organization", () => {
     await expect(demo.getByTestId("onb-setup-invites")).toHaveValue("a@example.com")
     // 形式の誤り
     await demo.getByTestId("onb-setup-invites").fill("a@example.com, not-an-email")
-    await demo.getByRole("button", { name: "次へ" }).click()
+    await demo.getByTestId("onb-setup-invites").blur()
     await expect(demo.getByText("「not-an-email」はメールアドレスの形式ではありません")).toBeVisible()
+    await expect(nextButton).toHaveAttribute("aria-disabled", "true")
     await expect(setup).toHaveAttribute("data-step", "invite")
+    // 完了した手順へは、簡易の Stepper の一覧から直接戻れる
+    await demo.getByRole("button", { name: "すべての手順" }).click()
+    await demo.getByTestId("onb-setup-stepper").getByRole("button", { name: /組織を作成/ }).click()
+    await expect(setup).toHaveAttribute("data-step", "org")
+    await expect(demo.getByRole("heading", { name: "組織を作成" })).toBeFocused()
   })
 
   test("skip an optional step: no invitation is sent and the task stays in the checklist; no success screen", async ({ page }) => {
@@ -161,10 +179,11 @@ test.describe("Onboarding: create organization", () => {
     await demo.getByRole("button", { name: "戻る" }).click()
     await demo.getByRole("button", { name: "戻る" }).click()
     await demo.getByRole("radio", { name: "自分だけで使う" }).check()
-    await expect(demo.getByTestId("onb-setup-position")).toHaveText("手順 1 / 2・必須")
+    await expect(setupPosition(demo)).toHaveText("ステップ 1 / 2（現在のステップ：組織を作成）")
     await demo.getByRole("button", { name: "次へ" }).click()
     await expect(demo.getByTestId("onb-setup")).toHaveAttribute("data-step", "data")
-    await expect(demo.getByTestId("onb-setup-position")).toHaveText("手順 2 / 2・任意")
+    await expect(setupPosition(demo)).toHaveText("ステップ 2 / 2（現在のステップ：顧客データの始め方（任意））")
+    await expect(demo.getByTestId("onb-setup-requirement")).toHaveAttribute("data-required", "false")
     await demo.getByTestId("onb-setup-create").click()
     await expect(demo.getByTestId("onb-product")).toBeVisible()
     const snap = await snapshot(page)
@@ -188,6 +207,39 @@ test.describe("Onboarding: create organization", () => {
     await expect(demo.getByTestId("onb-setup-status")).toHaveAttribute("data-status", "in-progress")
     await demo.getByRole("button", { name: "戻る" }).click()
     await expect(demo.getByTestId("onb-setup-name")).toHaveValue("再開の組織")
+  })
+
+  test("unsaved input since the last step is confirmed before closing; restarting asks before deleting the draft", async ({ page }) => {
+    await open(page)
+    const demo = setupDemo(page)
+    await demo.getByTestId("onb-setup-name").fill("確認の組織")
+    await demo.getByRole("button", { name: "次へ" }).click()
+    await expect.poll(async () => (await snapshot(page)).drafts["u-sato"]?.step).toBe("invite")
+    // 手順の保存の後に入力した内容は、閉じる前に確かめる（Unsaved Changes）
+    await demo.getByTestId("onb-setup-invites").fill("keep@example.com")
+    await demo.getByTestId("onb-setup-close").click()
+    const dialog = page.getByRole("alertdialog", { name: "変更を破棄しますか？" })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole("button", { name: "編集を続ける" }).click()
+    await expect(demo.getByTestId("onb-setup-invites")).toHaveValue("keep@example.com")
+    await demo.getByTestId("onb-setup-close").click()
+    await page.getByRole("alertdialog", { name: "変更を破棄しますか？" }).getByRole("button", { name: "変更を破棄" }).click()
+    await expect(demo.getByTestId("onb-setup")).toHaveCount(0)
+    // 再開すると、保存した手順の内容（破棄した入力は含まない）から始まる
+    await demo.getByTestId("onb-setup-open").click()
+    await expect(demo.getByTestId("onb-setup")).toHaveAttribute("data-step", "invite")
+    await expect(demo.getByTestId("onb-setup-invites")).toHaveValue("")
+    // 最初から入力し直す前に、保存した途中の入力を削除してよいかを確かめる
+    await demo.getByRole("button", { name: "最初から入力し直す" }).click()
+    const restart = page.getByRole("alertdialog", { name: "入力した内容を破棄して、最初から入力し直しますか？" })
+    await restart.getByRole("button", { name: "編集を続ける" }).click()
+    await expect(demo.getByTestId("onb-setup")).toHaveAttribute("data-step", "invite")
+    await demo.getByRole("button", { name: "最初から入力し直す" }).click()
+    await restart.getByRole("button", { name: "変更を破棄" }).click()
+    await expect(demo.getByTestId("onb-setup")).toHaveAttribute("data-step", "org")
+    await expect(demo.getByTestId("onb-setup-name")).toHaveValue("")
+    await expect(demo.getByRole("heading", { name: "組織を作成" })).toBeFocused()
+    await expect.poll(async () => (await snapshot(page)).drafts["u-sato"] ?? null).toBeNull()
   })
 
   test("failure keeps the input; an unknown result is confirmed before retrying and never creates twice", async ({ page }) => {
@@ -215,7 +267,7 @@ test.describe("Onboarding: create organization", () => {
     // 結果が不明な間は、もう一度作成するボタンを押せない（確かめてから）
     await expect(demo.getByTestId("onb-setup-create")).toBeDisabled()
     expect(Object.keys((await snapshot(page)).created)).toHaveLength(1)
-    await demo.getByRole("button", { name: "作成されたかを確認する" }).click()
+    await demo.getByRole("button", { name: "登録されたかを確認" }).click()
     await expect(demo.getByTestId("onb-product")).toBeVisible()
     expect(Object.keys((await snapshot(page)).created)).toHaveLength(1)
   })
@@ -313,6 +365,24 @@ test.describe("Onboarding: checklist", () => {
     await expect(checklistIn(demo)).toBeVisible()
     await expect(demo.getByTestId("onb-checklist-notice")).toHaveText("表示の状態を保存できませんでした。もう一度お試しください。")
     expect((await snapshot(page)).visibility["u-sato:new"]).toBeUndefined()
+  })
+
+  test("an unknown save of the display state says it is checking until the saved state has been fetched again", async ({ page }) => {
+    await open(page)
+    const demo = checklistDemo(page)
+    await server(page, (s) => {
+      s.outcomeNext["save-visibility"] = "unknown"
+      s.holdWhen = (r) => r.kind === "progress"
+    })
+    await checklistIn(demo).getByRole("button", { name: "非表示にする" }).click()
+    // 取得し直した結果が届くまでは、表示している状態を「保存されている状態」と示さない
+    await expect.poll(() => heldCount(page)).toBe(1)
+    await expect(demo.getByTestId("onb-checklist-notice")).toHaveText("表示の状態を保存できたかを確認しています。")
+    await server(page, (s) => {
+      s.holdWhen = null
+      return s.releaseHeld()
+    })
+    await expect(demo.getByTestId("onb-checklist-notice")).toHaveText("表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。")
   })
 
   test("after all tasks are done: a short completion, closable, not shown again", async ({ page }) => {

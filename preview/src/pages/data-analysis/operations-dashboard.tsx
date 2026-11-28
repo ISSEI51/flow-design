@@ -119,7 +119,7 @@ export function OperationsDashboard() {
             自動で更新
           </label>
           <Button variant="secondary" size="sm" onClick={() => opsTicker.advance()} data-testid="ops-refresh">
-            今すぐ更新
+            最新の情報に更新
           </Button>
         </PageHeaderActions>
       </PageHeader>

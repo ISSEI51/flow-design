@@ -54,7 +54,7 @@ Data Display に共通する判断基準は [data-display.md](data-display.md) �
 
 | 部品 | 役割 |
 | --- | --- |
-| `ChartContainer` | `config` の色を `--color-<key>` として出力し、`ResponsiveContainer` で親の幅に合わせる。既定の縦横比は 16:9（`aspect-video`） |
+| `ChartContainer` | `config` の色を `--color-<key>` として出力し、`ResponsiveContainer` で親の幅に合わせる。既定の縦横比は 16:9（`aspect-video`）。描画する場所の大きさを測れるまで（非表示の間、サーバーでの描画）は `ResponsiveContainer` を描かない。大きさは `className`（`aspect-video`、`h-64` など）で決め、グラフの内容に依存させない |
 | `ChartConfig` | 系列ごとの `label`、`color`（または `theme`）、`icon`。Flow Design で `indicator`（`dot`、`line`、`dashed`）を追加した |
 | `ChartTooltip`、`ChartTooltipContent` | Tooltip。`valueFormatter` で単位を付ける（例：`(v) => \`${v}万円\``） |
 
@@ -160,7 +160,7 @@ const config = {
 | 負の値 | 0 の線から下に伸ばし、増減の向きで色を変えない。棒の長さの比が値の比と一致する |
 | 空のデータ | 軸だけのグラフを描かず、Empty（`status="empty"`）で理由を示す |
 | 構成比に使えない値 | `getCompositionError(values)` が、負の値、欠損、数値でない値、合計 0 を理由として返す。理由があるときは Donut を描かず、Empty（`status="error"`）で示す |
-| 非表示の領域 | `details` などで隠した領域のグラフは、開いたときに親の幅で描かれる |
+| 非表示の領域 | `details`、Tabs、Accordion（`keepMounted` の既定は true で、非表示の内容も DOM に残る）で隠した領域のグラフは、開いたときに親の幅で描かれる。`ChartContainer` は、描画する場所の幅か高さが 0 の間は「まだ測れていない」として `ResponsiveContainer` を描かず（場所は `ChartContainer` の大きさで確保する）、表示されて大きさが 0 でなくなったときに描く。非表示の間に Recharts の「The width(0) and height(0) of chart should be greater than 0」の警告を出さない。もう一度隠すと描いたグラフを外し、次に表示したときに描き直す（動きを止めない設定では、描き直すときに 240ms の動きが再び入る）。サーバーでの描画と Hydration の最初の描画では、グラフを描かずに場所だけを出力する（プレビュー：Data Analysis の `#/dashboard-layout`「タブと折りたたみの中のグラフ」） |
 | 画面の幅の変更 | 幅を変えると、グラフも親の幅に合わせて描き直す。ページ全体は横にスクロールしない |
 | 項目名の長い棒グラフ | 640px 未満の幅では横向きにし、項目名を重ねない |
 | 動きを減らす設定 | 動きを止める（Recharts の `isAnimationActive="auto"`） |

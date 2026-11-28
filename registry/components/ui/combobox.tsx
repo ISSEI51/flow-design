@@ -87,6 +87,9 @@ function ComboboxValue({ className, ...props }: ComboboxPrimitive.Value.Props & 
 }
 
 // メニュー。角丸、影、開閉の動きは SelectContent と同じ。高さは画面の空きと 24rem（384px）の小さい方。
+// 重なり順：z-50（浮かぶ要素の層）。後から開いたモーダル（Dialog、Alert Dialog など）の外側に残った場合は、
+// Base UI がモーダルの外側の要素に付ける data-base-ui-inert の下に入るため、モーダルの層（z-40）に下げる（Select、Popover と同じ）。
+// DOM の順で新しいモーダルの背面に入り、押せなくなる。Multi Select もこの部品を使う。
 function ComboboxContent({
   className,
   children,
@@ -106,7 +109,7 @@ function ComboboxContent({
         align={align}
         alignOffset={alignOffset}
         collisionPadding={8}
-        className="isolate z-50 outline-none"
+        className="isolate z-50 outline-none in-[[data-base-ui-inert]]:z-40"
       >
         <ComboboxPrimitive.Popup
           data-slot="combobox-content"

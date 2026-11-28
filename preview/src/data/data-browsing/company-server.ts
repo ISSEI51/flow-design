@@ -53,7 +53,7 @@ export const workspaces: Workspace[] = [
 type LatencyKind = "list" | "detail" | "activity" | "update" | "bulk"
 
 /** 保留した応答（検品用）。release() を呼ぶまで応答しない */
-export type HeldResponse = { kind: LatencyKind; workspace: string; key: string; release: () => void }
+export type HeldResponse = { kind: LatencyKind; workspace: string; key: string; release: (fail?: boolean) => void }
 export type HeldFilter = Partial<Pick<HeldResponse, "kind" | "workspace" | "key">>
 
 export type BulkMode = "success" | "partial" | "fail" | "unknown" | "request-unknown" | "request-fail" | "incomplete"
@@ -107,29 +107,30 @@ const initialConfig = (): ServerConfig => ({
 export const companyServer: ServerConfig & {
   reset: () => void
   remove: (workspace: string, id: string) => void
-  release: (filter?: HeldFilter) => Promise<number>
+  release: (filter?: HeldFilter, options?: { fail?: boolean }) => Promise<number>
 } = Object.assign(initialConfig(), {
   reset() {
     Object.assign(companyServer, initialConfig())
     resetStore()
   },
   remove: (workspace: string, id: string) => removeCompany(workspace, id),
-  release: (filter?: HeldFilter) => releaseHeld(filter),
+  release: (filter?: HeldFilter, options?: { fail?: boolean }) => releaseHeld(filter, options),
 })
 
 /**
  * 保留中の応答のうち、条件に一致するもの（指定がなければすべて）を受け付けた順に返す（検品用）。返した件数を返す。
  * 応答を受け取った処理（Promise の後続）と、その結果の描画が終わってから解決する（固定の待機時間を使わない）：
  * タスクを 1 つ待って Promise の後続を終わらせ、描画のフレームを 2 つ待って React の反映を終わらせる。
+ * fail を指定すると、保留した応答を失敗として返す（要求の時点では決まっていない失敗。StrictMode の 2 回目の要求などにも使える）。
  */
-async function releaseHeld(filter: HeldFilter = {}) {
+async function releaseHeld(filter: HeldFilter = {}, { fail = false }: { fail?: boolean } = {}) {
   const match = (h: HeldResponse) =>
     (filter.kind === undefined || h.kind === filter.kind) &&
     (filter.workspace === undefined || h.workspace === filter.workspace) &&
     (filter.key === undefined || h.key === filter.key)
   const released = companyServer.held.filter(match)
   companyServer.held = companyServer.held.filter((h) => !match(h))
-  for (const h of released) h.release()
+  for (const h of released) h.release(fail)
   await new Promise((r) => setTimeout(r, 0))
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
   return released.length
@@ -170,8 +171,8 @@ function wait<T>(
   const fail = companyServer.failNext[kind]
   companyServer.failNext[kind] = false
   return new Promise((resolve, reject) => {
-    const respond = () => {
-      if (fail) reject(new Error("サーバーに接続できませんでした（模擬）"))
+    const respond = (failNow = false) => {
+      if (fail || failNow) reject(new Error("サーバーに接続できませんでした（模擬）"))
       else {
         try {
           resolve(produce())

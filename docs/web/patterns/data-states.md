@@ -38,12 +38,19 @@
 - 条件を変えた直後の描画から、前の条件のデータを「最新の結果」として返さない（`status` は同じ描画で `refreshing` か `loading` になる）。
 - `scopeKey`（アカウント、ワークスペース、権限）が変わったら、同じ描画から前のデータを返さず、初回の読み込みに戻す。
 - 同じ条件の再取得に失敗したときは、前のデータを残し、`refreshFailed` で区別する。条件を変えた後の取得に失敗したときは、`status` を `error` にする（前の条件のデータを結果として表示しない）。
+- 同じ条件の再取得の失敗でも、前のデータを表示し続けてはいけない失敗（権限の喪失を示す 403、対象の削除を示す 404 など）は、`discardOnError` で破棄する。`discardOnError(error)` が `true` を返すと、前のデータを返さず、`status` を `error` にする（`refreshFailed` にしない）。省略した場合は、従来どおりすべての失敗で前のデータを残す。
+- `reload()` を呼んだ描画から `refreshing` にする（reload の回数も要求の条件に含める）。効果が走る前の描画で、`ready` と `canOperate: true` を返さない。
+- `initialData` は、`initialData.scope` が `scopeKey` と一致する場合だけ使う。一致しない場合は使わず、初回の読み込みにする。
+- 引数（`fetcher`、`query`、`keepPreviousData`、`discardOnError`）は、描画の中ではなく `useLayoutEffect` で内部の参照に記録する。commit されなかった描画の値で要求しない。
 - 特定のデータ取得のライブラリに依存しない。キャッシュを持つライブラリを使う製品は、この hook を使わずに、同じ規則で状態を対応させる。
 
 ### 初回の読み込み
 
 - 表示予定の構造に合わせた Skeleton を使う。数、高さ、幅は、実際に表示する領域から決める。
 - 取得する件数やページサイズが既知の場合は、Data Table の `loadingRowCount` に渡す。すべての画面で機械的に 50 行の Skeleton を表示しない。
+  - 同じスコープと条件の総件数がわかっている場合（取得の失敗の後の再試行など）は、そのページに表示する行数（`min(ページサイズ, 総件数 − 先頭の位置)`、1 以上）にする。最後のページで、ページサイズの分の Skeleton から少ない行に変わり、下の内容（Pagination）が大きく移動することを防ぐ。
+  - 総件数がわからない初回の読み込みは、ページサイズにする。別のスコープの総件数は使わない。
+  - 検証画面の顧客の一覧（`CompanyBrowser`）と、Data Table のプレビューのサーバー側の表（`CustomerTable`、表示件数 50）は、この規則で行数を決める。
 - 読み込みの前後で、領域の高さをできるだけ保つ。
 
 ### 再取得
@@ -119,7 +126,8 @@
 | `fetchedAt` | 取得した時刻（`Date.now()`）。サーバーで描画した値には含まれない |
 | `reload()`、`setData()` | 同じ条件での再取得、保存の結果の反映 |
 | `keepPreviousData` | 条件が変わったときに前のデータを残すか。一覧は `true`（既定）、詳細の別のレコードは `false` |
-| `initialData` | サーバーで描画したデータや、一覧に戻ったときに製品が保持していたデータ |
+| `initialData` | サーバーで描画したデータや、一覧に戻ったときに製品が保持していたデータ（`{ data, key, fetchedAt, scope }`）。`scope` は取得したときの `scopeKey`。一致しない場合は使わない。履歴や保存した値から復元するデータには必ず入れる。省略した場合は現在のスコープのデータとして扱う（同じ要求の中でサーバーが描画したデータなど、スコープが変わりえない場合だけ省略する） |
+| `discardOnError` | 同じ条件の再取得の失敗で、前のデータを破棄する失敗か（`(error) => boolean`）。省略した場合は破棄しない |
 
 表示と操作を分ける。
 
@@ -190,7 +198,12 @@ const sales = useBrowseData({ query: "sales", fetcher: api.getSales })
 {sales.status === "error" && <DataRegionError title="今月の売上を取得できませんでした" description="ほかの指標は表示しています。" onRetry={sales.reload} />}
 ```
 
-プレビュー：`#/data-states`、`#/browsing-app?page=customers`（応答の時間、取得の失敗、件数の有無、ワークスペースの切り替え）。
+```tsx
+// 権限の喪失（403）は、同じ条件の再取得の失敗でも前のデータを残さない
+const data = useBrowseData({ query, fetcher, scopeKey: workspaceId, discardOnError: (e) => e instanceof ApiError && e.status === 403 })
+```
+
+プレビュー：`#/data-states`（「再取得で権限を失う」は `discardOnError` の例）、`#/browsing-app?page=customers`（応答の時間、取得の失敗、件数の有無、ワークスペースの切り替え）。Kanban と Calendar も、同じ条件の再取得の失敗を表と同じ文で示す。
 
 ## アンチパターン
 
@@ -202,6 +215,8 @@ const sales = useBrowseData({ query: "sales", fetcher: api.getSales })
 | 再取得中に古いデータへの操作を受け付ける | 古い行に対して操作が行われる | すぐに制限する |
 | 古い要求の応答で新しい結果を上書きする | 条件と結果が一致しない | 最新の要求の結果だけを反映する |
 | アカウントを切り替えた後も前のデータを表示する | 別の範囲のデータを誤認する | `scopeKey` で破棄する |
+| 保持していたデータを、記録したスコープを確かめずに `initialData` に渡す | 別のワークスペースの行を、現在の行として表示する | `initialData.scope` を入れる |
+| 権限を失った再取得の失敗で、前のデータを表示し続ける | 閲覧できなくなった情報を表示し続ける | `discardOnError` で破棄する |
 | すべての画面で 50 行の Skeleton | 実際の表示と高さが合わない | 表示予定の行数 |
 | 短い読み込みでも Skeleton を一瞬表示する | ちらつく | 200ms 遅らせる |
 | 読み込みの表示に最低表示時間を設ける | 不要な待ち時間 | すぐに内容を表示する |
@@ -214,6 +229,7 @@ const sales = useBrowseData({ query: "sales", fetcher: api.getSales })
 ## 製品側の責務
 
 - 取得の処理（API）と、エラーの種類の判別（権限不足など、再試行で解決しないもの）。
-- データのキャッシュと、サーバーで描画したデータの受け渡し（`initialData`）。
+- データのキャッシュと、サーバーで描画したデータの受け渡し（`initialData`。保持していたデータは `scope` を入れる）。
+- エラーの種類の判別と、前のデータを破棄する失敗の指定（`discardOnError`）。
 - 実際の進捗の取得。
 - 最終更新の時刻を示すかの判断。

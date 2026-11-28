@@ -241,9 +241,12 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     const cdp = await page.context().newCDPSession(page)
     await cdp.send("Input.imeSetComposition", { text: "やまだ", selectionStart: 3, selectionEnd: 3 })
     await expect(company).toHaveValue("やまだ")
-    // 変換中は保存できず、理由も示さない（確定していないため）
+    // 変換中は保存できず、理由を画面には示さない（確定していないため）。
+    // 支援技術には、Focusable Disabled の保存ボタンの説明として、変換中であることだけを伝える（D5。説明を空にしない）
     await disabled(submitOf(page, "ce"))
-    await expect(page.getByTestId("ce-save-notice")).toHaveText("")
+    await expect(page.getByTestId("ce-save-notice").locator(":scope > :not(.sr-only)")).toHaveCount(0)
+    await expect(page.getByTestId("ce-save-notice")).toHaveText("文字を変換しています。確定すると、入力した値を確かめます")
+    await expect(submitOf(page, "ce")).toHaveAccessibleDescription("文字を変換しています。確定すると、入力した値を確かめます")
     await cdp.send("Input.insertText", { text: "山田商事" })
     await expect(company).toHaveValue("山田商事")
     await enabled(submitOf(page, "ce"))
@@ -283,7 +286,7 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     const error = page.getByTestId("ce-form-error")
     await expect(error).toBeVisible()
     await page.locator("#ce-email").fill("edited@example.com")
-    await error.getByRole("button", { name: "登録されているか確認" }).click()
+    await error.getByRole("button", { name: "登録されたかを確認" }).click()
     await expect(page.getByTestId("ce-form")).toHaveAttribute("data-dirty")
     await expect(page.locator("#ce-email")).toHaveValue("edited@example.com")
   })
@@ -327,7 +330,7 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     await page.locator("#ce-company").press("Enter")
     await page.waitForTimeout(300)
     expect(await requests(page, "create-customer")).toHaveLength(1)
-    await error.getByRole("button", { name: "登録されているか確認" }).click()
+    await error.getByRole("button", { name: "登録されたかを確認" }).click()
     await expect(page.getByRole("status").filter({ hasText: "株式会社テストを登録しました" }).or(page.locator("[data-slot=toast]", { hasText: "株式会社テストを登録しました" })).first()).toBeVisible()
   })
 
@@ -377,6 +380,33 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     await page.getByTestId("member-submit").click()
     await expect(dialog).toBeHidden()
     await expect(page.locator("[data-slot=toast]", { hasText: "田中さんを担当者に追加しました" })).toBeVisible()
+  })
+})
+
+// H1：asyncFailure "allow" の例。入力中の確認ができなくても保存でき、保存の時にサーバーが同じ確認を行う
+test.describe("Create & Edit: asyncFailure allow", { tag: "@webkit" }, () => {
+  test("a failed check does not block inviting; the server rejects a duplicate on save; the message does not ask to check again", async ({ page }) => {
+    await page.goto("/#/create-edit")
+    await fast(page)
+    const demo = page.getByTestId("invite-demo")
+    const checkMode = page.getByRole("group", { name: "入力中の確認（模擬のサーバー）" })
+    await checkMode.getByRole("radio", { name: "通信の失敗" }).check()
+    await demo.locator("#invite-email").fill("yamada@example.com")
+    const unverified = demo.getByTestId("invite-email-unverified")
+    await expect(unverified).toHaveText("メールアドレスをいまは確かめられませんでした。保存するときに確かめます")
+    await expect(unverified).not.toContainText("もう一度確かめてください")
+    const submit = demo.getByTestId("invite-submit")
+    await enabled(submit)
+    await submit.click()
+    // 保存の時に、サーバーが招待済みかを確かめて拒否する
+    await expect(demo.locator("[data-slot=field-error]")).toContainText("yamada@example.com はすでに招待しています")
+    expect((await requests(page, "invite-member")).length).toBe(1)
+    // 確認できる状態に戻すと、招待済みでないアドレスは招待できる
+    await checkMode.getByRole("radio", { name: "成功" }).check()
+    await demo.locator("#invite-email").fill("tanaka@example.com")
+    await enabled(submit)
+    await submit.click()
+    await expect(page.locator("[data-slot=toast]", { hasText: "tanaka@example.com に招待を送りました" })).toBeVisible()
   })
 })
 
@@ -584,10 +614,36 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
     await submitOf(page, "edit").click()
     const error = page.getByTestId("edit-form-error")
     await expect(error).toBeVisible()
-    await error.getByRole("button", { name: "保存されているか確認" }).click()
+    await error.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(error).toBeHidden()
     await enabled(submitOf(page, "edit"))
     await expect(page.getByTestId("forms-customer-edit")).toBeVisible()
+  })
+
+  // D5：結果が不明の間の Focusable Disabled の保存ボタンは、支援技術から理由を確かめられる。押しても保存しない
+  test("edit with an unknown result: the focusable disabled save button is described by the reason and does not save", async ({ page, isMobile }) => {
+    await openApp(page, "page=customer-edit&id=cu-1&from=list")
+    await page.locator("#edit-phone").fill("03-0000-9999")
+    await server(page, (s) => (s.saveMode = "unknown"))
+    await submitOf(page, "edit").click()
+    await expect(page.getByTestId("edit-form-error")).toBeVisible()
+    const submit = submitOf(page, "edit")
+    await disabled(submit)
+    await expect(submit).toHaveAccessibleDescription("保存されたかを確かめると保存できます")
+    await expect(page.getByTestId("edit-save-notice")).toHaveText("保存されたかを確かめると保存できます")
+    const sent = (await requests(page, "update-customer")).length
+    await submit.click({ force: true })
+    if (!isMobile) {
+      await submit.focus()
+      await expect(submit).toBeFocused()
+      await page.keyboard.press("Enter")
+      await page.keyboard.press("Space")
+    }
+    await page.locator("#edit-phone").press("Enter")
+    // 押せない保存ボタンの操作と Enter では、保存の要求を送らない（requestSubmit も handleSubmit が止める）
+    await page.evaluate(() => (document.querySelector("[data-testid=customer-edit-form] form, form[data-testid=customer-edit-form]") as HTMLFormElement | null)?.requestSubmit())
+    expect((await requests(page, "update-customer")).length).toBe(sent)
+    await disabled(submit)
   })
 
   test("edit whose response was lost after the server saved: checking confirms every sent field and returns without a dialog", async ({ page }) => {
@@ -598,7 +654,7 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
     await submitOf(page, "edit").click()
     const error = page.getByTestId("edit-form-error")
     await expect(error).toContainText("保存されたかを確かめられていません")
-    await error.getByRole("button", { name: "保存されているか確認" }).click()
+    await error.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(page.getByTestId("forms-customers")).toBeVisible()
     await expect(page.getByRole("alertdialog")).toHaveCount(0)
     await expect(page.locator("[data-slot=toast]", { hasText: "を保存しました" })).toBeVisible()
@@ -705,6 +761,50 @@ test.describe("Unsaved Changes", { tag: "@webkit" }, () => {
     await expect(page.getByTestId("uc-drawer-discard")).toBeVisible()
     await page.getByTestId("uc-drawer-discard").getByRole("button", { name: "変更を破棄" }).click()
     await expect(page.getByTestId("uc-drawer")).toBeHidden()
+  })
+
+  // D2：確認の表示中にワークスペースが変わったら、確認を閉じる。「変更を破棄」で前のワークスペースの移動先へ移動させない
+  test("a workspace change while the confirmation is shown closes it without moving to the old workspace", async ({ page, isMobile }) => {
+    await openApp(page, "page=customer-edit&id=cu-1&from=list")
+    await page.locator("#edit-phone").fill("03-0000-9999")
+    await goSidebar(page, "契約", isMobile)
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    // 別のタブでのワークスペースの切り替え（モーダルの背後のボタンのため、DOM から押す）
+    await page.evaluate(() => (document.querySelector("[data-testid=external-ws-kyushu]") as HTMLButtonElement).click())
+    await expect(page.getByTestId("forms-main")).toHaveAttribute("data-ws", "kyushu")
+    await expect(dialog).toBeHidden()
+    await expect(page.getByTestId("forms-customers")).toBeVisible()
+    expect(new URLSearchParams(page.url().split("?")[1]).get("ws")).toBe("kyushu")
+    expect(new URLSearchParams(page.url().split("?")[1]).get("page")).toBe("customers")
+  })
+
+  // D3：認可の失効では、未保存の変更を確かめずに移動し、beforeunload も出さない。利用者の操作によるログアウトは確かめる
+  test("authorization loss moves without asking and removes beforeunload; a normal sign-out still asks", async ({ page, isMobile }) => {
+    await openApp(page, "page=customer-edit&id=cu-1&from=list")
+    await page.locator("#edit-phone").click()
+    await page.keyboard.type("1")
+    if (isMobile) await page.getByRole("button", { name: "メニュー" }).first().click()
+    await page.locator("[data-slot=sidebar]").getByRole("button", { name: /佐藤/ }).click()
+    await page.getByRole("menuitem", { name: "ログアウト" }).click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole("button", { name: "編集を続ける" }).click()
+    await expect(dialog).toBeHidden()
+    await expect(page.getByTestId("forms-customer-edit")).toBeVisible()
+
+    // サーバーが 401 を返した場合の処理を再現する（狭い画面では Sidebar の Sheet が残るため、DOM から押す）
+    await page.evaluate(() => (document.querySelector("[data-testid=session-expired]") as HTMLButtonElement).click())
+    await expect(page.getByTestId("forms-signed-out")).toBeVisible()
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
+    const dialogs: string[] = []
+    page.on("dialog", (d) => {
+      dialogs.push(d.type())
+      void d.dismiss()
+    })
+    await page.close({ runBeforeUnload: true })
+    await expect.poll(() => page.isClosed()).toBe(true)
+    expect(dialogs).toEqual([])
   })
 })
 
@@ -862,7 +962,10 @@ test.describe("Multi-step Workflow", { tag: "@webkit" }, () => {
     if (isMobile) {
       // 狭い領域の簡易の表示は、番号と総数だけを示す（直後の見出しと同じ名前を重ねない。currentLabel="hidden"）
       const current = stepper.locator("[data-slot=stepper-narrow] [data-slot=stepper-current]")
-      await expect(current).toHaveText("ステップ 2 / 5")
+      await expect(current.locator(":scope > span:not(.sr-only)")).toHaveText(["ステップ 2 / 5"])
+      // D11：一覧を閉じている間も、支援技術には現在のステップの名前を伝える（aria-current の要素が隠れるため）
+      await expect(current.locator(":scope > .sr-only")).toHaveText("（現在のステップ：顧客）")
+      await expect(current).toHaveText("ステップ 2 / 5（現在のステップ：顧客）")
     } else await expect(stepper.locator("[data-slot=stepper-wide] li[aria-current=step]")).toContainText("顧客")
   })
 
@@ -1126,6 +1229,45 @@ test.describe("Import & Export", () => {
     // 結果が不明だった行（再処理の対象の 12、24、30 行目のうち、通信が切れた後の行）だけが失敗になる
     const failed = await ie(page).getByRole("list", { name: "失敗した行" }).locator("li").allInnerTexts()
     for (const line of failed) expect(line).toMatch(/^(12|24|30) 行目/)
+  })
+
+  // D7：状態の確認で対象のすべての行の結果が確定したら、件数で判定する。応答の矛盾は一覧に残し、確定した失敗だけを再処理できる
+  test("inconsistent response: after the status check the counts decide the outcome, the inconsistencies stay listed, only confirmed failures are retried", async ({ page }) => {
+    await server(page, (s) => (s.importMode = "inconsistent"))
+    await loadSample(page)
+    await resolveMapping(page)
+    await page.getByTestId("ie-next").click()
+    await page.getByTestId("ie-validate").click()
+    await page.getByTestId("ie-next").click()
+    await page.getByTestId("ie-run").click()
+    const result = ie(page).locator("[data-slot=import-result]")
+    await expect(result).toHaveAttribute("data-outcome", "unknown", { timeout: 5000 })
+    await expect(result).toContainText("処理の途中で結果を受け取れなかった行があり")
+    await expect(result.getByRole("button", { name: /再処理/ })).toHaveCount(0)
+    await expect(ie(page).getByRole("button", { name: "顧客の一覧へ" })).toHaveCount(0)
+    await result.getByRole("button", { name: "状態を確認" }).click()
+    await expect(result).toHaveAttribute("data-outcome", "partial", { timeout: 5000 })
+    await expect(result).toHaveAttribute("data-complete", "false")
+    await expect(result).toContainText("処理の対象37件")
+    await expect(result).toContainText("失敗1件")
+    await expect(result).not.toContainText(/結果が不明\d+件/)
+    await expect(result).not.toContainText("結果の件数の合計が、処理の対象の件数と一致しません")
+    await expect(result.locator("[data-slot=import-integrity]")).toContainText("取り込みの対象ではない 1行の結果が返されました")
+    await expect(result).toContainText("処理の対象のすべての行の結果は確定しています")
+    await expect(result.getByRole("button", { name: "状態を確認" })).toHaveCount(0)
+    await expect(ie(page).getByRole("button", { name: "顧客の一覧へ" })).toBeVisible()
+    // 確定した失敗（1 行）だけを再処理する
+    await server(page, (s) => (s.importMode = "success"))
+    const before = (await requests(page, "run-import")).length
+    await result.getByRole("button", { name: "失敗した 1件だけを再処理" }).click()
+    await expect(result).toHaveAttribute("data-outcome", "success", { timeout: 5000 })
+    const runs = await requests(page, "run-import")
+    expect(runs.length).toBe(before + 1)
+    expect((runs.at(-1)!.payload as { rows: number[] }).rows).toHaveLength(1)
+    // 応答の矛盾は残るため、成功の形（success の色、role="status"）では示さない
+    await expect(result).toHaveAttribute("data-complete", "false")
+    await expect(result).toHaveAttribute("data-variant", "warning")
+    await expect(result).toHaveAttribute("role", "alert")
   })
 
   test("unknown result offers a status check, not a retry", async ({ page }) => {

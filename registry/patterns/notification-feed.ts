@@ -221,9 +221,14 @@ function useNotificationFeed<T extends NotificationLike>({
   })
   const guard = useScopeGuard(scopeKey)
   const [stored, setLocal] = React.useState<LocalState<T>>(() => emptyLocal(scopeKey))
-  // 別のスコープの保留中の新着と更新中の状態は、1 回の描画でも返さない。
+  // 別のスコープの保留中の新着と更新中の状態は、1 回の描画でも返さない（描画の中で照合する）。
   const local = stored.scope === scopeKey ? stored : emptyLocal<T>(scopeKey)
-  if (stored.scope !== scopeKey) setLocal(local)
+  // 保持している状態のスコープは、commit の時点（layout effect）で新しいスコープに置き換える。描画の中では setState しない
+  // （commit されなかった描画（中断された transition）の更新で、表示中のスコープの状態を初期化しないため）。
+  // 新しいスコープの更新（イベント、購読、応答）は commit の後に始まるため、この置き換えより前には届かない。
+  React.useLayoutEffect(() => {
+    if (stored.scope !== scopeKey) setLocal((s) => (s.scope === scopeKey ? s : emptyLocal<T>(scopeKey)))
+  }, [stored.scope, scopeKey])
 
   const fetched = data.data
   const page = fetched?.page
@@ -292,10 +297,15 @@ function useNotificationFeed<T extends NotificationLike>({
   const hasUnread = unreadCount !== null ? unreadCount > 0 : knownUnread ? true : null
   const loadedUnread = countUnread(items)
 
+  // 操作の処理（既読の更新、一括既読、受信）が読む値。commit の時点で更新する（描画の中で書き換えない）。
+  // 新しいスコープへの transition が commit されずに保留している間に、表示中のスコープの操作が、
+  // commit されていない描画の関数（別のスコープの updateRead）と値を使わないため。
   const unreadRef = React.useRef(unreadCount)
-  unreadRef.current = unreadCount
   const refs = React.useRef({ updateRead, markAllRead, classifyError, data, local, items, pending, readAllBy, resultContract, enabled, verifyingIds })
-  refs.current = { updateRead, markAllRead, classifyError, data, local, items, pending, readAllBy, resultContract, enabled, verifyingIds }
+  React.useLayoutEffect(() => {
+    unreadRef.current = unreadCount
+    refs.current = { updateRead, markAllRead, classifyError, data, local, items, pending, readAllBy, resultContract, enabled, verifyingIds }
+  })
 
   // 確定の後に始めた取得の結果が届いたら、確定と確認中の記録を消す（取得の結果が反映している。記録を増やし続けない）
   React.useEffect(() => {
@@ -437,7 +447,8 @@ function useNotificationFeed<T extends NotificationLike>({
       // 重複した ID は 1 つにする。確認中の通知は、取得し直して確定するまで操作しない
       const verifying = refs.current.verifyingIds
       const list = [...new Set(typeof ids === "string" ? [ids] : ids)].filter((id) => !verifying.has(id))
-      if (list.length === 0 || !refs.current.enabled) return
+      // 一覧が現在の条件の取得の結果でない間（取得中、取得の失敗、スコープの変更の直後）は送らない（canOperate と同じ条件）
+      if (list.length === 0 || !refs.current.enabled || !refs.current.data.isCurrent) return
       run("read", list, read, (signal) => refs.current.updateRead(list, read, { signal }), null, null)
     },
     [run]

@@ -9,8 +9,8 @@ import { PageLayout } from "@/patterns/page-layout"
 import { Section, SectionDescription, SectionHeader, SectionHeading, SectionTitle } from "@/patterns/section-layout"
 import { toSettingSearchGroups, type SettingSearchEntry, type SettingSearchItem } from "@/patterns/setting-resolve"
 import { SettingsBackLink, SettingsLayout, SettingsNav, type SettingsNavGroup } from "@/patterns/settings-layout"
+import { useNavigationGuard } from "@/patterns/unsaved-changes"
 
-import { DiscardAlert } from "../overlays/discard-alert"
 import { AppLink } from "../data-browsing/doc-parts"
 import { can, userName, workspaceName, type SettingsScope, type SettingsSectionProps } from "./settings-parts"
 import { AccountDeletionSection, DisplaySettingsSection, LoginSecuritySection, ProfileSection, QuietHoursSection } from "./settings-personal"
@@ -162,6 +162,11 @@ const isShown = (el: Element | null): el is HTMLElement => !!el && (el as HTMLEl
 export type SettingsAreaProps = {
   scope: SettingsScope
   api: SettingsSectionProps["api"]
+  /**
+   * 権限の取得の状態（useAccess の戻り値）。渡した場合は、最新の権限を確認していない間（再確認中など）、組織の設定とメンバーの
+   * 一覧（保護された情報）を表示せず、保存と削除を始めない。渡さない場合は scope.permissions を確認済みとして扱う
+   */
+  access?: SettingsSectionProps["access"]
   /** 現在のカテゴリ。null はカテゴリの一覧（狭い領域では一覧だけを示し、広い領域では最初のカテゴリを示す） */
   category: SettingsCategoryId | null
   /** カテゴリの移動。製品のルーターで URL を変える。未保存の変更の確認は、この部品が済ませてから呼ぶ */
@@ -184,6 +189,7 @@ export type SettingsAreaProps = {
 export function SettingsArea({
   scope,
   api,
+  access,
   category,
   onCategoryChange,
   hrefFor = (id) => (id ? `#settings/${id}` : "#settings"),
@@ -209,22 +215,27 @@ export function SettingsArea({
   const anyDirtyRef = useRef(onAnyDirtyChange)
   anyDirtyRef.current = onAnyDirtyChange
   useEffect(() => anyDirtyRef.current?.(anyDirty), [anyDirty])
-  const [pending, setPending] = useState<{ category: SettingsCategoryId | null; focus: FocusRequest } | null>(null)
   const [focusRequest, setFocusRequest] = useState<{ n: number; focus: FocusRequest } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
 
   // 移動を確定するたびに内容を作り直す（狭い領域で一覧へ戻ったときも、破棄した入力を残さない）
   const [visit, setVisit] = useState(0)
-  const commit = (next: SettingsCategoryId | null, focus: FocusRequest) => {
-    setDirty({})
-    if (anyDirty) setVisit((v) => v + 1)
+  const commit = (next: SettingsCategoryId | null, focus: FocusRequest, discarded: boolean) => {
+    if (discarded) {
+      setDirty({})
+      setVisit((v) => v + 1)
+    }
     if (next !== category) onCategoryChange(next)
     setFocusRequest((r) => ({ n: (r?.n ?? 0) + 1, focus }))
   }
+  // カテゴリの移動の前の確認は、Unsaved Changes（UnsavedChangesProvider）に任せる。各フォームは useSettingsFormUnsaved で登録する。
+  // 製品のルーターの移動（onCategoryChange）は、確認が済んだ後に呼ぶ（同じ移動で 2 回確認しない）
+  const guard = useNavigationGuard()
   const go = (next: SettingsCategoryId | null, focus: FocusRequest) => {
     // 同じカテゴリの中の移動（検索で同じカテゴリの項目を選んだ場合）は、入力中の内容を残す
-    if (anyDirty && next !== (known?.id ?? null)) setPending({ category: next, focus })
-    else commit(next, focus)
+    if (next === (known?.id ?? null)) return commit(next, focus, false)
+    const discarding = anyDirty
+    guard.confirmNavigation(() => commit(next, focus, discarding))
   }
 
   // 移動の後のフォーカス。項目は取得の後に表示されるため、現れるまで待つ（3 秒まで）
@@ -266,7 +277,7 @@ export function SettingsArea({
   }, [focusRequest])
 
   const entries = useMemo(() => settingsSearchEntries(scope), [scope])
-  const sectionProps: SettingsSectionProps = { scope, api, onPermissionDenied, onDirtyChange, saveContract }
+  const sectionProps: SettingsSectionProps = { scope, api, access, onPermissionDenied, onDirtyChange, saveContract }
   const scopeText =
     current.id === "organization" || current.id === "members"
       ? `対象：${workspaceName(scope)}（組織の設定。すべてのメンバーに適用されます）`
@@ -360,16 +371,6 @@ export function SettingsArea({
           setSearchOpen(false)
           go(item.categoryId as SettingsCategoryId, { kind: "setting", id: item.value })
         }}
-      />
-      <DiscardAlert
-        open={pending !== null}
-        onOpenChange={(o) => !o && setPending(null)}
-        onDiscard={() => {
-          const p = pending
-          setPending(null)
-          if (p) commit(p.category, p.focus)
-        }}
-        testId="set-discard"
       />
     </div>
   )

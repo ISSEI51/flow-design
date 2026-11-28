@@ -24,6 +24,9 @@ import { cn } from "@/lib/utils"
 const THEMES = { light: "", dark: ".dark" } as const
 
 const INITIAL_DIMENSION = { width: 320, height: 200 } as const
+
+// サーバーでは useLayoutEffect を使わない（効果はブラウザでだけ実行する）
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? React.useEffect : React.useLayoutEffect
 type TooltipNameType = number | string
 
 export type ChartConfig = Record<
@@ -89,6 +92,23 @@ function ChartContainer({
   const chartId = `chart-${id ?? uniqueId.replace(/:/g, "")}`
   const ref = React.useRef<HTMLDivElement>(null)
   const [narrow, setNarrow] = React.useState(false)
+  // 描画する場所の大きさを測れたか。非表示の領域（keepMounted の Tabs、Accordion、display: none）の中では幅と高さが 0 になる。
+  // 0 は「まだ測れていない」として扱い、ResponsiveContainer を描かない（Recharts の width(0)/height(0) の警告と、0 の大きさの描画を避ける）。
+  // 場所は ChartContainer の大きさ（aspect-video、h-64 など）で確保したままにし、表示されて大きさが 0 でなくなったら描く。
+  // サーバーでの描画と Hydration の最初の描画は、どちらも「測れていない」で同じ出力にする。
+  const [measured, setMeasured] = React.useState(false)
+
+  useIsomorphicLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const update = (width: number, height: number) => setMeasured(width > 0 && height > 0)
+    const rect = el.getBoundingClientRect()
+    update(rect.width, rect.height)
+    if (typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(([entry]) => update(entry.contentRect.width, entry.contentRect.height))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   React.useEffect(() => {
     if (!fallback || !minWidth || !ref.current) return
@@ -149,9 +169,9 @@ function ChartContainer({
         <ChartStyle id={chartId} config={config} />
         {narrow && fallback ? (
           fallback
-        ) : (
+        ) : measured ? (
           <RechartsPrimitive.ResponsiveContainer initialDimension={initialDimension}>{children}</RechartsPrimitive.ResponsiveContainer>
-        )}
+        ) : null}
       </div>
     </ChartContext.Provider>
   )

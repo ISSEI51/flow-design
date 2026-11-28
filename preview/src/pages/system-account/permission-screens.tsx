@@ -40,7 +40,6 @@ import { TableScrollArea } from "@/patterns/table-scroll-area"
 
 import { MockRequestError, MockUnknownError } from "../../data/system-account/mock"
 import {
-  orgSettings,
   permissionLabels,
   plans,
   roles as modelRoles,
@@ -65,6 +64,7 @@ import {
   type PermissionScope,
 } from "../../data/system-account/permission-data"
 import type { AccessResponse, PermissionApi, PermissionRequestRecord, RecordResponse } from "../../data/system-account/permission-server"
+import { orgPolicyOf } from "../../data/system-account/settings-server"
 
 // Permission States の画面の部品。統合の検証画面でも使えるよう、スコープ（利用者とワークスペース）、模擬のサーバーの API、
 // コールバックを props で受け取る。模擬のサーバーの状態は持たない（permission-server.ts）。
@@ -228,19 +228,23 @@ export function Resolution({
   revision: number
   onResolvePrerequisite?: (id: string) => void
 }): ReactNode {
+  const authorizationResolution = (missing: Permission[]) => {
+    const requestable = missing.every((p) => requestablePermissions.includes(p))
+    if (requestable && missing.length === 1) return <PermissionRequest scope={scope} permission={missing[0]} api={api} revision={revision} access={access} />
+    return <p className="text-ui text-muted-foreground">{contactText(scope, "必要な場合は、")}</p>
+  }
   switch (reason.kind) {
     case "unresolved":
+      // 前の権限に含まれていなかった権限（missing）の再確認中は、前と同じ解決の方法を示す（表示を揺らさない）。
+      // 申請は、最新の権限を確認するまで始めない（PermissionRequest が判断する）。確認の失敗では、再確認の操作も置く
+      if (reason.missing?.length && reason.status === "refreshing") return authorizationResolution(reason.missing)
       return reason.status === "error" || reason.status === "stale" ? (
         <Button variant="outline" size="sm" onClick={access.reload}>
           権限を再確認
         </Button>
       ) : null
-    case "authorization": {
-      const requestable = reason.missing.every((p) => requestablePermissions.includes(p))
-      if (requestable && reason.missing.length === 1)
-        return <PermissionRequest scope={scope} permission={reason.missing[0]} api={api} revision={revision} access={access} />
-      return <p className="text-ui text-muted-foreground">{contactText(scope, "必要な場合は、")}</p>
-    }
+    case "authorization":
+      return authorizationResolution(reason.missing)
     case "entitlement":
       // 権限もない利用者には、契約プランの案内を示さない（契約プランを変えても解決せず、機能の存在を知らせることになるため）。
       if (reason.missing.length > 0) return <p className="text-ui text-muted-foreground">{contactText(scope, "必要な場合は、")}</p>
@@ -767,7 +771,8 @@ export function OrgSecuritySettings({ scope, access }: { scope: PermissionScope;
   const content = resolveContentAccess(access, { view: ["settings.org.view"], edit: ["settings.org.edit"] })
   if (content.mode === "hidden") return null
   if (content.mode === "pending") return <p className="text-ui text-muted-foreground">{pendingText[content.status]}</p>
-  const org = orgSettings[scope.workspaceId]
+  // 組織のポリシーの正本は Settings の模擬のサーバー（保存した値を示す）
+  const org = orgPolicyOf(scope.workspaceId)
   // 表示の判断であり、操作の判断ではない。契約プランの機能だけを確かめる。
   const ssoEntitled = access.grants!.features.includes("sso")
   const ssoReason: Restriction<Permission, Feature> = { kind: "entitlement", feature: "sso", missing: [] }
@@ -1165,7 +1170,7 @@ export function CustomerEditor({
                       loading={saving || save.status === "checking"}
                       data-testid="perm-editor-save"
                     >
-                      保存
+                      保存する
                     </Button>
                   )}
                 </RestrictedAction>

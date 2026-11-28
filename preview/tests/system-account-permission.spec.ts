@@ -442,10 +442,13 @@ test.describe("permission change while in use", () => {
     await expect(demo(page, "live").getByTestId("perm-live-notice")).toHaveText("権限が変更されました。表示している操作を更新しました。")
     await expect(demo(page, "live").getByTestId("perm-live-notice")).toHaveAttribute("role", "status")
     await demo(page, "live").getByRole("button", { name: "鈴木 一郎さんをメンバーに戻す" }).click()
-    // 前の権限（閲覧者）でも許可されない操作は、再確認の間も、その理由（認可）を示す（表示を揺らさない）
+    // 前の権限（閲覧者）で許可されない操作も、再確認の間は「権限がない」と示さない（新しい権限で許可される可能性がある。PERM-6）。
+    // 画面での扱い（無効にして示す）は変えない（表示を揺らさない）
     await waitHeld(page, "access")
     await expect(demo(page, "live").getByTestId("perm-ops")).toHaveAttribute("data-status", "refreshing")
-    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "authorization")
+    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "unresolved")
+    await expect(op(page, "live", "edit")).toHaveAttribute("data-mode", "disabled")
+    await expect(op(page, "live", "edit").locator("[data-slot=restriction-reason]")).toHaveText("最新の権限を確認しています")
     await release(page, "access")
     await expect(op(page, "live", "edit")).toHaveAttribute("data-mode", "enabled")
     expect(await page.evaluate(() => (window as unknown as { __permMarker?: number }).__permMarker)).toBe(1)
@@ -574,7 +577,7 @@ test.describe("permission change while editing", () => {
     await expect(editor(page)).toHaveAttribute("data-mode", "edit")
     await hold(page, "save")
     await note(page).fill("保存中に権限が変わる")
-    await editor(page).getByRole("button", { name: "保存" }).click()
+    await editor(page).getByRole("button", { name: "保存する" }).click()
     await expect(editor(page).getByTestId("perm-editor-save-status")).toHaveText("保存しています")
     await waitHeld(page, "save")
     await server(page, (s) => s.simulate.setRole("u-suzuki", "hq", "viewer"))
@@ -592,7 +595,7 @@ test.describe("permission change while editing", () => {
     await server(page, (s) => Object.assign(s, { outcome: { save: "unknown" } }))
     await hold(page, "save")
     await note(page).fill("結果が不明な保存")
-    await editor(page).getByRole("button", { name: "保存" }).click()
+    await editor(page).getByRole("button", { name: "保存する" }).click()
     const spinner = editor(page).locator("[data-slot=button-spinner] svg")
     await expect(spinner).toBeVisible()
     expect(await spinner.evaluate((el) => getComputedStyle(el).animationName)).toBe("none")
@@ -865,7 +868,7 @@ test.describe("re-fetch failure after a permission change notice", () => {
     await expect(editor).not.toContainText("この顧客を表示できませんでした")
     await expect(editor).toContainText(firstCustomer.company)
     await expect(editor.locator("[data-slot=restriction-reason]")).toHaveText(/最新の権限を確認できませんでした/)
-    await expect(editor.getByRole("button", { name: "保存" })).toHaveAttribute("aria-disabled", "true")
+    await expect(editor.getByRole("button", { name: "保存する" })).toHaveAttribute("aria-disabled", "true")
     await server(page, (s) => (s.outcome.access = "success"))
     await op(page, "live", "edit").getByRole("button", { name: "権限を再確認" }).click()
     await ready(page, "live")
@@ -1264,7 +1267,7 @@ test.describe("right after losing a permission: delete, export, save and moving 
     const editor = demo(page, "edit").getByTestId("perm-editor")
     await expect(editor).toHaveAttribute("data-mode", "edit")
     await editor.getByLabel("備考").fill("権限を失う直前の入力")
-    await expect(editor.getByRole("button", { name: "保存" })).toBeEnabled()
+    await expect(editor.getByRole("button", { name: "保存する" })).toBeEnabled()
     const enabledWhenPressed = await server(page, (s) => {
       s.simulate.setRole("u-suzuki", "hq", "viewer")
       const button = document.querySelector<HTMLButtonElement>('[data-testid="perm-demo-edit"] [data-testid="perm-editor-save"]')!
@@ -1332,10 +1335,10 @@ test.describe("protected content while the latest authorization is unverified", 
     await expect(editor(page).locator("[data-slot=restriction-reason]")).toHaveText("最新の権限を確認しています")
     await expect(editor(page)).toHaveAttribute("data-mode", "edit")
     await expect(editor(page)).toContainText(firstCustomer.company)
-    await expect(editor(page).getByRole("button", { name: "保存" })).toHaveAttribute("aria-disabled", "true")
+    await expect(editor(page).getByRole("button", { name: "保存する" })).toHaveAttribute("aria-disabled", "true")
     await waitHeld(page, "access")
     await release(page, "access")
-    await expect(editor(page).getByRole("button", { name: "保存" })).toBeEnabled()
+    await expect(editor(page).getByRole("button", { name: "保存する" })).toBeEnabled()
   })
 
   test("members in the overview are not shown while re-checking (protected); the customers section structure stays", async ({ page }) => {

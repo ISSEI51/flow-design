@@ -1087,6 +1087,178 @@ test.describe("Mobile", () => {
   })
 })
 
+// ------------------------------------------------------------------ Patterns Integration Review の指摘への対処
+test.describe("Integration review", () => {
+  const expected = (filters: AnalysisFilters = defaultAnalysisFilters, id: "this-month" | "last-month" = "this-month") => {
+    const p = resolvePeriod({ kind: "relative", id }, ctx)
+    if (p.status !== "ready") throw new Error()
+    return overviewData({ period: p, full: fullPeriodOf(p, ctx), comparison: comparisonRange({ period: p, mode: "previous-month" }), filters })
+  }
+  const mrr = (page: Page) => page.getByTestId("metric-mrr").locator("[data-slot=metric-value]")
+
+  test("a period whose previous month is shorter is not shown as a change for period totals", async ({ page }) => {
+    // 3/30〜3/31（2 日間）の前月は 2/28 の 1 日だけ。売上の増減率（+101.9%）を示さず、理由を示す
+    await openApp(page, "page=business&from=2025-03-30&to=2025-03-31&cmp=previous-month")
+    await expect(page.getByTestId("business-overview")).toHaveAttribute("data-status", "ready")
+    const cmp = page.getByTestId("analysis-global-filters").locator("[data-slot=comparison-select]")
+    await expect(cmp.locator("[data-slot=comparison-range]")).toContainText("2025/02/28")
+    await expect(cmp.locator("[data-slot=comparison-unfair]")).toBeVisible()
+    const revenue = page.getByTestId("metric-revenue").locator("[data-slot=comparison-value]")
+    await expect(revenue).toContainText("比較できません")
+    await expect(revenue).not.toContainText("%")
+    // 時点の指標（MRR）は、同じ時点の値と比べる
+    await expect(page.getByTestId("business-mrr-comparison")).not.toContainText("比較できません")
+  })
+
+  test("several regions in the URL: a single-region screen uses one and says so", async ({ page }) => {
+    await openApp(page, "page=business&region=kanto,kinki")
+    await expect(page.getByTestId("analysis-region-filter")).toHaveText(/関東/)
+    await expect(page.getByTestId("analysis-region-notice")).toHaveText("この画面で選べる地域は 1 つです。URL で指定された地域のうち、関東で集計しています（近畿は使っていません）")
+    // 示した条件（関東）と集計の条件が同じ
+    await expect(mrr(page)).toHaveText(yen(expected({ ...defaultAnalysisFilters, regions: ["kanto"] }).mrr.current))
+    await expect(page.getByTestId("business-overview")).toContainText("関東の契約だけを集計しています")
+    expect(page.url()).toContain("region=kanto")
+    expect(page.url()).not.toContain("kinki")
+  })
+
+  test("a restored region outside the workspace is not replaced by the workspace region, and nothing is fetched", async ({ page }) => {
+    await openApp(page, "page=business&region=kanto")
+    await expect(page.getByTestId("business-overview")).toContainText("関東の契約だけを集計しています")
+    await page.getByLabel("九州支店").check()
+    await expect(page.getByTestId("analysis-out-of-scope")).toContainText("このワークスペースでは対象がありません")
+    await expect(page.getByTestId("business-overview")).toHaveCount(0)
+    expect(await server(page, (s) => s.requests.filter((r) => r.scope.startsWith("kyushu")).length)).toBe(0)
+    await page.getByRole("button", { name: "地域の条件を外す" }).click()
+    await expect(mrr(page)).toHaveText(yen(expected({ ...defaultAnalysisFilters, regions: ["kyushu-okinawa"] }).mrr.current))
+    // 領域の注記は、実際に集計に使った条件（ワークスペースで決まる地域）で示す
+    await expect(page.getByTestId("business-overview")).toContainText("九州・沖縄の契約だけを集計しています")
+    await expect(page.getByTestId("analysis-region-filter")).toBeDisabled()
+    await expect(page.getByTestId("analysis-region-filter")).toHaveText(/九州・沖縄/)
+  })
+
+  test("the retention screen and its drill-down do not fetch a region outside the workspace; the region select is disabled there", async ({ page }) => {
+    await openApp(page, "page=retention&region=kanto")
+    await page.getByLabel("九州支店").check()
+    await expect(page.getByTestId("analysis-out-of-scope")).toContainText("このワークスペースでは対象がありません")
+    await expect(page.getByTestId("retention-summary")).toHaveCount(0)
+    await expect(page.getByTestId("analysis-region-filter")).toBeDisabled()
+    await page.evaluate(() => (window.location.hash = "#/analysis-app?page=retention-accounts&from=2025-11-01&to=2026-10-31&region=kanto"))
+    await expect(page.getByTestId("drill-out-of-scope")).toContainText("このワークスペースでは対象がありません")
+    await expect(page.getByTestId("drill-accounts")).toHaveCount(0)
+    expect(await server(page, (s) => s.requests.filter((r) => r.scope.startsWith("kyushu") && (r.kind === "accounts" || r.kind === "retention")).length)).toBe(0)
+  })
+
+  test("stale labels come from the conditions used for the shown result: granularity, workspace region, fixed period", async ({ page }) => {
+    await openApp(page, "page=retention")
+    const trend = page.getByTestId("retention-trend")
+    await expect(trend).toHaveAttribute("data-status", "ready")
+    await server(page, (s) => (s.latency.default = 1500))
+    await chooseOption(page, trend.locator("[data-slot=granularity-select]").getByRole("combobox"), "四半期別")
+    await expect(trend.locator("[data-slot=analysis-region-stale]")).toContainText("表示中：2025/11/01〜2026/10/31・絞り込みなし・月別の結果（前の条件）")
+    await expect(trend).toHaveAttribute("data-status", "ready", { timeout: 5000 })
+
+    await openApp(page, "page=business")
+    await page.getByLabel("九州支店").check()
+    const overview = page.getByTestId("business-overview")
+    await expect(overview).toHaveAttribute("data-status", "ready")
+    await server(page, (s) => (s.latency.default = 1500))
+    await chooseOption(page, page.getByTestId("analysis-global-filters").locator("[data-slot=analysis-period-select]"), "先月")
+    // 九州支店のデータは九州・沖縄だけ。「絞り込みなし」と示さない
+    await expect(overview.locator("[data-slot=analysis-region-stale]")).toContainText("表示中：2026/11/01〜2026/11/25・九州・沖縄の結果（前の条件）")
+    await expect(overview).toHaveAttribute("data-status", "ready", { timeout: 5000 })
+
+    await page.getByLabel("本社（すべての地域）").check()
+    await expect(page.getByTestId("business-trend")).toHaveAttribute("data-status", "ready", { timeout: 5000 })
+    await chooseOption(page, page.getByTestId("analysis-region-filter"), "近畿")
+    // ページの期間と別の期間を使う推移の領域も、表示中の結果の条件を示す
+    await expect(page.getByTestId("business-trend").locator("[data-slot=analysis-region-stale]")).toContainText("表示中：過去 24 か月と今後 3 か月・絞り込みなしの結果（前の条件）")
+    await expect(page.getByTestId("business-trend")).toHaveAttribute("data-status", "ready", { timeout: 5000 })
+  })
+
+  test("the stale label wraps instead of being cut, and describes the region", async ({ page, isMobile }) => {
+    if (!isMobile) await page.setViewportSize({ width: 320, height: 900 })
+    await openApp(page, "page=business")
+    const region = page.getByTestId("business-overview")
+    await expect(region).toHaveAttribute("data-status", "ready")
+    await server(page, (s) => (s.latency.default = 1500))
+    await chooseOption(page, page.getByTestId("analysis-region-filter"), "近畿")
+    const label = region.locator("[data-slot=analysis-region-stale] span[id]")
+    await expect(label).toHaveText("表示中：2026/11/01〜2026/11/25・絞り込みなしの結果（前の条件）")
+    // 省略せずに折り返す（全文が見える）。title 属性に頼らない
+    const style = await label.evaluate((el) => ({ ws: getComputedStyle(el).whiteSpace, to: getComputedStyle(el).textOverflow, cut: el.scrollWidth > el.clientWidth + 1, title: el.getAttribute("title") }))
+    expect(style).toEqual({ ws: "normal", to: "clip", cut: false, title: null })
+    // 領域の説明として関連付ける
+    const id = await label.getAttribute("id")
+    expect((await region.getAttribute("aria-describedby"))?.split(" ")).toContain(id)
+    expect(await region.locator("[data-region-content]").evaluate((el) => getComputedStyle(el).opacity)).toBe("1")
+    await expect(region).toHaveAttribute("data-status", "ready", { timeout: 5000 })
+    await expect(region).not.toHaveAttribute("aria-describedby", /.+/)
+  })
+
+  test("hiding the counts: the list text is the same whether or not hidden rows exist", async ({ page }) => {
+    await openApp(page, "page=retention")
+    await page.getByLabel("一覧では件数を示さない").check()
+    // 閲覧できない明細がない（管理者）場合も、件数を示さない文にする（文の違いから存在を推測させない）
+    await expect(page.getByTestId("retention-list-count")).toHaveText("表示できる 104社（閲覧の権限がある取引先だけを表示しています。集計の件数と一致しない場合があります）")
+    await page.getByLabel("担当者（一部の取引先を除く）").check()
+    const staff = churnedAccountList({ range: { from: makeDate(2025, 11, 1)!, to: makeDate(2026, 10, 31)! }, filters: defaultAnalysisFilters, role: "staff" })
+    await expect(page.getByTestId("retention-list-count")).toHaveText(`表示できる ${staff.rows.length}社（閲覧の権限がある取引先だけを表示しています。集計の件数と一致しない場合があります）`)
+    await expect(page.getByTestId("retention-hidden")).toHaveCount(0)
+  })
+
+  test("a product that conceals existence shows a restricted detail the same as a missing one", async ({ page }) => {
+    const year = { from: makeDate(2025, 11, 1)!, to: makeDate(2026, 10, 31)! }
+    const manager = churnedAccountList({ range: year, filters: defaultAnalysisFilters, role: "manager" }).rows
+    const staff = churnedAccountList({ range: year, filters: defaultAnalysisFilters, role: "staff" }).rows
+    const restricted = manager.find((r) => !staff.some((x) => x.id === r.id))!
+    await openApp(page, "page=business")
+    await page.getByLabel("担当者（一部の取引先を除く）").check()
+    await page.getByLabel("存在しない場合と同じに示す").check()
+    await page.evaluate((id) => (window.location.hash = `#/analysis-app?page=account&id=${id}`), restricted.id)
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("企業が見つかりません")
+    const restrictedText = await page.getByTestId("account-detail").innerText()
+    expect(restrictedText).not.toContain("権限がありません")
+    await page.evaluate(() => (window.location.hash = "#/analysis-app?page=account&id=A-9999"))
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("企業が見つかりません")
+    expect(await page.getByTestId("account-detail").innerText()).toBe(restrictedText)
+  })
+
+  test("charts in hidden tabs and accordions: no zero-size rendering, drawn at the parent width when shown", async ({ page }) => {
+    const warnings: string[] = []
+    page.on("console", (m) => {
+      if (m.type() === "warning" && /width\(0\) and height\(0\)|should be greater than 0/.test(m.text())) warnings.push(m.text())
+    })
+    await page.goto("/#/dashboard-layout")
+    const demo = page.getByTestId("dl-hidden-charts")
+    const svgOf = (id: string) => page.getByTestId(id).locator("[data-slot=chart] svg.recharts-surface").first()
+    await expect(svgOf("dl-tab-bridge-chart")).toBeVisible()
+    // 非表示のタブと折りたたみの中のグラフは描かない（大きさ 0 で描かない）
+    await expect(page.getByTestId("dl-tab-profit-chart").locator("svg.recharts-surface")).toHaveCount(0)
+    await expect(page.getByTestId("dl-accordion-chart").locator("svg.recharts-surface")).toHaveCount(0)
+    const widthMatches = async (id: string) => {
+      const fig = page.getByTestId(id).locator("[data-slot=chart]")
+      await expect.poll(async () => Math.round((await svgOf(id).boundingBox())?.width ?? 0)).toBe(Math.round((await fig.boundingBox())!.width))
+    }
+    await demo.getByRole("tab", { name: "地域別の営業利益" }).click()
+    await expect(svgOf("dl-tab-profit-chart")).toBeVisible()
+    await widthMatches("dl-tab-profit-chart")
+    // キーボードで前のタブに戻る（矢印キーで切り替わる）
+    await demo.getByRole("tab", { name: "地域別の営業利益" }).press("ArrowLeft")
+    await expect(demo.getByRole("tab", { name: "MRR の増減の内訳" })).toHaveAttribute("aria-selected", "true")
+    await expect(svgOf("dl-tab-bridge-chart")).toBeVisible()
+    await widthMatches("dl-tab-bridge-chart")
+    await demo.getByRole("button", { name: "地域別の営業利益（折りたたみ）" }).click()
+    await expect(svgOf("dl-accordion-chart")).toBeVisible()
+    await widthMatches("dl-accordion-chart")
+    // 画面の幅の変更に追従する
+    const size = page.viewportSize()!
+    await page.setViewportSize({ width: Math.max(320, size.width - 200), height: size.height })
+    await widthMatches("dl-accordion-chart")
+    await widthMatches("dl-tab-bridge-chart")
+    expect(warnings).toEqual([])
+  })
+})
+
 // ------------------------------------------------------------------ WebKit
 test.describe("WebKit basics", { tag: "@webkit" }, () => {
   test("dashboards render and cross-filtering works", async ({ page }) => {

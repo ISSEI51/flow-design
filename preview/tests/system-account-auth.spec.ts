@@ -581,6 +581,22 @@ test.describe("Verification code", () => {
     await expect(error.locator("[data-slot=alert]")).toHaveAttribute("data-variant", "warning")
   })
 
+  test("AUTH-5: a late SMS send response does not take the focus from where the user moved it", async ({ page }) => {
+    await open(page)
+    const m = mfa(page)
+    await hold(page, "mfa-send")
+    await m.getByTestId("auth-mfa-other").click()
+    await m.getByRole("button", { name: "SMS でコードを受け取る" }).click()
+    await waitHeld(page, "mfa-send", 1)
+    // 応答を待つ間に、利用者が別の入力欄へ移った
+    const note = page.getByTestId("auth-session-note")
+    await note.focus()
+    await release(page, "mfa-send")
+    await expect(m.getByTestId("auth-mfa")).toHaveAttribute("data-method", "sms")
+    await expect(note).toBeFocused()
+    await expect(m.getByTestId("auth-mfa-code")).not.toBeFocused()
+  })
+
   test("alternatives and resend appear only for methods the user has", async ({ page }) => {
     await open(page)
     const m = mfa(page)
@@ -1004,6 +1020,25 @@ test.describe("Session expiry", () => {
     await expect(page.getByTestId("auth-session-message")).toHaveText("保存していない入力内容を復元しました。")
     expect(await requests(page, "permissions")).toHaveLength(1)
     expect(await requests(page, "save")).toHaveLength(0)
+  })
+
+  test("AUTH-8: a save started in the previous session that fails after re-authentication does not expire the new session", async ({ page }) => {
+    await open(page)
+    await hold(page, "save")
+    await page.getByTestId("auth-session-note").fill("保存中の下書き")
+    await page.getByTestId("auth-session-save").click()
+    await waitHeld(page, "save")
+    // 保存の応答を待つ間にセッションが切れ、同じ利用者で再認証する（新しいセッション）
+    await page.getByTestId("auth-session-expire").click()
+    await reauth(page)
+    await expect(s(page).getByTestId("auth-reauth")).toHaveCount(0)
+    await expect(page.getByTestId("auth-session-note")).toBeVisible()
+    // 前のセッションで始めた保存は、前のセッションが切れているため失敗する。現在のセッションの期限切れとして扱わない
+    await hold(page, "save", false)
+    await release(page, "save")
+    await expect(page.getByTestId("auth-session-message")).toHaveText("保存できませんでした。もう一度お試しください。")
+    await expect(s(page).getByTestId("auth-reauth")).toHaveCount(0)
+    await expect(page.getByTestId("auth-session-note")).toBeVisible()
   })
 
   test("same user without the edit permission: the draft is not restored and editing is not offered", async ({ page }) => {

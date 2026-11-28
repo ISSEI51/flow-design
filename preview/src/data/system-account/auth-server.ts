@@ -8,12 +8,13 @@
 // 入力されたパスワードと確認コードは、比較にだけ使い、記録（requests）にも残さない。
 
 import { MockRequestError, mockRequest, type MockOutcome } from "./mock"
+// 組織のポリシーの正本は Settings の模擬のサーバー（保存した組織の設定を、ログインの判定に使う）
+import { orgPolicyOf } from "./settings-server"
 import {
   demoPassword,
   demoVerificationCode,
   memberships,
   membershipOf,
-  orgSettings,
   roles,
   users,
   workspaces,
@@ -322,7 +323,7 @@ function issueChallenge(userId: UserId): MfaChallenge {
 }
 
 function afterFirstFactor(org: AuthOrg, userId: UserId, factorSatisfiesMfa: boolean): SignInResult {
-  if (orgSettings[org].requireMfa && !factorSatisfiesMfa) return { kind: "mfa-required", challenge: issueChallenge(userId) }
+  if (orgPolicyOf(org).requireMfa && !factorSatisfiesMfa) return { kind: "mfa-required", challenge: issueChallenge(userId) }
   return { kind: "authenticated", userId }
 }
 
@@ -376,7 +377,7 @@ export const authApi = {
     record({ kind: "sign-in", email })
     return request("sign-in", signal, (): SignInResult => {
       const user = findUser(email)
-      if (orgSettings[org].requireSso) throw new MockRequestError("この組織は SSO でログインします（模擬）", "sso-required")
+      if (orgPolicyOf(org).requireSso) throw new MockRequestError("この組織は SSO でログインします（模擬）", "sso-required")
       if (!user || password !== demoPassword || !membershipOf(user.id, org)) {
         throw new MockRequestError("認証情報が一致しません（模擬）", "invalid-credentials")
       }
@@ -388,7 +389,7 @@ export const authApi = {
   signInWithProvider({ org, provider }: { org: AuthOrg; provider: SignInProvider }, { signal }: Opts = {}) {
     record({ kind: "provider", provider })
     return request("provider", signal, (): SignInResult => {
-      const policy = orgSettings[org]
+      const policy = orgPolicyOf(org)
       if ((provider === "google" || provider === "microsoft") && !policy.allowSocialLogin) {
         throw new MockRequestError("この組織では外部アカウントを使えません（模擬）", "provider-not-allowed")
       }

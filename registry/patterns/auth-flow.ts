@@ -443,7 +443,10 @@ type ReauthenticationDecision = {
   discard: readonly ReauthDiscardTarget[]
   /**
    * 結果が不明な保存の扱い。none：ない。applied / not-applied：照会の結果（not-applied でも自動で再送信しない）。
-   * unresolved：確かめられていない（再送信しない。照会をやり直す）。discarded：別の利用者・ワークスペースのため破棄した
+   * unresolved：確かめられていない（再送信しない。照会をやり直す。記録は残す）。
+   * discarded：記録を破棄した（discard に unconfirmed-mutation を含む。照会も再送信もしない）。別の利用者、別のワークスペース、
+   * 閲覧の権限がない場合（照会にも現在の閲覧の権限が必要なため）。
+   * discard に unconfirmed-mutation を含むときは、常に discarded にする（unresolved と同時に返さない）
    */
   pendingMutation: "none" | "applied" | "not-applied" | "unresolved" | "discarded"
   /** 復元しない理由。復元する場合は null */
@@ -485,7 +488,8 @@ function decideReauthenticationRestore(plan: ReauthenticationPlan, verification:
       showTarget: false,
       allowEdit: false,
       discard: ["input", "cache", "async-results", "unconfirmed-mutation"],
-      pendingMutation: plan.confirmPending ? "unresolved" : "none",
+      // 結果が不明な保存の記録は破棄する（閲覧の権限がない利用者は、照会もできない）。照会をやり直す unresolved とは返さない
+      pendingMutation: plan.confirmPending ? "discarded" : "none",
       reason: "no-view-permission",
     }
   }

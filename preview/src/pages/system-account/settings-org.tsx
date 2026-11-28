@@ -19,25 +19,30 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { resolveContentAccess } from "@/patterns/access"
 import { useBrowseData } from "@/patterns/browse-data"
 import { Section, SectionActions, SectionDescription, SectionHeader, SectionHeading, SectionTitle } from "@/patterns/section-layout"
 import { planReset, resolveDependent, settingAccess } from "@/patterns/setting-resolve"
 import { useSettingsForm } from "@/patterns/setting-save"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
+import { DiscardChangesAlert } from "@/patterns/unsaved-changes"
 
-import { DiscardAlert } from "../overlays/discard-alert"
 
 import { plans, roles, type Language, type RoleId } from "../../data/system-account/model"
 import { securityDefaults, type ChangeRecord, type Member, type OrgInfo, type OrgRecord, type SecurityPolicy } from "../../data/system-account/settings-server"
 import {
+  accessOf,
+  allowedNow,
   can,
   FormFooter,
+  pendingAccessText,
+  unresolvedOf,
   languageLabels,
   permissionKey,
   SectionLoadError,
   SectionLoading,
   useOrgData,
-  useReportDirty,
+  useSettingsFormUnsaved,
   workspaceName,
   actionError,
   ActionStatus,
@@ -69,11 +74,20 @@ export function OrgSettingsScreen(props: SettingsSectionProps) {
     prev.current = { ws: scope.workspaceId, user: scope.userId, canEdit }
   }, [scope.workspaceId, scope.userId, canEdit])
 
-  if (!can(scope, "settings.org.view")) {
+  // 組織の設定の値（組織名、ポリシー）は保護された情報。最新の権限を確認していない間は表示しない（whileUnverified の既定の hide）。
+  // 入力中の内容を残すため、フォームはアンマウントせず、表示と操作の対象から外す（hidden と inert）
+  const content = resolveContentAccess(accessOf(props), { view: ["settings.org.view"], edit: ["settings.org.edit"] })
+  if (content.mode === "hidden" || !can(scope, "settings.org.view")) {
     return <p className="text-ui text-muted-foreground">組織の設定を閲覧する権限がありません。</p>
   }
+  const pending = content.mode === "pending" ? content.status : null
   return (
-    <div className="flex flex-col" data-testid="set-org">
+    <div className="flex flex-col" data-testid="set-org" data-access={pending ?? "verified"}>
+      {pending && (
+        <p className="mb-12 text-ui text-muted-foreground" aria-busy={pending === "refreshing" || pending === "loading" || undefined} data-testid="set-org-pending">
+          {pendingAccessText[pending]}
+        </p>
+      )}
       {/* 読み上げの領域は常に置き、中身だけを変える。空の間は高さ 0 */}
       <div role="status" className={lost ? "mb-12" : undefined} data-testid="set-org-permission-notice">
         {lost && (
@@ -88,7 +102,7 @@ export function OrgSettingsScreen(props: SettingsSectionProps) {
       ) : !org.isCurrent ? (
         <SectionLoading rows={4} testId="set-org-loading" />
       ) : (
-        <div className="flex flex-col gap-12">
+        <div className="flex flex-col gap-12" hidden={pending !== null} inert={pending !== null}>
           <OrgBody key={`${scope.workspaceId}:${scope.userId}:${permissionKey(scope)}`} {...props} record={org.data!} />
         </div>
       )}
@@ -120,16 +134,14 @@ function LastChange({ history, testId }: { history: ChangeRecord[]; testId: stri
 }
 
 // ---------------------------------------------------------------- 組織の情報（明示的な保存）
-function OrgInfoForm({
-  scope,
-  api,
-  onDirtyChange,
-  onPermissionDenied,
-  initial,
-  onSaved,
-  history,
-}: SettingsSectionProps & { initial: OrgInfo; onSaved: (h: ChangeRecord[]) => void; history: ChangeRecord[] }) {
-  const access = settingAccess({ canView: can(scope, "settings.org.view"), canEdit: can(scope, "settings.org.edit"), noPermissionReason: noEditReason })
+function OrgInfoForm(props: SettingsSectionProps & { initial: OrgInfo; onSaved: (h: ChangeRecord[]) => void; history: ChangeRecord[] }) {
+  const { scope, api, onDirtyChange, onPermissionDenied, initial, onSaved, history } = props
+  const access = settingAccess({
+    canView: can(scope, "settings.org.view"),
+    canEdit: can(scope, "settings.org.edit"),
+    noPermissionReason: noEditReason,
+    unresolved: unresolvedOf(accessOf(props)),
+  })
   const form = useSettingsForm<OrgInfo>({
     values: initial,
     scopeKey: `${scope.workspaceId}:${scope.userId}:${permissionKey(scope)}`,
@@ -145,11 +157,13 @@ function OrgInfoForm({
     onSettled: (s) => s.state === "forbidden" && onPermissionDenied?.(),
   })
   const [showErrors, setShowErrors] = useState(false)
-  useReportDirty("org-info", form.dirty, onDirtyChange)
   const nameError = form.values.name.trim() === "" ? "組織名を入力してください" : null
+  // 移動の確認の対象にする。「保存して移動」は、入力に誤りがなく、最新の権限で変更できる場合だけ示す
+  useSettingsFormUnsaved({ unit: "org-info", label: "組織の情報", form, onDirtyChange, canSave: !nameError && access.editable, beforeSave: () => allowedNow(props, "settings.org.edit") })
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (!access.editable) return
+    // 描画の時点の判断に加えて、送信の直前に commit した最新の権限で判断し直す（権限の変更の知らせと同じ処理の中の押下を含む）
+    if (!access.editable || !allowedNow(props, "settings.org.edit")) return
     setShowErrors(true)
     if (!nameError) void form.submit()
   }
@@ -211,16 +225,8 @@ const policyLabels: Record<keyof SecurityPolicy, string> = {
 }
 const onOff = (v: unknown) => (v ? "オン" : "オフ")
 
-function SecurityPolicyForm({
-  scope,
-  api,
-  onDirtyChange,
-  onPermissionDenied,
-  initial,
-  plan,
-  onSaved,
-  history,
-}: SettingsSectionProps & { initial: SecurityPolicy; plan: OrgRecord["plan"]; onSaved: (h: ChangeRecord[]) => void; history: ChangeRecord[] }) {
+function SecurityPolicyForm(props: SettingsSectionProps & { initial: SecurityPolicy; plan: OrgRecord["plan"]; onSaved: (h: ChangeRecord[]) => void; history: ChangeRecord[] }) {
+  const { scope, api, onDirtyChange, onPermissionDenied, initial, plan, onSaved, history } = props
   const form = useSettingsForm<SecurityPolicy>({
     values: initial,
     scopeKey: `${scope.workspaceId}:${scope.userId}:${permissionKey(scope)}`,
@@ -234,7 +240,6 @@ function SecurityPolicyForm({
     messages: { forbidden: "変更する権限がないため、保存できませんでした。最新の権限を確認しています。" },
     onSettled: (s) => s.state === "forbidden" && onPermissionDenied?.(),
   })
-  useReportDirty("org-security", form.dirty, onDirtyChange)
   const [confirm, setConfirm] = useState<null | "save" | "reset">(null)
   const ssoAccess = settingAccess({
     canView: true,
@@ -251,9 +256,20 @@ function SecurityPolicyForm({
     (k) => k !== "allowSocialLogin" && form.values[k] && !form.saved[k]
   )
   const resetPlan = planReset(form.saved, securityDefaults, ["requireMfa", "requireSso", "allowSocialLogin"])
+  // 移動の確認の対象にする。全員のログインの方法を厳しくする変更は、確認の Dialog を省かないため「保存して移動」を示さない
+  useSettingsFormUnsaved({
+    unit: "org-security",
+    label: "セキュリティのポリシー",
+    form,
+    onDirtyChange,
+    canSave: tightened.length === 0 && unresolvedOf(accessOf(props)) === null,
+    beforeSave: () => allowedNow(props, "settings.org.edit"),
+  })
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (form.saving || !form.dirty) return
+    // 最新の権限を確認していない間は、確認の Dialog も開かない（送信の直前の判断と同じ）
+    if (!allowedNow(props, "settings.org.edit")) return
     if (tightened.length > 0) setConfirm("save")
     else form.submit()
   }
@@ -320,12 +336,14 @@ function SecurityPolicyForm({
               onClick={() => {
                 const kind = confirm
                 setConfirm(null)
+                // Dialog を開いている間に権限が変わった場合は送らない
+                if (!allowedNow(props, "settings.org.edit")) return
                 if (kind === "reset") form.submit({ ...form.saved, ...Object.fromEntries(resetPlan.changes.map((c) => [c.key, c.to])) })
                 else form.submit()
               }}
               data-testid="set-policy-confirm-action"
             >
-              {confirm === "reset" ? "標準に戻す" : "変更を保存"}
+              {confirm === "reset" ? "標準に戻す" : "保存する"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -335,7 +353,8 @@ function SecurityPolicyForm({
 }
 
 // ---------------------------------------------------------------- ワークスペースの削除（通常の設定から分ける）
-function WorkspaceDeletion({ scope, api, initialDeletion }: SettingsSectionProps & { initialDeletion: OrgRecord["deletion"] }) {
+function WorkspaceDeletion(props: SettingsSectionProps & { initialDeletion: OrgRecord["deletion"] }) {
+  const { scope, api, initialDeletion } = props
   const name = workspaceName(scope)
   const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState("")
@@ -344,6 +363,11 @@ function WorkspaceDeletion({ scope, api, initialDeletion }: SettingsSectionProps
   const [scheduledOn, setScheduledOn] = useState(initialDeletion?.scheduledOn ?? null)
   const [action, setAction] = useState<ActionState>({ kind: "idle" })
   const run = (schedule: boolean) => {
+    // 確定の直前に、commit した最新の権限で判断し直す（確認の Dialog を開いている間の権限の変更を含む）
+    if (!allowedNow(props, "settings.org.edit")) {
+      setError("最新の権限を確認できるまで、削除の予約と取り消しはできません。")
+      return
+    }
     setBusy(true)
     setError(null)
     setAction({ kind: "busy" })
@@ -465,8 +489,12 @@ const memberColumns = helper.columns([
   }),
 ])
 
-export function MembersScreen({ scope, api, onPermissionDenied }: SettingsSectionProps) {
-  const canManage = can(scope, "members.manage")
+export function MembersScreen(props: SettingsSectionProps) {
+  const { scope, api, onPermissionDenied } = props
+  // メンバーの一覧は保護された情報。最新の権限を確認していない間は表示せず、招待も始めない
+  const content = resolveContentAccess(accessOf(props), { view: ["members.view"], edit: ["members.manage"] })
+  const pending = content.mode === "pending" ? content.status : null
+  const canManage = can(scope, "members.manage") && pending === null
   const scopeKey = `${scope.workspaceId}:${scope.userId}:${permissionKey(scope)}`
   const members = useBrowseData({
     query: scope.workspaceId,
@@ -478,7 +506,13 @@ export function MembersScreen({ scope, api, onPermissionDenied }: SettingsSectio
   const table = useTable({ ...dataTableDefaults, features: dataTableFeatures, columns: memberColumns, data: rows, getRowId: (r) => r.userId })
   const [inviteOpen, setInviteOpen] = useState(false)
   const [note, setNote] = useState("")
-  if (!can(scope, "members.view")) return <p className="text-ui text-muted-foreground">メンバーの一覧を閲覧する権限がありません。</p>
+  if (!can(scope, "members.view") || content.mode === "hidden") return <p className="text-ui text-muted-foreground">メンバーの一覧を閲覧する権限がありません。</p>
+  if (pending)
+    return (
+      <p className="text-ui text-muted-foreground" data-testid="set-members-pending">
+        {pendingAccessText[pending]}
+      </p>
+    )
   return (
     <Section data-testid="set-members">
       <SectionHeader>
@@ -527,7 +561,9 @@ export function MembersScreen({ scope, api, onPermissionDenied }: SettingsSectio
           open={inviteOpen}
           onOpenChange={setInviteOpen}
           onInvite={(email, role) =>
-            api.invite(scope.workspaceId, scope.userId, email, role).then(
+            !allowedNow(props, "members.manage")
+              ? Promise.reject(new Error("最新の権限を確認できるまで、招待できません。"))
+              : api.invite(scope.workspaceId, scope.userId, email, role).then(
               (m) => {
                 // 招待を始めたときのスコープの一覧にだけ加える（ワークスペースを切り替えた後に届いた応答を反映しない）
                 members.setData((d) => [...d, m], { scopeKey })
@@ -630,7 +666,7 @@ function InviteDialog({ open, onOpenChange, onInvite }: { open: boolean; onOpenC
           </form>
         </DialogContent>
       </Dialog>
-      <DiscardAlert
+      <DiscardChangesAlert
         open={discard}
         onOpenChange={setDiscard}
         onDiscard={() => {

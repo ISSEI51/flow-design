@@ -53,8 +53,26 @@ test.describe("decideAccess: reasons are kept as separate states", () => {
   test("refreshing / stale permissions: an operation the previous permissions allowed is still not allowed", () => {
     expect(reasonOf(decideAccess(refreshing("admin"), { permissions: ["customers.delete"] }))).toEqual({ kind: "unresolved", status: "refreshing" })
     expect(reasonOf(decideAccess(stale("admin"), { permissions: ["customers.delete"] }))).toEqual({ kind: "unresolved", status: "stale" })
-    // 前の権限でも許可されない操作は、その理由を示す（表示を揺らさない）。
-    expect(reasonOf(decideAccess(refreshing("viewer"), { permissions: ["customers.delete"] }))).toEqual({ kind: "authorization", missing: ["customers.delete"] })
+    // 前の権限で許可されない操作も、新しい権限で許可される可能性があるため、確認中は「権限がない」と示さない（PERM-6）。
+    // missing に前の権限に含まれていなかった権限を持つ。確認が終われば（ready）、認可の理由になる。
+    expect(reasonOf(decideAccess(refreshing("viewer"), { permissions: ["customers.delete"] }))).toEqual({ kind: "unresolved", status: "refreshing", missing: ["customers.delete"] })
+    expect(reasonOf(decideAccess(stale("viewer"), { permissions: ["customers.delete"] }))).toEqual({ kind: "unresolved", status: "stale", missing: ["customers.delete"] })
+    expect(reasonOf(decideAccess(ready("viewer"), { permissions: ["customers.delete"] }))).toEqual({ kind: "authorization", missing: ["customers.delete"] })
+    expect(restrictionText(reasonOf(decideAccess(refreshing("viewer"), { permissions: ["customers.delete"] }))!)).toBe("最新の権限を確認しています")
+  })
+
+  test("refreshing / stale: an operation the previous permissions did not allow keeps its previous presentation (PERM-6)", () => {
+    const present = (s: Snapshot, p: Permission, a: ActionAudience) => presentAction(decideAccess(s, { permissions: [p] }), a).mode
+    // 表示していなかった管理の機能と、存在を知らせない機能は、確認中に表示し始めない
+    expect(present(refreshing("viewer"), "members.manage", { relevance: "admin" })).toBe("hidden")
+    expect(present(stale("viewer"), "members.manage", { relevance: "admin" })).toBe("hidden")
+    expect(present(refreshing("viewer"), "customers.delete", { relevance: "task", disclosure: "confidential" })).toBe("hidden")
+    // 業務の操作と申請できる管理の機能は、前と同じく無効にして示す（理由は確認中）
+    expect(present(refreshing("viewer"), "customers.edit", { relevance: "task" })).toBe("disabled")
+    expect(present(refreshing("viewer"), "members.manage", { relevance: "admin", requestable: true })).toBe("disabled")
+    // 確認が終わった後の扱いは、確認中と同じ（表示が揺れない）
+    expect(present(ready("viewer"), "members.manage", { relevance: "admin" })).toBe("hidden")
+    expect(present(ready("viewer"), "customers.edit", { relevance: "task" })).toBe("disabled")
   })
 
   test("authorization: the missing permissions only", () => {
@@ -196,8 +214,8 @@ test.describe("verified: the latest authorization is confirmed only for ready", 
   test("ready with verified: false is treated like refreshing by decideAccess and presentAction", () => {
     expect(reasonOf(decideAccess(unverified("admin"), { permissions: ["customers.delete"] }))).toEqual({ kind: "unresolved", status: "refreshing" })
     expect(decideAccess(unverified("admin")).allowed).toBe(false)
-    // 前の権限でも許可されない操作は、その理由を示す（表示を揺らさない）
-    expect(reasonOf(decideAccess(unverified("viewer"), { permissions: ["customers.delete"] }))).toEqual({ kind: "authorization", missing: ["customers.delete"] })
+    // 前の権限でも許可されない操作も、確認するまで「権限がない」とは示さない（PERM-6。画面での扱いは前の権限と同じ）
+    expect(reasonOf(decideAccess(unverified("viewer"), { permissions: ["customers.delete"] }))).toEqual({ kind: "unresolved", status: "refreshing", missing: ["customers.delete"] })
     expect(presentAction(decideAccess(unverified("admin"), { permissions: ["members.manage"] }), { relevance: "admin" }).mode).toBe("disabled")
   })
 })

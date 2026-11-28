@@ -4,7 +4,8 @@ import { AnalysisRegion } from "@/patterns/analysis-region"
 import { DrillDownLink } from "@/patterns/drill-down"
 
 import { appHref, type Route } from "./analysis-route"
-import { AccountError, AccountSummary, AnalysisBreadcrumb, drillCrumbs, useAccount } from "./retention-dashboard"
+import { useSession } from "./analysis-session"
+import { AccountError, AccountSummary, AnalysisBreadcrumb, accountNotFoundText, drillCrumbs, useAccount } from "./retention-dashboard"
 
 // Drill-down の最後の階層：個別の企業の詳細（別ページ）。
 // 分析の条件は URL で受け取り、Breadcrumb で分析の階層に戻れるようにする。
@@ -13,6 +14,7 @@ import { AccountError, AccountSummary, AnalysisBreadcrumb, drillCrumbs, useAccou
 export function AccountDetailPage({ route }: { route: Route }) {
   const id = route.params.get("id")
   const account = useAccount(id)
+  const { session } = useSession()
   const d = account.isCurrent ? account.data : null
   const name = d?.name ?? (account.status === "error" ? "企業の詳細" : account.isCurrent ? "企業が見つかりません" : "読み込み中")
   return (
@@ -32,7 +34,7 @@ export function AccountDetailPage({ route }: { route: Route }) {
         ) : d ? (
           <AccountSummary account={d} />
         ) : account.isCurrent ? (
-          <p className="text-ui text-muted-foreground">この企業は見つかりません。削除されたか、URL が正しくない可能性があります。</p>
+          <p className="text-ui text-muted-foreground">{accountNotFoundText(session.forbiddenDetail)}</p>
         ) : (
           <div className="h-64" />
         )}

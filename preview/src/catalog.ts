@@ -36,6 +36,7 @@ import { OnboardingPage } from "./pages/system-account/onboarding-page"
 import { PermissionStatesPage } from "./pages/system-account/permission-states-page"
 import { SettingsPatternPage } from "./pages/system-account/settings-page"
 import { SystemStatesPage } from "./pages/system-account/system-states-page"
+import { PatternsIntegrationApp } from "./pages/patterns-integration/pi-app"
 import { ComboboxPage } from "./pages/advanced/combobox-page"
 import { CommandPage } from "./pages/advanced/command-page"
 import { CsvImportPage } from "./pages/advanced/csv-import-page"
@@ -177,4 +178,5 @@ export const catalog: { id: string; name: string; page: ComponentType; fullscree
   { id: "system-states", name: "System States", page: SystemStatesPage, category: "system-account" },
   { id: "notifications", name: "Notifications", page: NotificationsPage, category: "system-account" },
   { id: "account-app", name: "営業管理の検証画面（System & Account）", page: AccountApp, fullscreen: true, category: "system-account" },
+  { id: "patterns-integration", name: "Patterns の横断の検証画面", page: PatternsIntegrationApp, fullscreen: true, category: "system-account", hidden: true },
 ]

@@ -80,6 +80,19 @@
 - 例：即時保存の「設定を確かめる」（`#/forms-app?page=settings`、「即時保存の結果」の「結果が不明」）。
 - `scopeKey`（アカウント、ワークスペース、レコード）が変わったら、それより前に始めた保存の結果を使わない。`useInstantSave` と `useAutosave` は、スコープの変更とアンマウントで、保存に渡した `AbortSignal` を中止する（サーバーでの処理の取り消しは保証しない）。`useInstantSave` は `value` の値から始め直し、`useAutosave` はその時点の値を保存済みとして始め直す。アンマウントの後の結果も使わない。
 - 中止（`signal.aborted`）の後に、製品の `save` は自分の状態を変えない（例の `InstantSwitch` は、中止の後にサーバーの値の state を更新しない）。`AbortSignal` はクライアントの待機の中止であり、サーバーでの処理の取り消しを保証しない。
+- 自動保存とスコープの変更の注意：スコープが変わると、`useAutosave` は保存を待っている値（入力が止まるのを待っている値、保存中に変わった値）を保存せずに、新しいスコープの値を保存済みとして始め直す。前のスコープで入力が止まる前に切り替えた内容は保存されない。また、中止した保存は、サーバーで処理が終わっている可能性がある（前のスコープに保存されている）。スコープの切り替えの前に保存を終えるには、移動の確認（`useUnsavedChanges` の `saving` と `dirty` に `hasUnsavedChanges`）を通すか、切り替えの前に `flush()` を呼ぶ。別のタブでの切り替えなど、確認を通せない変更では、入力の一部が保存されないことがある。
+- `useAutosave` は、スコープが変わった描画の `value` を、新しいスコープの保存済みの値とみなす。その描画で前のスコープの値を渡すと、前のスコープの値が新しいスコープで保存済みとして扱われ、後から取得した新しいスコープの値は「変更」として保存される。`scopeKey` と同じ描画で新しいスコープの値を渡すか、`key` で作り直す（`useFormState` と同じ）。
+
+#### 即時保存と設定の保存の選び方
+
+| 保存の対象 | 使う hook | 理由 |
+| --- | --- | --- |
+| サーバーに保存する設定で、権限、競合（版）、部分的な保存、項目ごとの結果を扱う必要がある | `useInstantSettings`、`useSettingsForm`（`setting-save.ts`、[settings.md](settings.md)） | `forbidden`、`conflict`、`partial`、版の照合、結果の確認を扱う |
+| 1 つの値だけで、結果が成功、確定した失敗、結果が不明の 3 つだけで足りる（権限と競合を、保存の結果として区別しない） | `useInstantSave`（`save-modes.ts`） | 値を戻すか、戻さずに確かめるかだけを決める |
+
+- 1 つの保存の対象（設定の項目、レコードの値）は、1 つの hook のインスタンスだけが持つ。同じ値を、2 つの `useInstantSave`、または `useInstantSave` と `useSettingsForm` で同時に保存しない（応答の順序で表示とサーバーの値が食い違う）。
+- 画面は、保存した値の写しを別の state に持たない。表示する値は hook の `value` を使う。v0.1 の途中では、例の `InstantSwitch` が保存した値を別の state に持ち、hook の値と食い違っていた（`38174eb` で直した）。
+- `useInstantSave` の `value` には、サーバーが保存している値を渡す。保存の結果を受け取る前に始めた取得（再取得の結果）を渡さない。保存が終わった（`status` が `saving` でない）後に始めた取得の結果だけを渡す。保存の前の取得の結果を渡すと、保存した値が古い値で上書きされたように表示される。
 
 ## 動作
 
@@ -104,6 +117,8 @@
 | `missing` か `incomplete` と、`invalid` の両方 | 「未入力の項目が N つ、修正が必要な項目が N つあります」 |
 | `check-failed`（非同期の検証ができなかった） | 「顧客コードを確かめられませんでした。確かめ直すと保存できます」 |
 | `checking`（非同期の検証の結果を待っている） | 「顧客コードを確認しています」 |
+| 項目以外の理由（`reason`）：保存の結果が不明 | 「保存されたかを確かめると保存できます」 |
+| 項目以外の理由（`reason`）：保存中、IME の変換中 | 画面には示さず、支援技術にだけ「保存しています」「文字を変換しています。確定すると、入力した値を確かめます」 |
 
 - 文は上の表の順に 1 つだけ示す（未入力と修正が必要な項目を、確認できなかった項目と確認中の項目より先に示す）。「保存できます」の部分は `goal` で変える（ステップでは「次へ進めます」）。
 - 長いフォームでは、`detail` で該当する項目へ移動するボタンを置く。理由が 3 項目以下（`detailLimit`）なら項目ごとに並べ（「会社名（未入力）」「顧客コード（確認できなかった）」）、超える場合は「最初の項目（会社名）へ移動」だけを置く。修正が必要な項目、確認できなかった項目、未入力と入力の途中の項目の順に並べる。
@@ -133,6 +148,7 @@
 - 無効な操作が実行されないことを保証する。クリック、Enter、Space は、Base UI がボタンへのクリックを止める。フォームの送信は、送信の処理（`handleSubmit`）も条件を確かめる。検品：`forms-workflows-checks.spec.ts` の「the focusable disabled save button cannot be activated by click, Enter or Space」。
 - 保存ボタンが Focusable Disabled の間は、1 行の入力欄での Enter（ブラウザの暗黙の送信）が submit にならない。Base UI が、無効のボタンへのクリックを止めるためである。form の `onKeyDown` に `submitOnEnter` を指定する（下の「Enter による送信」）。
 - 理由を示せない場合に、Focusable Disabled で済ませない。理由の文がない Focusable Disabled のボタンは、フォーカスしても押せない理由がわからない。
+- 保存の結果が不明（`unknown`）、保存中、IME の変換中で押せない場合も、`aria-describedby` の参照先を空にしない。`SaveBlockerNotice` の `reason` を渡す（[form-layout.md](form-layout.md#保存できない理由)）。検品：`forms-workflows.spec.ts` の「edit with an unknown result: the focusable disabled save button is described by the reason and does not save」（クリック、Enter、Space、1 行の入力欄の Enter、`requestSubmit` で保存の要求を送らない）。
 
 ### Enter による送信
 
@@ -144,6 +160,7 @@
 | 修飾キー付き（Shift、Alt、Ctrl、⌘）、押し続けによる連続の入力（`repeat`）、ほかの処理が止めた Enter（`defaultPrevented`） | 意図しない送信、二重の送信を防ぐ |
 | Textarea、`contenteditable` | Enter は改行の入力である |
 | ボタン、Checkbox、Radio、File、日付と時刻の入力欄 | それぞれの部品の操作である（ボタンの Enter はボタンの実行） |
+| Date Picker と Date Range Picker の文字の入力欄（`data-slot="date-picker"`、`data-slot="date-range-picker"` の中の入力欄） | 入力した日付の確定である（部品が Enter で確定する）。確定した日付を確かめてから保存する |
 | `role` が `combobox`、`listbox`、`menu`、`grid`、`tree` の要素、`aria-haspopup` の要素、`aria-expanded="true"` の要素と、それらの中の要素（Combobox、Multi Select、Select、Date Picker、Calendar、Dropdown Menu） | 選択肢の選択、ポップアップの開閉である |
 | フォームの外の要素、フォームとは別の Dialog の中の要素（フォームの外に描画される Popover、入れ子の Dialog） | フォームとは独立した操作である |
 | 読み取り専用と無効の入力欄 | 入力できない欄からの送信を防ぐ |
@@ -152,7 +169,8 @@
 送信にする Enter（1 行の文字の入力欄：`text`、`email`、`tel`、`url`、`search`、`number`、`password`）は、`submit`（`handleSubmit` の戻り値）を呼ぶ。保存の条件は `handleSubmit` が確かめる。
 
 - 保存ボタンが押せる間は、ブラウザが 1 行の入力欄、日付と時刻、Checkbox、Radio などの Enter でフォームを送信する（暗黙の送信）。`submitOnEnter` は、送信にしない Enter のうち、この暗黙の送信の対象になる入力欄（ポップアップの部品の中の要素を除く）の Enter で `preventDefault()` を呼び、送信を止める。変換の確定の Enter と、ほかの処理が止めた Enter には触れない（ブラウザは送信しない）。
-- 例（`forms-workflows-checks.spec.ts`）：保存できる状態のフォームで、Textarea、日付、`data-submit-on-enter="false"` の入力欄、Enter を止めた入力欄の Enter は保存しない。
+- 例（`forms-workflows-checks.spec.ts`）：保存できる状態のフォームで、Textarea、日付、`data-submit-on-enter="false"` の入力欄、Enter を止めた入力欄の Enter は保存しない。Components の `DatePicker` の文字の入力欄の Enter は、日付を確定し、保存しない（「Enter in the DatePicker text input commits the date and does not submit」）。
+- Date Picker の資料（[date-picker.md](../components/date-picker.md)）の「Enter では確定してから、通常の入力欄と同じくフォームの送信を続ける」は、`submitOnEnter` を使わないフォーム（ブラウザの暗黙の送信だけのフォーム）での部品の動作である。`submitOnEnter` を指定したフォームでは、上の表のとおり送信しない。変更の記録：v0.1 の途中まで、`submitOnEnter` は Date Picker の文字の入力欄を 1 行の入力欄として扱い、送信していた（この資料の表と異なっていた）。部品（`date-picker.tsx`）は変えず、`submitOnEnter` の除外の条件に加えた。代替案（部品の Enter で `preventDefault` する）は、`submitOnEnter` を使わないフォームの既存の動作を変えるため採らない。
 
 | 状態 | Enter と `requestSubmit` の結果 |
 | --- | --- |
@@ -204,7 +222,7 @@
 - `asyncDeps(values)` には、検証が依存するほかの項目の値を返す（組織と顧客コード、国と郵便番号、プランと利用人数など）。依存する値が変わると、対象の項目の値が同じでも以前の結果を使わず、検証し直す。例：契約の登録の利用人数は、プランに依存する（ライトは 10 人、スタンダードは 100 人まで。[multi-step-workflow.md](multi-step-workflow.md)）。
 - 値やキーが変わったら、前のキーの確認を中止する（`AbortSignal`）。古いキーの応答、`reset` の後、スコープの変更の後、アンマウントの後の応答は使わない。`AbortSignal` を無視して遅れて応答する validator の結果も、キーと世代で照合して捨てる（A → B → A と値を戻した場合も、最初の A の応答で現在の A を決めない）。
 - 期限は `asyncTimeoutMs`（既定 10000ms）。期限を過ぎたら検証できなかった（`error` か `unverified`）とし、その後に届いた応答は使わない。例の顧客コードは 5000ms。
-- 文は `asyncMessage(name)` で読む。期限切れは「{label}の確認が時間内に終わりませんでした。もう一度確かめてください」、それ以外は「{label}を確かめられませんでした。通信の状態を確認して、もう一度確かめてください」。
+- 文は `asyncMessage(name)` で読む。`asyncFailure` が `"block"`（`error`）の場合、期限切れは「{label}の確認が時間内に終わりませんでした。もう一度確かめてください」、それ以外は「{label}を確かめられませんでした。通信の状態を確認して、もう一度確かめてください」。`"allow"`（`unverified`）の場合は確かめ直しを求めず、期限切れは「{label}の確認が時間内に終わりませんでした。保存するときに確かめます」、それ以外は「{label}をいまは確かめられませんでした。保存するときに確かめます」。v0.1 の途中では、`unverified` でも「もう一度確かめてください」と示していた（保存できるのに、確かめ直しが必要と誤解させた）。
 - 例：顧客コードを確かめられなかった場合は、保存ボタンの近くに「顧客コードを確かめられませんでした。確かめ直すと保存できます」、項目に理由と「もう一度確かめる」（`revalidate("code")`）を示す（`#/forms-app?page=customer-new`、「非同期の検証（顧客コードの重複）」の「通信の失敗」「応答しない」）。重複の確認はワークスペースごとに行う（九州支店には `C-0001` がない）。
 
 `asyncFailure` の選び方：
@@ -215,6 +233,8 @@
 | `"allow"` | 検証できなかった場合も保存を止めない（`unverified`）。製品が「保存するときに確かめます」などを示す | 保存の処理の中で、サーバーが必ず同じ検証を行い、検証に失敗した保存を拒否する場合だけ |
 
 - 権限や前提の条件の確認に `"allow"` を使わない。確認の API の障害の間に、確かめていない保存を通すことになる。
+- `"allow"` の利用条件：保存の処理（API）が、入力中の確認と同じ確認を必ず行い、確認に失敗した保存を拒否して、項目のエラー（`FormSaveResult` の `invalid` の `fieldErrors`）として返すこと。製品は、入力中の確認ができなかったことを項目の近くに示す（`asyncMessage`）。
+- 例：`#/create-edit` の「入力中の確認ができなかった場合（asyncFailure）」（担当者の招待。招待済みかの確認ができなくても招待でき、招待の時にサーバーが招待済みのアドレスを拒否する）。検品：「a failed check does not block inviting; the server rejects a duplicate on save; the message does not ask to check again」。
 - 初期実装（`be6972b`）では、通信の失敗を `unverified` として保存を許していた。v0.1 では既定を `"block"` にした。
 
 ### 保存中
@@ -232,7 +252,7 @@
 | `{ status: "success", values? }` | 保存した。`values` はサーバーが保存した値（正規化した値など） | 下の「保存の成功の後」 |
 | `{ status: "invalid", fieldErrors, formError }` | サーバー側の検証で保存できなかった（重複、権限の変更、同時の編集） | 項目のエラーを該当する項目にすぐ表示する。その項目の値を変えるまで、保存を止める。全体の文は `formError` |
 | `{ status: "failed", formError }` | 保存されていないことが確かな失敗（サーバーが処理を拒否した、送信の前に失敗した） | フォームの上の Alert（destructive）。入力は残す。もう一度保存できる |
-| `{ status: "unknown", formError }` | 保存されたかわからない（時間切れ、応答の前の切断、予期しない例外） | Alert（warning）。`canSubmit` が false になり、`handleSubmit` も保存の処理を呼ばない（Enter、`requestSubmit`、「保存して移動」を含む）。状態を確かめる操作（「登録されているか確認」）を置く |
+| `{ status: "unknown", formError }` | 保存されたかわからない（時間切れ、応答の前の切断、予期しない例外） | Alert（warning）。`canSubmit` が false になり、`handleSubmit` も保存の処理を呼ばない（Enter、`requestSubmit`、「保存して移動」を含む）。状態を確かめる操作（「登録されたかを確認」）を置く |
 
 保存の処理（`save`）が例外を投げた場合：
 
@@ -278,7 +298,23 @@
 
 - `scopeKey` には、フォームの値が属する境界（アカウント、ワークスペース、レコード）を渡す。例：顧客の登録と編集は `${ワークスペース}:${顧客の ID か new}`、設定のフォームはワークスペース、連絡先の編集の Sheet は `${ワークスペース}:${顧客の ID}`。
 - `scopeKey` が変わる、`reset` を呼ぶ、アンマウントすると、世代を進める。それより前に始めた非同期の検証、保存、自動補完の結果は、新しい状態（値、基準値、エラー、通知）を変えない。`AbortSignal` を無視する処理の結果も、世代で照合して捨てる。
-- `scopeKey` が変わったら、非同期の検証の結果、サーバーの検証のエラー、フォーム全体のエラー、保存の状態（結果が不明を含む）を捨てる。値と基準値は変えない。新しいスコープの値は、製品が `reset(values)` で渡す。
+- `scopeKey` が変わったら、状態（値、基準値、操作の履歴、エラーの表示、非同期の検証の結果、サーバーの検証のエラー、フォーム全体のエラー、保存の状態（結果が不明を含む））を、前のスコープから引き継がない。状態はスコープと組で持ち、スコープが変わった描画の `initialValues` から始め直す。
+
+Registry が保証する範囲と、製品が保証する範囲：
+
+| 範囲 | 保証する内容 | 持つ側 |
+| --- | --- | --- |
+| 前のスコープの値と状態を表示しない | `scopeKey` が変わった最初の描画から、`values`、`baseline`、`isDirty`、`error`、`formError`、`status`、`canSubmit` は、新しいスコープの状態（その描画の `initialValues` から始めた状態）を返す。effect の実行を待たない | Registry（`useFormState`） |
+| 前のスコープの値を送信しない | `handleSubmit` は、commit されたスコープの値だけを送る。前のスコープの描画で作った送信の処理（古い画面、Dialog、Toast に残った closure）、`setValue`、`reset`、`resolveUnknown`、`markSaved` は、新しいスコープの状態を変えない。世代は commit の時点（layout effect）で進める | Registry |
+| 古い応答を使わない | スコープの変更、`reset`、アンマウントの前に始めた非同期の検証、保存、自動補完の結果は、新しい状態を変えない。保存の結果で移動も通知もしない（`onSuccess` を呼ばない） | Registry |
+| 新しいスコープの値 | スコープが変わる描画で、新しいスコープの値を `initialValues` に渡す（`scopeKey` と `initialValues` を同じ描画で変える）。値を取得中の間は、フォームを描画しない（読み込み中の表示にする）。後から取得した値は `reset(values)` で渡す | 製品 |
+| 作り直し（推奨） | スコープ（ワークスペース、アカウント、レコード）ごとに、フォームの部品を `key` で作り直す（例：`` <CustomerEditScreen key={`${ws}:${id}`} /> ``）。`useFormState` に限らず、製品の state、Ref、開いている Overlay も前のスコープから引き継がない | 製品 |
+| 認可 | 新しいスコープで閲覧と編集の権限があるかを、値を表示する前に確かめる。権限を失ったら、フォームを表示しない（[permission-states.md](permission-states.md)）。保存の API は、実行の時点の権限を確かめる | 製品とバックエンド |
+
+- スコープの変更の後に `initialValues` を変えない描画で、前のスコープの値を `initialValues` に渡したままにすると、新しいスコープのフォームに前のスコープの値が表示される（hook は新しいスコープの値を知らない）。`key` で作り直すか、取得した値を同じ描画で渡す。
+- 古い応答を捨てるだけでは安全ではない。前のスコープの値が新しいスコープで一瞬でも表示されたり送信できたりしないことは、上の表の Registry と製品の範囲を合わせて保証する。
+- 例：検証画面の顧客の編集は、`` key={`${ws}:${id}`} `` で作り直す。顧客の登録は、ワークスペースが変わると `initialValues`（空の値）から始め直す（検品：「workspace scope: the duplicate check of the same code is repeated in the new workspace」の「前のワークスペースで入力した値を、新しいワークスペースのフォームに引き継がない」）。
+- 変更の記録（Patterns Integration Review）：v0.1 の途中までは「値と基準値は変えない。新しいスコープの値は、製品が `reset(values)` で渡す」としていた。理由：製品が `reset` を呼ぶまでの描画で、前のスコープの値が新しいスコープで表示され、送信できたため。影響の範囲：`scopeKey` を変えても同じ値を保ちたい製品（スコープの外の値をフォームに残す）は、新しいスコープの `initialValues` にその値を渡す。代替案（値を空にする）は、製品が値を渡す前の描画で空のフォームが表示されるため採らず、その描画の `initialValues` から始める方式にした。
 - 保存の間にスコープが変わった場合、`handleSubmit` は保存の結果で状態を変えず、`onSuccess` を呼ばず、false を返す。古い保存の成功で、画面を移動したり Toast を出したりしない（検品：「an old save does not navigate or notify after the workspace changed」）。
 - `AbortSignal` はクライアントの待機の中止であり、サーバーでの処理の取り消しを保証しない。
 
@@ -446,7 +482,7 @@ const checkSaved = async () => {
   {form.formError && (
     <Alert variant={unknown ? "warning" : "destructive"} role="alert">
       <AlertDescription>{form.formError}</AlertDescription>
-      {unknown && <AlertAction><Button size="sm" variant="secondary" onClick={checkSaved}>登録されているか確認</Button></AlertAction>}
+      {unknown && <AlertAction><Button size="sm" variant="secondary" onClick={checkSaved}>登録されたかを確認</Button></AlertAction>}
     </Alert>
   )}
   <FormActions sticky notice={<SaveBlockerNotice id="customer-notice" blockers={form.blockers} hidden={form.submitting || form.composing} unchanged={form.unchanged} detail onFocusField={(n) => focusFormControl(`customer-${n}`)} />}>

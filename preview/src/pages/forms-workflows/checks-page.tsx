@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import { DatePicker } from "@/components/ui/date-picker"
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList, ComboboxTrigger, ComboboxValue } from "@/components/ui/combobox"
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { ConfirmActionDialog, useUndoableAction } from "@/patterns/confirm-action"
+import { useToast } from "@/components/ui/toast"
+import { ConfirmActionDialog, useUndoableAction, type UndoHandle } from "@/patterns/confirm-action"
 import { FormSaveError, submitOnEnter, useFormState, type FormFields, type FormSaveResult } from "@/patterns/form-state"
 import { useAutosave, useInstantSave } from "@/patterns/save-modes"
 import { UnsavedChangesProvider, useNavigationGuard, useUnsavedChanges } from "@/patterns/unsaved-changes"
@@ -17,7 +19,9 @@ import { UnsavedChangesProvider, useNavigationGuard, useUnsavedChanges } from "@
 //   #/forms-checks?case=async    非同期の検証（依存する値、A→B→A、中止を無視する検証、非表示、reset、同期の例外、スコープ）
 //   #/forms-checks?case=submit   Enter による送信（Input、Textarea、Select、Combobox、日付、ボタン、別の Dialog、止めた Enter、押し続け）
 //   #/forms-checks?case=scope    保存、即時保存、自動保存、Undo、確認の Dialog の古い結果とスコープ
-//   #/forms-checks?case=unsaved  保存して移動（一部の失敗、保存中の入力）、移動の失敗の後の保護、新しい変更
+//   #/forms-checks?case=unsaved  保存して移動（一部の失敗、保存中の入力）、移動の失敗の後の保護、新しい変更、
+//                                確認の表示中の対象の消滅、cancelNavigation、releaseAll（認可の失効）、保存の結果が不明な単位
+//   #/forms-checks?case=toast    Toast の mousedown のフォーカスの維持（通常の通知、Undo、入力欄を含む通知、モーダルの表示中）
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void }
 function deferred<T>(): Deferred<T> {
@@ -131,7 +135,7 @@ function AsyncCase() {
 }
 
 // ---------------------------------------------------------------- Enter による送信
-type SubmitValues = { name: string; memo: string; kind: string | null; account: string | null; date: string; other: string }
+type SubmitValues = { name: string; memo: string; kind: string | null; account: string | null; date: string; due: Date | null; other: string }
 const accounts = [
   { value: "a1", label: "株式会社山田商事" },
   { value: "a2", label: "有限会社佐藤工業" },
@@ -147,12 +151,13 @@ function SubmitCase() {
       kind: { label: "種類" },
       account: { label: "取引先" },
       date: { label: "日付" },
+      due: { label: "期限" },
       other: { label: "その他" },
     }),
     []
   )
   const form = useFormState<SubmitValues>({
-    initialValues: { name: mode === "edit" ? "山田" : "", memo: "", kind: null, account: null, date: "", other: "" },
+    initialValues: { name: mode === "edit" ? "山田" : "", memo: "", kind: null, account: null, date: "", due: null, other: "" },
     fields,
     requireChanges: mode === "edit",
   })
@@ -163,7 +168,7 @@ function SubmitCase() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-2">
-        <Button size="sm" variant="secondary" data-testid="mode-edit" onClick={() => (setMode("edit"), form.reset({ name: "山田", memo: "", kind: null, account: null, date: "", other: "" }))}>
+        <Button size="sm" variant="secondary" data-testid="mode-edit" onClick={() => (setMode("edit"), form.reset({ name: "山田", memo: "", kind: null, account: null, date: "", due: null, other: "" }))}>
           編集のフォームにする
         </Button>
       </div>
@@ -206,6 +211,11 @@ function SubmitCase() {
           <Input type="date" value={form.values.date} onChange={(e) => form.setValue("date", e.target.value, { commit: true })} data-testid="f-date" />
         </Field>
         <Field>
+          <FieldLabel htmlFor="f-datepicker">期限（Date Picker）</FieldLabel>
+          {/* Components の DatePicker。文字の入力欄での Enter は日付の確定であり、送信ではない */}
+          <DatePicker id="f-datepicker" value={form.values.due} onValueChange={(d) => form.setValue("due", d, { commit: true })} />
+        </Field>
+        <Field>
           <FieldLabel>Enter で送信しない入力欄</FieldLabel>
           <Input {...form.inputProps("other")} data-submit-on-enter="false" data-testid="f-other" />
         </Field>
@@ -238,7 +248,16 @@ function SubmitCase() {
           </DialogContent>
         </Dialog>
       </form>
-      <Out testId="submit-state" value={{ submits, shownErrors: ["name"].filter((n) => form.error(n as keyof SubmitValues) !== null), canSubmit: form.canSubmit, unchanged: form.unchanged }} />
+      <Out
+        testId="submit-state"
+        value={{
+          submits,
+          shownErrors: ["name"].filter((n) => form.error(n as keyof SubmitValues) !== null),
+          canSubmit: form.canSubmit,
+          unchanged: form.unchanged,
+          due: form.values.due ? [form.values.due.getFullYear(), form.values.due.getMonth() + 1, form.values.due.getDate()].join("-") : null,
+        }}
+      />
     </div>
   )
 }
@@ -248,6 +267,7 @@ type One = { value: string; hidden: string; show: boolean }
 function ScopeCase() {
   const [scope, setScope] = useState("A")
   const [mounted, setMounted] = useState(true)
+  const [undoMounted, setUndoMounted] = useState(true)
   const [log, setLog] = useState<string[]>([])
   const add = (s: string) => setLog((l) => [...l, s])
   return (
@@ -259,12 +279,16 @@ function ScopeCase() {
         <Button size="sm" variant="secondary" onClick={() => setMounted((m) => !m)} data-testid="mount-toggle">
           フォームを{mounted ? "外す" : "戻す"}
         </Button>
+        <Button size="sm" variant="secondary" onClick={() => setUndoMounted((m) => !m)} data-testid="undo-mount-toggle">
+          Undo の部品を{undoMounted ? "外す" : "戻す"}
+        </Button>
       </div>
       {mounted && <ScopeForm scope={scope} onEvent={add} />}
       <InstantCase scope={scope} />
       <AutosaveCase scope={scope} />
-      <UndoCase scope={scope} />
+      {undoMounted && <UndoCase scope={scope} />}
       <ConfirmCase />
+      <ExternalConfirmCase />
       <Out testId="scope-log" value={log} />
     </div>
   )
@@ -361,17 +385,28 @@ function UndoCase({ scope }: { scope: string }) {
   const first = useUndoableAction({ scopeKey: scope, windowMs: 60_000 })
   const second = useUndoableAction({ scopeKey: scope, windowMs: 60_000 })
   const [undone, setUndone] = useState<string[]>([])
-  const act = (inst: typeof first, name: string) =>
-    void inst.run({
-      perform: async () => ({ name, scope }),
+  const [results, setResults] = useState<unknown[]>([])
+  const handle = useRef<UndoHandle | null>(null)
+  const act = (inst: typeof first, name: string, slow = false) =>
+    void inst
+      .run({
+        // slow：実行の結果を検品から返す（実行の間のスコープの変更）
+        perform: async () => {
+          if (slow) await hold<void>("perform")
+          return { name, scope }
+        },
       undo: async (r) => {
         checks.calls.push({ key: "undo", args: r })
         await hold<void>("undo")
         setUndone((u) => [...u, `${r.name}@${r.scope}`])
       },
-      title: `${name}を実行しました`,
-      undoneTitle: `${name}を元に戻しました`,
-    })
+        title: `${name}を実行しました`,
+        undoneTitle: `${name}を元に戻しました`,
+      })
+      .then((r) => {
+        if (r.ok) handle.current = r.handle
+        setResults((l) => [...l, r.ok ? { ok: true } : r])
+      })
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="secondary" onClick={() => act(first, "操作1")} data-testid="u-first">
@@ -380,7 +415,15 @@ function UndoCase({ scope }: { scope: string }) {
       <Button size="sm" variant="secondary" onClick={() => act(second, "操作2")} data-testid="u-second">
         操作2
       </Button>
+      <Button size="sm" variant="secondary" onClick={() => act(first, "操作3", true)} data-testid="u-slow">
+        操作3（実行の結果を待つ）
+      </Button>
+      {/* 画面に残した戻す手段（run が返す handle.undo）。古いスコープの handle で、現在のスコープを変えないことを確かめる */}
+      <Button size="sm" variant="secondary" onClick={() => void handle.current?.undo().then((ok) => setResults((l) => [...l, { handleUndo: ok }]))} data-testid="u-handle-undo">
+        最後の操作を画面から元に戻す
+      </Button>
       <Out testId="undo-state" value={undone} />
+      <Out testId="undo-results" value={results} />
     </div>
   )
 }
@@ -388,8 +431,12 @@ function UndoCase({ scope }: { scope: string }) {
 function ConfirmCase() {
   const [target, setTarget] = useState<string | null>(null)
   const [done, setDone] = useState<string[]>([])
+  const [blocked, setBlocked] = useState(false)
   return (
     <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="secondary" onClick={() => setBlocked((b) => !b)} data-testid="c-block">
+        実行できない理由を{blocked ? "外す" : "示す"}（blockedReason）
+      </Button>
       <Button size="sm" variant="secondary" onClick={() => setTarget("X")} data-testid="c-open-x">
         X を削除
       </Button>
@@ -406,6 +453,7 @@ function ConfirmCase() {
         confirmLabel={`${target ?? ""}を削除`}
         targetKey={target ?? undefined}
         variant="destructive"
+        blockedReason={blocked ? "削除する権限がなくなりました。管理者に権限を確認してください。" : undefined}
         data-testid="c-dialog"
         onConfirm={async ({ targetKey }) => {
           // 検品から { unknown: "..." } や { error: "..." } を渡すと、その結果を返す
@@ -419,6 +467,31 @@ function ConfirmCase() {
   )
 }
 
+// 一括の操作（progress="external"）。実行の開始時に閉じる。閉じるまでの 2 回目の押下で、二重に実行しないこと
+function ExternalConfirmCase() {
+  const [open, setOpen] = useState(false)
+  const [runs, setRuns] = useState(0)
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="secondary" onClick={() => setOpen(true)} data-testid="e-open">
+        一括の削除
+      </Button>
+      <ConfirmActionDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="3件を削除しますか？"
+        confirmLabel="3件を削除"
+        targetKey="a,b,c"
+        variant="destructive"
+        progress="external"
+        data-testid="e-dialog"
+        onConfirm={() => setRuns((n) => n + 1)}
+      />
+      <Out testId="external-runs" value={runs} />
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------- 未保存の変更と移動
 function UnsavedUnit({ name, label, withDiscard = true }: { name: string; label: string; withDiscard?: boolean }) {
   const fields: FormFields<{ v: string }> = useMemo(() => ({ v: { label, required: true } }), [label])
@@ -426,8 +499,9 @@ function UnsavedUnit({ name, label, withDiscard = true }: { name: string; label:
   const save = form.handleSubmit(async (v) => (await hold<FormSaveResult<{ v: string }>>(`save-${name}`)) ?? { status: "success", values: v })
   // withDiscard が false の単位は、破棄の処理を持たない（移動するとアンマウントされる画面の状態など）。破棄しても値は残る
   useUnsavedChanges({
-    dirty: form.isDirty,
+    dirty: form.isDirty || form.status === "unknown",
     saving: form.submitting,
+    unknown: form.status === "unknown",
     label,
     revision: form.revision,
     canSave: form.canSubmit,
@@ -446,10 +520,13 @@ function UnsavedInner() {
   const guard = useNavigationGuard()
   const [page, setPage] = useState("a")
   const [log, setLog] = useState<string[]>([])
+  const [units, setUnits] = useState(true)
   const failNavigation = useRef(false)
   return (
     <div className="flex flex-col gap-4">
-      {page === "a" ? (
+      {!units ? (
+        <p>保存の単位を外した（スコープの変更の再現）</p>
+      ) : page === "a" ? (
         <>
           <UnsavedUnit name="one" label="1 つ目" />
           <UnsavedUnit name="two" label="2 つ目" />
@@ -496,8 +573,110 @@ function UnsavedInner() {
         <Button size="sm" variant="secondary" data-testid="fail-navigation" onClick={() => (failNavigation.current = true)}>
           次の移動を失敗させる
         </Button>
+        {/* 確認の表示中にモーダルの背後から押す（検品は DOM から押す）。スコープの変更で、保存の単位がアンマウントされる場合の再現 */}
+        <Button size="sm" variant="secondary" data-testid="unmount-units" onClick={() => setUnits(false)}>
+          保存の単位を外す
+        </Button>
+        <Button size="sm" variant="secondary" data-testid="cancel-navigation" onClick={() => guard.cancelNavigation()}>
+          移動の確認を取り消す（cancelNavigation）
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          data-testid="release-all"
+          onClick={() => {
+            // 認可の失効：確認と beforeunload を止めてから、確認せずに移動する
+            guard.releaseAll()
+            guard.confirmNavigation(() => {
+              setPage("signed-out")
+              setLog((l) => [...l, "moved-signed-out"])
+            })
+          }}
+        >
+          認可の失効（releaseAll）
+        </Button>
+        <Button size="sm" variant="secondary" data-testid="release-only" onClick={() => guard.releaseAll()}>
+          releaseAll だけを呼ぶ（移動しない）
+        </Button>
       </div>
       <Out testId="unsaved-log" value={{ log, page, hasUnsaved: guard.hasUnsavedChanges }} />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- Toast のフォーカス
+// Toast は、ポインターで押してもボタン（本体、閉じる、操作）にフォーカスを移さない。入力欄（input、textarea、select、
+// contenteditable）は除く（押して入力できるようにする）。モーダルの表示中は、Toast に入力欄を置かない（資料の注意）。
+// この画面は、その既存の設計の回帰の検品のためだけに、入力欄を含む通知を出す
+function ToastFields() {
+  return (
+    <span className="mt-2 flex flex-col gap-2" data-testid="toast-fields">
+      <input aria-label="通知の中の入力欄" data-testid="toast-input" className="h-8 rounded-sm border border-border px-2" />
+      <textarea aria-label="通知の中の複数行の入力欄" data-testid="toast-textarea" className="rounded-sm border border-border px-2" rows={2} />
+      <select aria-label="通知の中の選択" data-testid="toast-select" className="h-8 rounded-sm border border-border px-2">
+        <option>A</option>
+        <option>B</option>
+      </select>
+      <span contentEditable suppressContentEditableWarning role="textbox" aria-label="通知の中の編集できる領域" data-testid="toast-editable" className="block min-h-8 rounded-sm border border-border px-2">
+        編集できる
+      </span>
+    </span>
+  )
+}
+
+function ToastButtons({ prefix, onAction }: { prefix: string; onAction: (s: string) => void }) {
+  const { toast } = useToast()
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button size="sm" variant="secondary" data-testid={`${prefix}-plain`} onClick={() => toast({ title: "通常の通知", timeout: 0 })}>
+        通常の通知
+      </Button>
+      <Button
+        size="sm"
+        variant="secondary"
+        data-testid={`${prefix}-undo`}
+        onClick={() => toast({ variant: "success", title: "アーカイブしました", action: { label: "元に戻す", onClick: () => onAction(`${prefix}:undo`) } })}
+      >
+        元に戻せる通知
+      </Button>
+      <Button size="sm" variant="secondary" data-testid={`${prefix}-fields`} onClick={() => toast({ title: "入力欄のある通知", timeout: 0, description: <ToastFields /> })}>
+        入力欄のある通知
+      </Button>
+    </div>
+  )
+}
+
+function ToastCase() {
+  const [dialog, setDialog] = useState(false)
+  const [log, setLog] = useState<string[]>([])
+  const add = (s: string) => setLog((l) => [...l, s])
+  return (
+    <div className="flex flex-col gap-4">
+      <Field>
+        <FieldLabel>ページの入力欄</FieldLabel>
+        <Input data-testid="t-base" />
+      </Field>
+      <ToastButtons prefix="t" onAction={add} />
+      <Button variant="secondary" data-testid="t-open-dialog" onClick={() => setDialog(true)}>
+        モーダルを開く
+      </Button>
+      <Dialog open={dialog} onOpenChange={setDialog}>
+        <DialogContent data-testid="t-dialog">
+          <DialogHeader>
+            <DialogTitle>モーダル</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <div className="flex flex-col gap-4">
+              <Field>
+                <FieldLabel>モーダルの入力欄</FieldLabel>
+                <Input data-testid="t-dialog-input" />
+              </Field>
+              <ToastButtons prefix="td" onAction={add} />
+            </div>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+      <Out testId="toast-log" value={log} />
     </div>
   )
 }
@@ -516,6 +695,7 @@ export function FormsChecksPage() {
       {kind === "async" && <AsyncCase />}
       {kind === "submit" && <SubmitCase />}
       {kind === "scope" && <ScopeCase />}
+      {kind === "toast" && <ToastCase />}
       {kind === "unsaved" && (
         <UnsavedChangesProvider>
           <UnsavedInner />

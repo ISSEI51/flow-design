@@ -164,7 +164,8 @@
 - 個人の設定（アカウント単位）と、組織のポリシー（ワークスペース単位）を区別する。組織のポリシーで使えないチャネルは、理由を示し、個人の設定は残す。
 - 必須の通知は無効にできない理由を、Switch の説明（`aria-describedby`）と画面の文で示す。Switch は読み取り専用（`readOnly`）にし、フォーカスできるようにする。サーバーでも無効にする要求を拒否する。
 - OS やブラウザの通知の許可と、製品の配信の設定を混同しない。許可の状態を文で示し、製品の Switch とは別にする。許可を求める操作は、許可がまだ決まっていない場合だけ置く。
-- Switch は即時に保存する。保存に失敗したら元の値に戻し、その種類の行に理由を示す。結果が不明なら、設定を取得し直して実際の値を示す。
+- Switch は即時に保存する。保存に失敗したら元の値に戻し、その種類の行に理由を示す。結果が不明なら、その種類の行に「保存されたかを確認」を示し、押した後に設定を取得して実際の値を示す（Settings の即時保存と同じ。自動では取得し直さない。[settings.md](settings.md) の「通知の設定」）。
+- 通知を控える時間は、個人の設定のタイムゾーン（正本は Settings の表示の設定）で判定し、示す。
 
 ### 通知疲れの防止
 
@@ -463,7 +464,12 @@ Notification Item（構成候補）は `NotificationList` の中の行として�
 
 | 項目 | 内容 |
 | --- | --- |
-| Unsaved Changes（Forms & Workflows） | 通知から移動するときの未保存の変更の確認は、プレビューの `DiscardAlert` で代替している。Forms & Workflows の Unsaved Changes の部品（移動の保護）に置き換える |
+| Unsaved Changes（Forms & Workflows） | 通知から移動するときの未保存の変更の確認は、プレビューの `DiscardAlert` で代替している。Forms & Workflows の Unsaved Changes の部品（移動の保護）に置き換える。Patterns Integration Review の時点：統合の検証画面は `UnsavedChangesProvider` の `confirmNavigation` に置き換えた。この資料のページの例は `DiscardChangesAlert` に置き換えた |
+| 権限の再確認中の移動（Patterns Integration Review、NTF-1） | 統合の検証画面は、最新の権限を確認している間に開いた通知に「最新の権限を確認しています」と示し、`NavigateOutcome` の `reason: "unresolved"` で既読にしない |
+| 確認の Dialog の後の移動（Patterns Integration Review、NTF-3） | 統合の検証画面は、通知から移動する前の未保存の変更の確認を閉じた時点で、`access.latest()` で権限を判断し直す（`requestNavigate` の `recheck`）。確認の Dialog を開いている間に権限の再確認が始まった場合は移動せず、通知を既読にしない（`system-account-app.spec.ts` の `NTF-3`） |
+| 権限の再確認中の新着（Patterns Integration Review、PERM-5） | 統合の検証画面は、`scopeVersion` に確定した権限の一覧を渡す。再確認中は前の権限の一覧のままのため、前の権限のスコープの購読から届いた新着を、確認が終わる前に一覧に加えていた。再確認中（`access` が `ready` で確認済みでない間）は `holdIncoming` を true にし、新着を保留する（「新着 N 件を表示」）。確認の結果で権限が変われば `scopeVersion` が変わり、保留した新着ごと新しいスコープで取得し直す。変わらなければ、保留した新着を利用者の操作で表示できる（`system-account-app.spec.ts` の `PERM-5`） |
+| 描画の中の状態の更新（Patterns Integration Review、NTF-2） | `useNotificationFeed` は、スコープの変更で保持する状態を置き換える処理を layout effect で行う（変更前は描画の中の `setState`）。描画の中では、別のスコープの状態を返さない照合だけを行う |
+| 接続の監視（Patterns Integration Review、SYS-3） | 統合の検証画面は、接続を確認できない間は既読の更新と一括既読を送らない。接続が回復したら（`lastOutage.seq` の変化）取得し直す。結果が不明な既読の更新は再送しない |
 | System States の Banner | 障害とメンテナンスの通知は System Banner で示し、通知センターに重複させない。Banner と通知センター（Popover）、Toast の重なりを統合の検証画面で確かめる |
 | Settings | 通知の設定の Matrix を、Settings の Layout と保存状態の部品（`setting-status.tsx` など）と合わせるか。即時保存の失敗の表示の文と位置を揃える |
 | Permission States | 権限の変更の検出（`scopeKey` の版）と、権限のない対象の表示（Access State）を合わせる |
@@ -524,5 +530,5 @@ v0.1 の最終調整（同じスコープの中止の扱い、削除中の状態
 | 実際の通知の配信、ブラウザの通知の許可 | 対象外。模擬の処理だけで確かめている |
 | SSR と Hydration | 指揮役の SSR の検品で確かめる。部品は描画中に `window` と `Date.now()` を読まない |
 | 古い画面からの移動の開始の防止 | `beginIfCurrent` による開始の防止は、スコープの変更の commit と、画面の Snapshot を取得する効果の間の短い時間だけに効く。ブラウザの検品では、この時間に操作を起こせないため、確かめていない（`useScopeGuard` の検品の範囲） |
-| StrictMode での購読 | 購読の効果は StrictMode の仮のアンマウントで解除し、再び購読する設計である。StrictMode での実際の検品はしていない |
+| StrictMode での購読 | プレビューは StrictMode で描画している（`preview/src/main.tsx`。開発のサーバーでは効果が 2 回実行される）。ブラウザの検品（購読の世代、A → B → A の配信の拒否を含む）は、すべてこの条件で通っている。仮のアンマウントで購読を解除し、再び購読した回数を数える個別の検品はしていない |
 | 実際のサーバーの順序と版 | 模擬のサーバーは受け付けた順に処理する。版による拒否は、`updated` に含めない応答（削除、権限の喪失）で同じ経路を確かめている |

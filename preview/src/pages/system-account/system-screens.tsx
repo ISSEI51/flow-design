@@ -219,7 +219,7 @@ export function useSystemMonitor({ api = systemServer, pollInterval = 5000 }: { 
 }
 
 /** 操作を受け付けない理由。verb は「保存」「書き出しを開始」など */
-const mutationReason = (reason: MutationBlockReason, verb: string) =>
+export const mutationReason = (reason: MutationBlockReason, verb: string) =>
   ({
     offline: `オフラインのため、${verb}できません。`,
     connecting: `接続を確認できるまで、${verb}できません。`,
@@ -227,6 +227,51 @@ const mutationReason = (reason: MutationBlockReason, verb: string) =>
     outage: `障害のため、${verb}できません。`,
     maintenance: `メンテナンス中のため、${verb}できません。`,
   })[reason]
+
+/**
+ * 業務の API を、接続の監視（useConnectivity）とつなぐ（統合の検証画面の製品のコードの例。SYS-3）。
+ * - すべての要求：応答が届いたら reportReachable（HTTP のエラーの応答を含む）、応答が届かなかったら（結果の不明）reportFailure を呼ぶ。
+ *   待機の中止（AbortError）は報告しない。
+ * - mutating に挙げた登録・更新・削除：接続を確認できない間（offline、connecting、unknown）は送らず、確定した失敗
+ *   （MockRequestError、code: "connectivity"）を返す。送っていないため、結果の不明ではない。
+ *   取得（一覧、確認）は送る（取得の再開は安全。更新の再実行とは区別する）。
+ * monitor は呼んだ時点の値を使う（ref を commit の時点で更新する）。
+ */
+export function useConnectedApi<A extends object>(api: A, monitor: SystemMonitor, mutating: readonly (keyof A)[]): A {
+  const ref = useRef(monitor)
+  useLayoutEffect(() => {
+    ref.current = monitor
+  })
+  return useMemo(() => {
+    const wrapped = { ...api } as Record<string, unknown>
+    for (const key of Object.keys(api) as (keyof A & string)[]) {
+      const fn = api[key]
+      if (typeof fn !== "function") continue
+      wrapped[key] = (...args: unknown[]) => {
+        const m = ref.current
+        if (mutating.includes(key)) {
+          const availability = getMutationAvailability({ connectivity: m.connectivity.status })
+          if (!availability.allowed) return Promise.reject(new MockRequestError(mutationReason(availability.reason, "保存"), "connectivity"))
+        }
+        const result = (fn as (...a: unknown[]) => unknown).apply(api, args)
+        if (!(result instanceof Promise)) return result
+        return result.then(
+          (value) => {
+            ref.current.connectivity.reportReachable()
+            return value
+          },
+          (error: unknown) => {
+            if (error instanceof MockUnknownError) ref.current.connectivity.reportFailure()
+            else if (error instanceof MockRequestError) ref.current.connectivity.reportReachable()
+            throw error
+          }
+        )
+      }
+    }
+    return wrapped as A
+    // mutating は定数の配列を渡す（依存に含めない）
+  }, [api])
+}
 
 /** 接続が回復した後の確認（再取得や保存の結果の確認）を、監視に登録する */
 function useRecoveryTask(monitor: SystemMonitor, id: string, active: boolean) {
@@ -285,7 +330,15 @@ export function buildSystemIssues(
       impact: "確認できるまで、保存と削除はできません。",
     })
   } else if (monitor.recoveryTasks.length > 0) {
-    issues.push({ id: "connectivity", condition: "recovering", scope: "product", title: "接続が回復しました。最新の内容を確認しています", impact: "確認が終わるまで、表示中の内容への変更はできません。" })
+    // 復旧の確認の間も、登録・更新・削除は止めない（getMutationAvailability は online で許可する）。
+    // 止めていない操作を「できません」と示さない（SYS-2）。確認しているのは表示中の内容と、結果が不明な保存
+    issues.push({
+      id: "connectivity",
+      condition: "recovering",
+      scope: "product",
+      title: "接続が回復しました。最新の内容を確認しています",
+      impact: "確認が終わるまで、表示中の内容は最新ではない場合があります。結果を確認していない保存は、自動では送り直しません。",
+    })
   }
 
   // 状態の取得に失敗した間は、最後に取得した状態を時点つきで示す（問題が消えたように見せない）
@@ -1118,7 +1171,7 @@ export function BackgroundJobsPanel({
         ))}
         {!compact && (
           <Button variant="ghost" size="sm" onClick={load}>
-            状況を更新
+            最新の情報に更新
           </Button>
         )}
       </div>
@@ -1158,7 +1211,7 @@ export function BackgroundJobsPanel({
             actions={
               s === "unknown" ? (
                 <Button variant="outline" size="sm" onClick={load}>
-                  最新の状態を確認
+                  状態を確認
                 </Button>
               ) : undefined
             }
@@ -1360,11 +1413,11 @@ export function UnknownSaveExample({
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="secondary" size="sm" onClick={submit} loading={s.status === "saving"} disabled={!canSubmit || (!dirty && s.status !== "failed")}>
-          保存
+          保存する
         </Button>
         {d.saved === null && d.loadFailed && online && (
           <Button variant="outline" size="sm" onClick={loadMemo}>
-            もう一度取得
+            再試行
           </Button>
         )}
         {(s.status === "unknown" || s.status === "checking") && (
@@ -1438,10 +1491,10 @@ export function StatusPageExample({ api = systemServer, headingLevel = 3 }: { ap
         </p>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <p className="text-ui text-muted-foreground" data-testid="sys-status-updated">
-            {data ? `最終更新：${incidentTime(api, data.updatedAt)}` : state.status === "failed" ? "状態を取得できませんでした。時間をおいて、もう一度取得してください。" : ""}
+            {data ? `最終更新：${incidentTime(api, data.updatedAt)}` : state.status === "failed" ? "状態を取得できませんでした。時間をおいて、もう一度更新してください。" : ""}
           </p>
           <Button variant="outline" size="sm" onClick={load} loading={state.status === "loading" && state.data !== null}>
-            最新の状態を取得
+            最新の情報に更新
           </Button>
         </div>
       </div>

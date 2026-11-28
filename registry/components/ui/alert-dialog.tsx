@@ -117,7 +117,9 @@ function AlertDialogFooter({ className, ...props }: React.ComponentProps<"div">)
   return (
     <div
       data-slot="alert-dialog-footer"
-      className={cn("flex flex-wrap gap-2 *:flex-1 sm:justify-end sm:*:flex-none", className)}
+      // 狭い画面でボタンが 3 つ以上ある場合は、縦に 1 列に並べる（横に並べると、WebKit で 1 文字ずつに近い折り返しになる）。
+      // 並びの順は DOM の順（安全な選択肢が先）のまま。2 つまでの場合と sm 以上は、従来どおり
+      className={cn("flex flex-wrap gap-2 *:flex-1 max-sm:has-[>:nth-child(3)]:flex-col sm:justify-end sm:*:flex-none", className)}
       {...props}
     />
   )

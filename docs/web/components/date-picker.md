@@ -30,7 +30,16 @@
 | プリセット | Popover では Calendar の左に縦に、Drawer では Calendar の上に折り返して並べる。選んでいる期間は `aria-pressed` | |
 | 期間の並べ方 | 置かれた領域の幅（Container Query、`@container/date-range`）で決める。24rem 以上は 1 行（開始日 〜 終了日 Calendar のボタン）。24rem 未満は、開始日と終了日を同じ幅で縦に並べ、Calendar のボタンを終了日の右に置く。「〜」は 1 行の並べ方だけで表示する | `@sm/date-range` |
 
-期間の並べ方は、画面の幅ではなく、`DateRangePicker` が置かれた領域の幅で決める。広い画面の中の狭い Sheet や Popover でも、開始日と終了日の欄の幅と位置がそろう（以前は画面の幅で「〜」の表示を決めていたため、狭い領域で「〜」だけが開始日の後に残り、終了日の欄が Calendar のボタンの分だけ狭くなっていた）。外側の要素（`data-slot="date-range-picker"`）の内側に、並べ方の要素を 1 つ置く。`data-slot`、入力欄、ボタン、送信の値は変わらない。`className` は外側の要素に付く。並べ方のクラス（`gap`、`items-*`、`flex-nowrap` など）を `className` で渡していた場合は効かなくなる（リポジトリの中には、`className` を渡している箇所はない）。
+期間の並べ方は、画面の幅ではなく、`DateRangePicker` が置かれた領域の幅で決める。幅が決まっている Sheet や Popover の中でも、開始日と終了日の欄の幅と位置がそろう（以前は画面の幅で「〜」の表示を決めていたため、狭い領域で「〜」だけが開始日の後に残り、終了日の欄が Calendar のボタンの分だけ狭くなっていた）。外側の要素（`data-slot="date-range-picker"`）の内側に、並べ方の要素を 1 つ置く。`data-slot`、入力欄、ボタン、送信の値は変わらない。`className` は外側の要素に付く。並べ方のクラス（`gap`、`items-*`、`flex-nowrap` など）を `className` で渡していた場合は効かなくなる（2026-11 の時点で、リポジトリの中に `DateRangePicker` へ `className` を渡している箇所はない）。
+
+置く場所の制約：外側の要素は Container Query の容器（`container-type: inline-size`）であり、CSS の仕様により、内容の幅を自身の幅にしない。幅が内容で決まる場所に置くと、幅が 0 になり、入力欄が表示されない。
+
+| 置く場所 | 幅 | 対処 |
+| --- | --- | --- |
+| ブロックの要素、幅が決まる flex の項目・grid の列（`1fr`、`minmax(0,1fr)`）、幅を指定した Sheet・Popover | 置かれた領域の幅（既定の `w-full`） | 不要 |
+| `inline-flex` の要素、`position: absolute` で幅を指定しない要素、grid の `auto` の列、`w-max` の要素（幅を指定しない `PopoverContent` を含む） | 0 | `className` で幅を指定する（例：`w-96`、`w-[min(24rem,100%)]`）か、置く要素の幅を指定する |
+
+部品の側で最小の幅を与える方法（`min-width`、`contain-intrinsic-inline-size`）は採らない。grid の `1fr` の列や flex の項目の最小の幅（`min-width: auto`）が変わり、既存の配置で横にはみ出すおそれがあるため。
 
 ```tsx
 const [date, setDate] = useState<Date | null>(null)

@@ -173,9 +173,14 @@ initStores()
 const db = (ws: string) => stores[ws] ?? (stores[ws] = { customers: [], seq: 0 })
 const prefixOf = (ws: string) => (ws === "hq" ? "cu" : ws.slice(0, 2))
 
+// 招待済みの担当者のメールアドレス（asyncFailure: "allow" の例。保存の時にサーバーが同じ確認を行う）
+const invitedSeed = ["yamada@example.com", "sato@example.com"]
+let invited = new Set(invitedSeed)
+
 /** 検証画面の状態を最初に戻す（検品のため） */
 export function resetFormsServer() {
   initStores()
+  invited = new Set(invitedSeed)
   settings.clear()
   formsServer.requests.length = 0
   formsServer.settled.length = 0
@@ -377,6 +382,29 @@ export async function saveSettingsForm<V extends Record<string, unknown>>(kind: 
     settings.set(key, { ...((settings.get(key) as object | undefined) ?? {}), ...values })
   }
   return saveOutcome<V>(values) ?? { status: "success" }
+}
+
+/**
+ * 担当者のメールアドレスが招待済みかを確かめる（入力中の確認）。checkMode の fail は通信の失敗、timeout は応答しない。
+ * 招待の処理（inviteMember）でも、サーバーが同じ確認を必ず行う。そのため、この確認ができなくても招待を止めない（asyncFailure: "allow"）
+ */
+export async function checkInvitedEmail(email: string, { signal }: { signal?: AbortSignal } = {}) {
+  log("check-invited-email", email)
+  const mode = formsServer.checkMode
+  if (mode === "timeout") return new Promise<string | null>(() => undefined)
+  await wait(formsServer.latency.check, signal)
+  if (mode === "fail") throw new Error("サーバーに接続できませんでした")
+  return invited.has(email.trim().toLowerCase()) ? `${email.trim()} はすでに招待しています` : null
+}
+
+/** 担当者を招待する。保存の処理の中で、招待済みかを必ず確かめ、招待済みなら invalid を返す（入力中の確認の結果に頼らない） */
+export async function inviteMember(values: { email?: string }): Promise<FormSaveResult<{ email: string }>> {
+  const email = (values.email ?? "").trim().toLowerCase()
+  log("invite-member", { email })
+  await wait(formsServer.latency.save)
+  if (invited.has(email)) return { status: "invalid", fieldErrors: { email: `${email} はすでに招待しています。別のメールアドレスを入力してください` } }
+  invited.add(email)
+  return { status: "success", values: { email } }
 }
 
 // ---------------------------------------------------------------- 確認と取り消し

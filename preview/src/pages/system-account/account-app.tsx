@@ -2,18 +2,19 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/toast"
-import { planReauthentication } from "@/patterns/auth-flow"
+import { planReauthentication, resolveReturnTo } from "@/patterns/auth-flow"
 import { MinimalShell } from "@/patterns/app-shell"
 import { ServiceUnavailable } from "@/patterns/service-state"
 import { summarizeIssues } from "@/patterns/system-status"
+import { UnsavedChangesProvider } from "@/patterns/unsaved-changes"
 
-import { authApi, authServer, demoInvitation, type SentEmail } from "../../data/system-account/auth-server"
+import { authApi, authServer, demoInvitation, homePathOf, type SentEmail } from "../../data/system-account/auth-server"
+import { currentPermissionsOf } from "../../data/system-account/permission-server"
 import { roles, users, workspaces, type UserId, type WorkspaceId } from "../../data/system-account/model"
 import { NEW_WORKSPACE_ID, type OnboardingViewer, viewerOf } from "../../data/system-account/onboarding-data"
 import { onboardingApi } from "../../data/system-account/onboarding-server"
 import {
   AuthShell,
-  destinationFor,
   EmailVerificationScreen,
   MockMailbox,
   NewPasswordScreen,
@@ -25,8 +26,17 @@ import {
   SignInScreen,
   SignUpScreen,
 } from "./auth-screens"
-import { accountHref, canEnterWorkspace, pathFromRoute, readAccountRoute, routeFromPath, type AccountRoute, type AccountStart } from "./account-route"
-import { SignedInApp } from "./account-signed-in"
+import {
+  accountHref,
+  canEnterWorkspace,
+  canOpenAccountPath,
+  pathFromRoute,
+  readAccountRoute,
+  routeFromPath,
+  type AccountRoute,
+  type AccountStart,
+} from "./account-route"
+import { SignedInApp, type NavigationBlocker } from "./account-signed-in"
 import { AccountVerifyPanel } from "./account-verify"
 import { CreateOrganizationSetup, InvitedMemberStart, OnboardingProduct } from "./onboarding-screens"
 import { buildSystemIssues, formatTime, useSystemMonitor, type SystemMonitor } from "./system-screens"
@@ -60,7 +70,8 @@ type Phase =
   | { kind: "create-org"; userId: string }
   | { kind: "new-org"; viewer: OnboardingViewer; start: "empty" | "sample" }
   | { kind: "app"; userId: UserId; sessionId: string }
-  | { kind: "reauth"; userId: UserId; route: AccountRoute }
+  /** discardedInput：セッションが切れたときに、保存していない入力があった（復元しないため、再認証の画面で知らせる） */
+  | { kind: "reauth"; userId: UserId; route: AccountRoute; discardedInput: boolean }
 
 const initialStep = (start: AccountStart): AuthStep =>
   start === "invited"
@@ -72,25 +83,64 @@ const initialStep = (start: AccountStart): AuthStep =>
 /** start=return：ログインの前に開こうとしていた画面（顧客の詳細） */
 const returnPath = "/w/hq/customers/C-00004"
 
+/**
+ * 認証の後の移動先。復帰先が安全で、現在の認可（権限の模擬のサーバーのロール）で、ページのアクセスと同じ表（pagePermission）で
+ * 開ける画面の場合だけ、その画面に戻す。ロールの初期値（model.ts）で判断しない（ロールを変えた後の復帰先を誤らない）
+ */
+function destinationInApp(userId: UserId, returnTo: string | null) {
+  return resolveReturnTo(returnTo, { fallback: homePathOf(userId), isAllowed: (path) => canOpenAccountPath(userId, path, currentPermissionsOf) })
+}
+
 export function AccountApp() {
   const [route, setRoute] = useState<AccountRoute>(() => readAccountRoute())
   const [phase, setPhase] = useState<Phase>(() => ({ kind: "auth", step: initialStep(readAccountRoute().start) }))
   const monitor = useSystemMonitor()
   const { toasts, dismiss } = useToast()
 
+  // 画面に反映している URL（hash）。製品のルーターの移動（navigate）は、確認を済ませてから先に記録する。
+  // ブラウザの戻る・進む、アドレスバーの変更（hashchange）は、未保存の変更があれば確認する（blocker）。
+  const appliedHash = useRef(window.location.hash)
+  const blocker = useRef<NavigationBlocker | null>(null)
+  const setBlocker = useCallback((next: NavigationBlocker | null) => {
+    blocker.current = next
+  }, [])
+  const setHash = useCallback((href: string) => {
+    window.location.hash = href
+    appliedHash.current = window.location.hash
+  }, [])
   useEffect(() => {
-    const onHash = () => setRoute(readAccountRoute())
+    const onHash = () => {
+      const next = window.location.hash
+      if (next === appliedHash.current) return
+      const apply = () => {
+        appliedHash.current = next
+        setRoute(readAccountRoute(next))
+      }
+      const confirm = blocker.current
+      if (!confirm) return apply()
+      const shown = appliedHash.current
+      const proceeded = confirm(() => {
+        // 確認の後に移動する：表示している画面の URL に戻していたため、移動先の URL に置き換える
+        if (window.location.hash !== next) window.history.replaceState(window.history.state, "", next)
+        apply()
+      })
+      // 確認の間は、表示している画面の URL に戻す（URL と表示を一致させる。取りやめた場合は、そのまま残る）
+      if (!proceeded) window.history.pushState(window.history.state, "", shown)
+    }
     window.addEventListener("hashchange", onHash)
     return () => window.removeEventListener("hashchange", onHash)
   }, [])
 
-  const navigate = useCallback((next: Partial<AccountRoute>) => {
-    const current = readAccountRoute()
-    const href = accountHref({ ...current, start: undefined, cat: null, id: null, ...next })
-    window.location.hash = href
-    // hashchange を待たずに、同じ描画で新しい位置を使う（別の利用者の再認証の直後に、前の利用者の位置で 1 回描画しない）
-    setRoute(readAccountRoute(href))
-  }, [])
+  const navigate = useCallback(
+    (next: Partial<AccountRoute>) => {
+      const current = readAccountRoute()
+      const href = accountHref({ ...current, start: undefined, cat: null, id: null, ...next })
+      setHash(href)
+      // hashchange を待たずに、同じ描画で新しい位置を使う（別の利用者の再認証の直後に、前の利用者の位置で 1 回描画しない）
+      setRoute(readAccountRoute(href))
+    },
+    [setHash]
+  )
 
   // 利用者が変わったら（ログアウト、別の利用者の再認証）、前の利用者の Toast を閉じる
   const toastsRef = useRef(toasts)
@@ -103,7 +153,7 @@ export function AccountApp() {
     (userId: UserId, destination?: Partial<AccountRoute>) => {
       const sessionId = authApi.startSession(userId)
       const target = destination ?? {}
-      const ws = target.ws && canEnterWorkspace(userId, target.ws) ? target.ws : (routeFromPath(destinationFor(userId, null).path).ws as WorkspaceId)
+      const ws = target.ws && canEnterWorkspace(userId, target.ws) ? target.ws : (routeFromPath(destinationInApp(userId, null).path).ws as WorkspaceId)
       setPhase({ kind: "app", userId, sessionId })
       navigate({ page: "home", ...target, ws })
     },
@@ -113,13 +163,13 @@ export function AccountApp() {
   const signOut = useCallback(() => {
     clearToasts()
     setPhase({ kind: "auth", step: { kind: "sign-in", status: "ログアウトしました。" } })
-    window.location.hash = accountHref({})
-  }, [clearToasts])
+    setHash(accountHref({}))
+  }, [clearToasts, setHash])
 
   const startOver = (start: AccountStart) => {
     clearToasts()
     authServer.reset()
-    window.location.hash = accountHref({ start })
+    setHash(accountHref({ start }))
     setPhase({ kind: "auth", step: initialStep(start) })
   }
 
@@ -151,9 +201,12 @@ export function AccountApp() {
         monitor={monitor}
         onRouteChange={navigate}
         onSignOut={signOut}
-        onExpireSession={() => {
+        onBlockerChange={setBlocker}
+        onExpireSession={({ discardedInput }) => {
           authApi.expireSession(phase.sessionId)
-          setPhase({ kind: "reauth", userId: phase.userId, route: readAccountRoute() })
+          // 前の利用者の Toast（「元に戻す」など）を、再認証の画面の上に残さない
+          clearToasts()
+          setPhase({ kind: "reauth", userId: phase.userId, route: readAccountRoute(appliedHash.current), discardedInput })
         }}
       />
     )
@@ -170,6 +223,7 @@ export function AccountApp() {
           org={Object.hasOwn(workspaces, phase.route.ws) ? (phase.route.ws as WorkspaceId) : "hq"}
           user={user}
           keepsWork={false}
+          discardedInput={phase.discardedInput}
           testId="acct-reauth"
           onAuthenticated={(nextUser) => {
             // 作業（未保存の入力）は復元しない（この画面は SignedInApp を作り直す）。開いていた位置に戻すかだけを決める。
@@ -182,9 +236,9 @@ export function AccountApp() {
               hasUnconfirmedMutation: false,
             })
             if (plan.kind === "same-user") {
-              // 同じ利用者：開いていた画面に戻る。戻る位置は、現在の所属と権限で確かめる（destinationFor の isAllowed）。
+              // 同じ利用者：開いていた画面に戻る。戻る位置は、現在の所属と認可で確かめる（destinationInApp の isAllowed）。
               // 権限は、画面を作り直すときに取得し直す（古い権限を引き継がない）
-              enterApp(nextUser as UserId, routeFromPath(destinationFor(nextUser, pathFromRoute(phase.route)).path))
+              enterApp(nextUser as UserId, routeFromPath(destinationInApp(nextUser as UserId, pathFromRoute(phase.route)).path))
             } else {
               // 別の利用者：前の利用者の画面の位置、データ、Toast を引き継がない
               clearToasts()
@@ -215,19 +269,22 @@ export function AccountApp() {
   if (phase.kind === "create-org") {
     return (
       <AuthFrame verify={verify} wide>
-        <CreateOrganizationSetup
-          userId={phase.userId as UserId}
-          api={onboardingApi}
-          titleAs="h1"
-          onComplete={({ start }) =>
-            setPhase({
-              kind: "new-org",
-              start,
-              // 作成した組織の管理者。権限は、組織を作成した利用者の管理者のロール
-              viewer: { userId: phase.userId as UserId, workspaceId: NEW_WORKSPACE_ID, permissions: roles.admin.permissions, joinedBy: "created" },
-            })
-          }
-        />
+        {/* 前回の手順の保存の後に入力した内容を、再読み込みの前に確かめる（beforeunload） */}
+        <UnsavedChangesProvider>
+          <CreateOrganizationSetup
+            userId={phase.userId as UserId}
+            api={onboardingApi}
+            titleAs="h1"
+            onComplete={({ start }) =>
+              setPhase({
+                kind: "new-org",
+                start,
+                // 作成した組織の管理者。権限は、組織を作成した利用者の管理者のロール
+                viewer: { userId: phase.userId as UserId, workspaceId: NEW_WORKSPACE_ID, permissions: roles.admin.permissions, joinedBy: "created" },
+              })
+            }
+          />
+        </UnsavedChangesProvider>
       </AuthFrame>
     )
   }
@@ -268,12 +325,13 @@ export function AccountApp() {
         initialEmail={step.email}
         status={step.status}
         testId="acct-signin"
-        onAuthenticated={(userId, destination) => {
+        onAuthenticated={(userId) => {
           if (route.start === "invited" && userId === "u-suzuki") {
             setPhase({ kind: "invited", userId })
             return
           }
-          enterApp(userId as UserId, routeFromPath(destination.path))
+          // 復帰先は、ページのアクセスと同じ表と現在の認可で判断し直す（ログインの画面の destinationFor はロールの初期値で判断する）
+          enterApp(userId as UserId, routeFromPath(destinationInApp(userId as UserId, route.start === "return" ? returnPath : null).path))
         }}
         onForgotPassword={(email) => setPhase({ kind: "auth", step: { kind: "reset-request", email } })}
         onSignUp={() => setPhase({ kind: "auth", step: { kind: "sign-up" } })}
@@ -390,7 +448,7 @@ function AuthFrame({ children, verify, wide = false }: { children: ReactNode; ve
 
 function RedirectToHome({ userId, navigate }: { userId: UserId; navigate: (r: Partial<AccountRoute>) => void }) {
   useEffect(() => {
-    navigate({ page: "home", ws: routeFromPath(destinationFor(userId, null).path).ws })
+    navigate({ page: "home", ws: routeFromPath(destinationInApp(userId, null).path).ws })
   }, [userId, navigate])
   return null
 }

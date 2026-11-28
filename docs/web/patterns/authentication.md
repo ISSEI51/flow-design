@@ -238,7 +238,7 @@
 | --- | --- | --- | --- | --- |
 | アカウントが違う（`sameAccount` が true ではない） | false | false | false | `different-account`（別の利用者と同じく破棄する） |
 | ワークスペースが違う | false | false | false | `different-workspace` |
-| 閲覧できない | false | false | false | `no-view-permission`（対象と保持した入力を表示しない。保存の結果も照会しない） |
+| 閲覧できない | false | false | false | `no-view-permission`（対象と保持した入力を表示しない。保存の結果も照会しない。結果が不明な保存の記録を破棄し、`pendingMutation` は `discarded`） |
 | 対象のデータがない | false | false | false | `target-missing` |
 | 対象のデータが変わった | false | true | 編集の権限による | `target-changed`（入力を自動で復元しない。製品が差分を示すなどする） |
 | 編集できない | false | true | false | `no-edit-permission`（読み取り専用で表示し、入力を破棄する） |
@@ -449,16 +449,18 @@ else {
 | 新規登録の送信後の文を「メールを送信しました。メールの案内に従って、登録を完了してください」にした | 登録済みのアドレスには確認のメールではなく「登録済み」のお知らせを送るため、両方に正確な文にした |
 | ログアウトの後は、プレビューでは「ログアウトしました」を `role="status"` で知らせる | 成功の Dialog の代わり。実際の製品ではログインの画面に移動する |
 | リカバリーコードの大文字・小文字の扱いを、プレビューで切り替えられるようにした | Registry の既定は大文字にしない（区別するコードの意味を変えない）。プレビューの製品の既定は「区別しない」（`uppercase: true`。サーバーも大文字にそろえて比べる）。「区別する」では入力のまま送る |
+| 閲覧の権限を失った場合（`no-view-permission`）の `pendingMutation` を `unresolved` から `discarded` に変えた（Patterns Integration Review、AUTH-7） | 変更前は、`discard` に `unconfirmed-mutation`（記録を破棄する）を含めながら、`pendingMutation` は `unresolved`（照会をやり直す）を返し、2 つの値が矛盾していた。照会にも現在の閲覧の権限が必要であり、閲覧の権限がない利用者は照会できないため、破棄に統一した。影響：`decideReauthenticationRestore` の戻り値の 1 つの値（`no-view-permission` で結果が不明な保存がある場合）。プレビューの `authentication-page.tsx` は、`discarded` で記録を消す（変更前の `unresolved` では記録を残していた）。代替案：記録を残して `unresolved` にする（`discard` から `unconfirmed-mutation` を外す）。閲覧の権限が戻った後に照会できるが、閲覧できない対象の保存の記録を画面のメモリに残すため採らなかった |
+| 多要素認証の画面へのフォーカスの移動（Patterns Integration Review、AUTH-4、AUTH-5） | ログインの画面から続けて表示した場合（`MfaScreen` の `focusOnMount`）、押したボタンが消えて body に落ちたフォーカスを、コードの入力欄へ移す。SMS の送信と方式の変更の後のフォーカスの移動は、フォーカスが body、押したボタン、DOM から外れた要素にある場合だけ行う（利用者が別の入力欄へ移った後に、遅れて届いた応答でフォーカスを奪わない） |
 
 ## 統合時に確認する事項
 
 - Forms & Workflows の Form Layout、Create & Edit の入力仕様（検証のタイミング、エラーの概要、読み上げ）と、`EmailField` の例の動作を合わせる。統合の前は Components の forms.md に従った。
-- Unsaved Changes：ログアウトと切り替えの確認は、プレビューの `DiscardAlert` を使っている。統合時に Unsaved Changes の部品と文言に置き換える。
+- Unsaved Changes：統合の検証画面（`#/account-app`）のログアウト、ワークスペースの切り替え、画面の移動、ブラウザの戻る・進むの確認は、Patterns Integration Review で `UnsavedChangesProvider` と `useNavigationGuard` に置き換えた（system-and-account.md）。この資料のページ（`#/authentication`）の例のログアウトと切り替えの確認は、プレビューの `DiscardAlert` のまま（例の中の確認の文と挙動を示すため。置き換えていない）。
 - Confirmation：再認証、ログアウトに確認の Dialog を使わない方針が、Confirmation の判断基準と一致するか。
 - Settings：セキュリティの設定（パスワードの変更、多要素認証の登録、Passkey の登録）の画面で `PasswordInput` と `VerificationCodeInput` を使う場合の構成。
 - System States：認証のサービスの障害（`service-unavailable`）を、System Banner と同時に示す場合の重複の扱い。
 - Notifications：セキュリティの通知（新しい端末からのログイン）と、ログイン・再認証の関係。
-- Permission States：復帰先の権限の判定（`canOpenPath` の例）と、`access.ts` の判定を共通にするか。
+- Permission States：統合の検証画面の復帰先は、Patterns Integration Review で、ページのアクセスと同じ表（`account-route.ts` の `pagePermission`）と現在の認可（権限の模擬のサーバー）で判断するようにした（`canOpenAccountPath`。AUTH-1、AUTH-2）。この資料のページの `canOpenPath`（`auth-server.ts`）は、ロールの初期値で判断する例のまま。
 - 統合の検証画面では、`AuthShell`（Minimal Shell の全画面）の中に各画面を置き、`headingLevel={1}`（既定）にする。
 
 ## 検品

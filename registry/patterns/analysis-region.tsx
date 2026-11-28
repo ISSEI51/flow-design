@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils"
 // - 全体条件と異なる条件（例外の期間、個別の絞り込み）は、conditions に AnalysisScopeNote を渡して、見出しの近くで示す。
 // - 再取得の間は前の結果を薄くせずに残し、200ms 後から「更新中」と、表示中の結果の条件（staleLabel）を示す。
 //   操作の制限など安全性に必要な処理は、製品が status（useBrowseData の canOperate）ですぐに行う。
+//   条件の文は省略せずに折り返し、領域の aria-describedby で関連付ける（title 属性だけに頼らない）。
 
 function AnalysisRegion({
   title,
@@ -56,8 +57,19 @@ function AnalysisRegion({
   // 数値と文字のコントラストを保つため、内容を薄くしない。更新中であることと、表示中の結果の条件を文字で示す。
   const stale = useDelayedFlag(status === "refreshing", 200)
   const showContent = !error || error.variant === "warning"
+  // 表示中の結果の条件を、領域の説明として関連付ける（aria-describedby）。表示している間だけ参照する
+  const staleId = `analysis-region-stale-${React.useId().replace(/[^a-zA-Z0-9_-]/g, "")}`
+  const staleShown = Boolean(stale && staleLabel)
+  const describedBy = [props["aria-describedby"], staleShown ? staleId : null].filter(Boolean).join(" ") || undefined
   return (
-    <Section data-slot="analysis-region" data-status={status} aria-busy={loading || status === "refreshing" || undefined} className={className} {...props}>
+    <Section
+      data-slot="analysis-region"
+      data-status={status}
+      aria-busy={loading || status === "refreshing" || undefined}
+      className={className}
+      {...props}
+      aria-describedby={describedBy}
+    >
       <SectionHeader>
         <SectionHeading>
           <SectionTitle>{title}</SectionTitle>
@@ -69,12 +81,15 @@ function AnalysisRegion({
           <p
             data-slot="analysis-region-stale"
             data-visible={stale || undefined}
-            className={cn("flex min-w-0 max-w-full items-center gap-x-2 text-caption text-muted-foreground", !stale && "invisible")}
+            className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-x-2 text-caption text-muted-foreground", !stale && "invisible")}
           >
             <DataRefreshIndicator active={status === "refreshing"} className="shrink-0 text-caption" />
-            {/* 1 行に収め、表示の出し入れで領域の高さを変えない。省略した場合も、title と読み上げで全体を確かめられる */}
-            {stale && staleLabel && (
-              <span className="min-w-0 truncate" title={typeof staleLabel === "string" ? `表示中：${staleLabel}` : undefined}>
+            {/*
+              条件の文は省略せずに折り返す。狭い画面でも、タッチ、キーボード、支援技術で全文を確かめられる（title だけに頼らない）。
+              領域の aria-describedby からも参照する
+            */}
+            {staleShown && (
+              <span id={staleId} className="min-w-0 [overflow-wrap:anywhere] [word-break:auto-phrase]">
                 表示中：{staleLabel}
               </span>
             )}

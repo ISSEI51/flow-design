@@ -158,20 +158,23 @@ const undo = async (snapshot: ScopeSnapshot, id: string) => {
 | 新規登録、メールの確認、組織の作成、任意の設定のスキップ | 開き方「新規登録して組織を作成する」。模擬の受信箱のリンクを開くと組織の作成に移り、作成の後は成功の画面を挟まずに最初の画面（初回利用の Empty State と Checklist）へ移る |
 | パスワードの再設定 | ログインの画面の「パスワードを忘れた場合」。再設定の後は自動でログインせず、ログインの画面で知らせる |
 | 招待されたメンバーの利用開始 | 開き方「招待のリンクから開く（鈴木 一郎）」 |
-| ログインの後の復帰 | 開き方「ログインの後に顧客の詳細へ戻る」。所属していないワークスペースや権限のない画面には戻さない |
+| ログインの後の復帰 | 開き方「ログインの後に顧客の詳細へ戻る」。所属していないワークスペースや権限のない画面には戻さない。復帰先は、ページのアクセスと同じ表（`account-route.ts` の `pagePermission`）と現在の認可（権限の模擬のサーバーのロール）で判断する（Patterns Integration Review、AUTH-1、AUTH-2） |
 | 組織の SSO | 開き方「組織の SSO が必須の組織（西日本営業部）」 |
 | App Shell、アカウントメニュー、ワークスペースの切り替え | Sidebar の下部のアカウントメニュー。所属しているワークスペースだけを示す |
 | 個人設定、組織設定、設定の検索、即時保存、明示的な保存、継承と制限 | Sidebar の「設定」 |
 | メンバー管理、権限管理 | 「メンバーと権限」（`members.view` がない利用者には Sidebar に示さない） |
-| 通知センター、通知設定、通知から対象への移動 | Header の右側のお知らせのボタン。設定の未保存の変更があるときは、移動の前に確認する |
+| 通知センター、通知設定、通知から対象への移動 | Header の右側のお知らせのボタン。設定の未保存の変更があるときは、移動の前に Unsaved Changes（`UnsavedChangesProvider`）で確認する。権限の再確認中に開いた通知は「最新の権限を確認しています」と示し、既読にしない |
+| ブラウザの戻る・進む、アドレスバーの変更 | 設定の未保存の変更（保存の結果を確認していない入力を含む）がある間は、同じ確認を出す。確認の間は表示している画面の URL に戻し、取りやめたらそのまま残る。再読み込みとタブを閉じる操作には、ブラウザの標準の確認（`beforeunload`）を出す |
 | Getting Started Checklist | ホーム。非表示にした場合は、ページの見出しの横の「はじめにやることを表示」で再表示する |
-| セッション切れ | 「セッションの有効期限を切る」。製品の画面を描画せず、同じ利用者なら開いていた画面に戻り、別の利用者なら前の利用者の位置を引き継がない |
+| セッション切れ | 「セッションの有効期限を切る」。未保存の変更の確認を挟まない。製品の画面を描画せず、前の利用者の Toast を閉じる。保存していない入力があった場合は、再認証の画面で「保存していない入力は破棄されました」と示す。同じ利用者なら開いていた画面（設定のカテゴリ、お知らせ、処理の状況、稼働状況を含む）に戻り、別の利用者なら前の利用者の位置を引き継がない |
 | 権限の変更 | ロールの切り替え。再読み込みせずに、Sidebar とページのアクセスを更新する |
 | オフライン、再接続、復旧の確認 | 端末のネットワーク、サービスへの経路 |
 | 部分障害、メンテナンス、サービスの停止 | サービスの状態。製品全体の停止とメンテナンスでは、製品の画面を状態の画面に置き換える |
-| 保存の結果が不明 | 設定の保存の結果「結果が不明」 |
+| 保存の結果が不明 | 設定の保存の結果「結果が不明」。移動の確認は「保存できたかを確認していません」と示し（「保存されていません」と断定しない）、「保存して移動」を示さない |
 | 長時間の処理 | 「処理の状況」（書き出しと取り込み）。開始の直前に `access.latest()` で書き出しの権限を判断し直す |
-| 権限の再確認と保護された情報 | ロールの切り替えの後、権限を取得し直すまで、顧客の内容とメンバーの一覧（保護された情報）を表示しない（`whileUnverified` の既定の `hide`）。画面の構造は保つ |
+| 権限の再確認と保護された情報 | ロールの切り替えの後、権限を取得し直すまで、顧客の内容、メンバーの一覧、組織の設定の値（保護された情報）を表示しない（`whileUnverified` の既定の `hide`）。画面の構造は保つ。組織の設定の保存、ポリシーの保存、ワークスペースの削除、招待は、送る直前に `access.latest()` で判断し直す |
+| 組織の設定の保存の反映 | 組織名とセキュリティのポリシーの正本は Settings の模擬のサーバー。保存した組織名は Sidebar と Header に、保存したポリシー（多要素認証、SSO、外部アカウント）はログインの判定に反映される |
+| オフラインの間の保存と既読 | 端末のネットワーク「切断した」。設定の即時保存と明示的な保存、お知らせの既読の更新と一括既読を送らない（確定した失敗として示す）。接続が回復したら、お知らせを取得し直す |
 | 通知の取得の失敗 | お知らせの取得「失敗する」 |
 | 接続の未確認 | 最初の疎通の確認が終わるまで、接続は `unknown`。顧客の保存と操作は「接続を確認しています」として止める（オフラインとは示さない）。障害とメンテナンスは、接続の問題と区別して示す |
 
@@ -198,7 +201,7 @@ UI の部品は、入力、表示、遷移、古い操作と古い応答の照�
 
 | 対象 | 変更 | 互換性 |
 | --- | --- | --- |
-| Components（`registry/components/ui/`） | 変更なし | |
+| Components（`registry/components/ui/`） | System & Account の実装では変更なし（Patterns Integration Review の変更は「Patterns Integration Review での変更」） | |
 | App Structure、Data Browsing（`registry/patterns/` の既存の 14 ファイル、資料、検証画面） | 変更なし | `MinimalShell`、`AppShell`、`useBrowseData`、`DataRegionError`、`SidebarNav` をそのまま使う |
 | `preview/src/catalog.ts` | 分類「Patterns：System & Account」と 7 ページを追加した | 既存のページの id と URL は変わらない |
 | `package.json` | `test:patterns` に `system-account` を追加した | |
@@ -218,7 +221,7 @@ UI の部品は、入力、表示、遷移、古い操作と古い応答の照�
 | 共通の hook | 取得以外の非同期処理のために `useScopeGuard` を追加した。取得は Data Browsing の `useBrowseData` を使う | Data Browsing の取得の規則（スコープの世代、最新の要求、アンマウント）を、保存や既読の更新にも同じ形で適用するため。取得の仕組みを 2 つにしない |
 | 部品の分け方 | 6 種類を 26 のファイルに分け、1 つの Context にまとめなかった。純粋な関数（`auth-flow.ts`、`onboarding.ts`、`setting-resolve.ts`、`access-decision.ts`、`system-status.ts`、`notification-state.ts`）は `"use client"` を付けず、React に依存しない | 製品の一部だけを導入できる。Server Components と Node の単体の検品から読み込める |
 | 統合の検証画面の権限 | 権限の模擬のサーバーの応答（`usePermissionAccess`）だけを、Sidebar、ページのアクセス、設定、Onboarding の権限に使う。ロールの切り替えは、権限と設定の 2 つの模擬のサーバーに同じ値を設定する | 画面の表示とサーバーの判断の元を 1 つにし、ページの間で権限を矛盾させない |
-| 統合の検証画面のセッション切れ | 再認証の間は、製品の画面（Sidebar、お知らせ、内容）を描画しない。同じ利用者の再認証では開いていた画面に戻るが、未保存の入力は復元しない | 再認証の画面の背後に機密のデータを残さない。入力の安全な保持と復元は、Authentication のページの例（模擬のサーバーに保持した下書き）で示している |
+| 統合の検証画面のセッション切れ | 再認証の間は、製品の画面（Sidebar、お知らせ、内容）を描画しない。同じ利用者の再認証では開いていた画面に戻るが、未保存の入力は復元しない。復元しないことは、再認証の画面で示す（Patterns Integration Review で追加） | 再認証の画面の背後に機密のデータを残さない。入力の安全な保持と復元は、Authentication のページの例（模擬のサーバーに保持した下書き）で示している |
 | 通知からの移動と未保存の変更 | 確認の Dialog の前に通知センターを閉じ、取りやめた場合は通知センターを開くボタンへフォーカスを戻す | モバイルの通知センターはモーダルの Sheet であり、その外の確認の Dialog を操作できなくなる（検品で見つけた） |
 | ワークスペースの切り替え | アカウントメニューの Radio の項目は、選んだらメニューを閉じる（`closeOnClick`） | Base UI の RadioItem は既定では閉じず、切り替えの後の見出しへのフォーカスの移動と重なって、次にメニューを開いた直後に閉じる不具合になった（検品で見つけた） |
 | 所属していないワークスペースの URL | 存在や内容を示さず、所属している最初のワークスペースのホームへ移す。`page` と `ws` の値は `Object.hasOwn` で照合する | URL のワークスペースの ID を無条件に信頼しない。`constructor` などの Object のプロトタイプの名前を、既知のページやワークスペースとして扱わない（独立したレビューで見つかった） |
@@ -231,27 +234,84 @@ UI の部品は、入力、表示、遷移、古い操作と古い応答の照�
 | 権限の再確認中の保護された情報（v0.1） | `resolveContentAccess` の既定を、確認中に保護された情報を表示しない（`hide`）にした。統合の検証画面は既定のまま使う | 認可が不明な間に機密情報を表示し続けることを、標準として保証しない（指示書 4 章）。表示を続けるかは、製品が情報の機密性で選ぶ |
 | 接続の状態の表示（統合の検証画面、v0.1） | 監視の状態を、接続（オフライン、未確認）とサービス（障害、メンテナンス）に分けて、顧客の操作と保存の条件に渡す | 初期実装は、障害とメンテナンスも「オフライン」として示していた |
 | 描画の中の状態の更新（v0.1、独立したレビューの後） | Registry の hook は、スコープの変更を描画の中の `setState` や ref の書き換えで反映しない。状態を `useScopeGuard` の値かスコープと組にして持ち、描画の中で照合する。最新の関数と値を持つ ref は、commit の後（layout effect）に更新する | commit されなかった描画（中断された transition）の中の `setState` が後から適用され、表示中のスコープの状態を初期化した（Settings の hook の検品で確かめた）。描画の中で書き換えた ref は、破棄された描画の値のまま残り、表示中のスコープの操作を止めた（`useAccess` の `latest()` の検品で確かめた） |
-| 未統合の Patterns | Forms & Workflows（Unsaved Changes、Confirmation、Multi-step Workflow、Create & Edit、Form Layout、Import & Export）と Data Analysis は読み込まず、既存の Components とプレビューの `DiscardAlert` で代替した | 指示書の「未統合の Patterns を独自に再実装しない」 |
+| 未統合の Patterns | Forms & Workflows（Unsaved Changes、Confirmation、Multi-step Workflow、Create & Edit、Form Layout、Import & Export）と Data Analysis は読み込まず、既存の Components とプレビューの `DiscardAlert` で代替した。Patterns Integration Review で、Unsaved Changes（`UnsavedChangesProvider`、`useUnsavedChanges`、`useNavigationGuard`、`DiscardChangesAlert`）に置き換えた（下の「Patterns Integration Review での変更」）。Confirmation は置き換えていない。Multi-step Workflow は 2 回目（`fix/pi-system2`）で置き換えた | 指示書の「未統合の Patterns を独自に再実装しない」 |
+
+## Patterns Integration Review での変更
+
+Patterns Integration Review（指示書 6 章、11 章、12.1、12.2、12.6）の独立した監査で見つかった問題のうち、System & Account、Overlay、Toast に関わるものを直した。確定した仕様を変えた箇所は、理由、影響の範囲、代替案を記録する。
+
+### API の変更
+
+| 対象 | 変更（前 → 後） | 互換性 | 理由 |
+| --- | --- | --- | --- |
+| `setting-resolve.ts` の `settingAccess` | 引数に `unresolved`（`"loading"`、`"error"`、`"refreshing"`、`"stale"`、`null`）と `unresolvedReason` を追加。`restriction` に `"unresolved"` を追加 | 既存の呼び出し（引数なし）は同じ結果。`restriction` を網羅的に分岐する製品のコードは、`"unresolved"` の分岐が必要になる | 権限の再確認中に、組織の設定の保存の操作が有効のままだった（PERM-1）。理由の順序は `decideAccess` と同じ（ポリシー、契約プラン、権限、未確定） |
+| `auth-flow.ts` の `decideReauthenticationRestore` | 閲覧の権限を失い、結果が不明な保存がある場合の `pendingMutation`：`"unresolved"` → `"discarded"` | 戻り値の 1 つの値が変わる。`"discarded"` を記録の破棄として扱っている製品は変更不要 | `discard` に `unconfirmed-mutation`（記録を破棄）を含めながら `unresolved`（照会をやり直す）を返し、矛盾していた（AUTH-7。authentication.md） |
+| `notification-feed.ts` の `useNotificationFeed` | スコープの変更で保持する状態を置き換える処理を、描画の中の `setState` から layout effect に移した | API は変わらない。描画の中で別のスコープの状態を返さないことも変わらない | commit されなかった描画で、表示中のスコープの状態を初期化しないため（NTF-2） |
+| `combobox.tsx`（Combobox と Multi Select） | 一覧の Positioner に `in-[[data-base-ui-inert]]:z-40` を追加 | 見た目は、後からモーダルが開いた場合だけ変わる | Select、Popover と同じく、後から開いたモーダルの背面に入り、押せないようにするため（OVL-3） |
+| `drawer.tsx` の `DrawerFooter`、`sheet.tsx` の `SheetFooter`、`toast.tsx` の `Toaster` | Footer が表示中に `--toast-offset-overlay` を設定し、`Toaster` は `--toast-offset-bottom` と大きい方を使う。`DrawerFooter`、`SheetFooter` は `ref` を受け取る（React 19 の `ref` の props） | 新しい CSS の変数を追加した。`--toast-offset-bottom` の意味は変わらない（製品が画面の下の固定の操作に使う変数を上書きしない） | 狭い画面の Drawer と、下・左右の Sheet の Footer の操作に、操作つきの Toast が重なっていた（OVL-1、OVL-2） |
+| プレビューの `ReauthScreen` | `discardedInput` を追加 | 既定は false（前と同じ文） | セッション切れで保存していない入力を破棄したことを示す（AUTH-3） |
+| プレビューの `MfaScreen` | `focusOnMount` を追加 | 既定は false | AUTH-4 |
+| プレビューの `SettingsArea`、`SettingsSectionProps` | `access`（`useAccess` の戻り値）を追加 | 渡さない場合は `scope.permissions` を確認済みとして扱う（前と同じ） | PERM-1 |
+| プレビューの `NavigateOutcome` | `reason` に `"unresolved"` を追加 | 既定の扱いは前と同じ | NTF-1 |
+
+新しい公開 API は、`settingAccess` の引数と `restriction` の値、`--toast-offset-overlay`（CSS の変数）だけである。どちらも、既存の部品の仕組みでは安全性の問題を直せなかったため加えた。
+
+### 統合の検証画面の変更（製品側のコードの例）
+
+| 事項 | 変更 | 理由と影響 | 採らなかった案 |
+| --- | --- | --- | --- |
+| 権限の再確認中の組織の設定 | `SettingsArea` に `access` を渡し、組織の設定とメンバーの一覧を `resolveContentAccess`（既定の `hide`）で表示しない。入力を残すため、フォームはアンマウントせず `hidden` と `inert` にする。保存、ポリシーの保存、削除、招待は `access.latest()` で判断し直す | ロールの変更の後、権限を取得し直すまで、組織名を表示し、保存の要求を送れた（PERM-1） | フォームをアンマウントする案：表示中の入力が、権限が変わらない場合にも失われるため採らなかった |
+| 組織の設定の正本 | 組織名とポリシーの正本を Settings の模擬のサーバーにした（`orgNameOf`、`orgPolicyOf`、`subscribeOrgSettings`）。認証の模擬のサーバー、ログインの画面、Permission States の例、Sidebar と Header が読む | 保存した設定が、ログインの判定と Sidebar の組織名に反映されなかった（SET-3）。`model.ts` の `orgSettings` は初期値として残す | `model.ts` の値を書き換える案：模擬のサーバーの `reset` で初期値に戻せなくなるため採らなかった |
+| 未保存の変更の確認 | `UnsavedChangesProvider`（Forms & Workflows）に置き換え、ブラウザの戻る・進む（`hashchange`）も確認する。確認の間は `history.pushState` で表示中の URL に戻し、移動するときは `history.replaceState` で移動先の URL にする | ブラウザの戻る操作で、確認せずに入力を失った（SET-1）。戻った後に取りやめると、戻る前の履歴の 1 つ先（進む）は失われる | 履歴の位置を `history.go(1)` で戻す案：非同期で、移動の向きを判断できないため採らなかった |
+| 結果が不明な保存と移動 | 移動の確認の文を `describeUnsavedSettings` で変え、「保存できたかを確認していません」と示す。「保存して移動」は示さない | 結果が不明でも「入力した内容は保存されません」と示していた（SET-2） | 移動を禁止する案：確認の操作ができない状態（通信の障害）で移動できなくなるため採らなかった |
+| 保存して移動 | 明示的な保存のフォームの `onSave` を登録する。入力の誤り、確認の Dialog が必要なポリシーの変更、最新の権限を確認していない間は示さない | SET-7 | |
+| 権限不足の保存の後 | `onPermissionDenied` で `access.reload()` を呼ぶ | SET-5 | |
+| セッション切れ | 確認を挟まずに進め、Toast を閉じ、保存していない入力があった場合は再認証の画面で示す。戻る位置（`pathFromRoute`）に設定のカテゴリ、お知らせ、処理の状況、稼働状況を加えた | AUTH-3、AUTH-6 | |
+| 復帰先 | `canOpenAccountPath`（ページのアクセスと同じ `pagePermission` と、権限の模擬のサーバーの現在のロール）で判断する | 復帰先がロールの初期値と別の権限で判断されていた（AUTH-1、AUTH-2） | |
+| 接続の監視 | `useConnectedApi` で、設定とお知らせの要求の応答を `reportReachable` と `reportFailure` に報告する。接続を確認できない間は、保存と既読の更新を送らず、確定した失敗にする。接続が回復したらお知らせを取得し直す | SYS-3。設定の画面は、回復の後に取得し直さない（取得し直すと、入力中のフォームを作り直すため。結果が不明な保存は「確認する」で確かめる） | |
+| 接続の表示 | `connecting` を顧客の操作に「接続を確認しています」（`unconfirmed`）として渡す。「復旧を確認中」の Banner の文を、止めていない操作を「できません」と示さない文にした | SYS-1、SYS-2 | 復旧の確認の間、登録・更新・削除を止める案：`getMutationAvailability` の確定した仕様を変えるため採らなかった |
+
+### Patterns Integration Review の 2 回目（ブランチ `fix/pi-system2`）
+
+1 回目（`fix/pi-system`）で残した事項のうち、指示書 9.7、11.2〜11.4、11.7、12.5 に関わるものを直した。確定した仕様を変えた箇所の理由、影響、代替案は、各資料に記録した（onboarding.md、settings.md、permission-states.md、notifications.md、toast.md）。
+
+| 対象 | 変更（前 → 後） | 互換性 | 理由 |
+| --- | --- | --- | --- |
+| `access-decision.ts` の `Restriction`、`decideAccess`、`presentAction` | `unresolved` に省略可能な `missing` を追加。再確認中、再確認の失敗、`verified: false` の間、前の権限に含まれない権限が必要な操作の理由：`authorization` → `unresolved`（`missing` 付き）。`presentAction` は `missing` がある場合に認可と同じ規則で `hidden` と `disabled` を決める | 型は追加だけ。確認中の理由の `kind` と文が変わる（表示のモードは同じ）。確認済み（`ready`）の結果は変わらない | 新しいロールで許可される操作に、確認が終わるまで「権限が必要です」と示していた（PERM-6）。既存の型の値だけでは、表示のモードを保ったまま理由を変えられなかったため、`missing` を加えた |
+| プレビューの `CreateOrganizationSetup` | 独自の手順の表示（`setupStepsOf`、`moveTo`、「手順 n / m」）を `useStepFlow`、`Stepper`、`useFormState`、`handleSubmit`、`useUnsavedChanges`、`DiscardChangesAlert` に置き換えた。`setupStepsOf` は `StepDefinition` の配列を返す | props は同じ | 9.7（onboarding.md） |
+| プレビューの `useGettingStarted` | `results` に `null`（取得中）を、`resultsError`、`tasks`、`pending` を追加 | 既定は前と同じ | ONB-1、ONB-2、ONB-4。Registry には移していない（模擬の API と作業の定義に依存するプレビューの製品側の hook のため。onboarding.md の部品の表を直した。ONB-5） |
+| プレビューの `NotificationSettingsMatrix` | `onPermissionDenied` を追加。結果が不明な項目を自動で取得し直さない | 渡さない場合は権限を取り直さない | SET-6 |
+| プレビューの `requestNavigate`（`account-signed-in.tsx`） | `recheck` を追加し、結果を `"navigated" \| "cancelled" \| "blocked"` にした | 製品側のコードの内部 | NTF-3 |
+
+| 事項 | 変更 | 理由と影響 |
+| --- | --- | --- |
+| 統合の検証画面の Checklist | 製品のデータ（顧客、メンバー、処理の状況）から作業結果を作って渡す。画面のない作業（支払い方法、プロフィールの写真）を対象にしない。権限を確認できない間は Checklist を導かない | ONB-1、ONB-2。作成した直後の組織を App Shell の製品の画面に接続しないことは、プレビューの制約として記録した（ONB-3） |
+| 0 件と完了、サンプルの分離 | 変更なし。既存の検品で確かめた：`system-account-onboarding-logic.spec.ts` の `zero tasks…`、`invited member whose remaining tasks…`、`adding to the sample space…`、`sample data does not enter billing usage…`、`system-account-onboarding.spec.ts` の `sample data is not counted for billing…`、`after all tasks are done…`。統合の検証画面では `ONB-1` の検品で、閲覧者（0 件）に完了を示さないことを加えた | 11.4 |
+| タイムゾーンの正本 | 通知の設定は、個人の設定の `timezone` を使う | SET-4 |
+| 書き出しの開始できない理由 | `monitor.mutation("export").reason` ごとの文 | PERM-4 |
+| 権限の再確認中の新着 | `holdIncoming` で保留する | PERM-5 |
+| Authentication の例のセッション切れ | 保存の失敗をセッション切れとして扱うかを、セッションごとの `useScopeGuard` の Ticket で判断する（closure のセッションの ID を比べない） | AUTH-8。応答を待つ間に再認証した場合に、新しいセッションを再認証の画面に戻していた |
+| Toast の `select-none` | 変更なし。入力できる要素のフォーカスと入力を妨げないことを確かめ、検品を加えた | 12.5（toast.md） |
 
 ## 統合時に確認する事項
 
 Forms & Workflows と Data Analysis は、v0.1 の最終調整の時点（2026-11-27）では main に統合されていなかった（`origin/feat/forms-and-workflows-patterns` の `40df108`、`origin/feat/data-analysis-patterns` の `f5769d5`）。2 つのブランチは `git show` で読んだだけで、コードを持ち込んでいない（未統合の Patterns を再実装しない）。
 
-その後、2 つは main に統合された（PR #1 `ebb0f24`、PR #2 `215a9f4`）。このブランチには `b5ea769` で取り込んだ（「main への統合の前の検証」）。取り込みでは、共有ファイルの双方の変更を残しただけで、下の置き換えと接続は行っていない。次の事項は、Patterns Integration Review の横断の検品で確かめる。詳しくは各資料の「統合時に確認する事項」にある。
+その後、2 つは main に統合された（PR #1 `ebb0f24`、PR #2 `215a9f4`）。このブランチには `b5ea769` で取り込んだ（「main への統合の前の検証」）。取り込みでは、共有ファイルの双方の変更を残しただけで、下の置き換えと接続は行っていない。次の事項は、Patterns Integration Review の横断の検品で確かめる。詳しくは各資料の「統合時に確認する事項」にある。Patterns Integration Review（2026-11-28、ブランチ `fix/pi-system`）の時点の状況を、表の右の列に記録した。
 
-| 統合する Pattern | 確かめること |
-| --- | --- |
-| Unsaved Changes | ログアウト、アカウントとワークスペースの切り替え、設定のカテゴリの移動、通知からの移動、統合の検証画面の画面の移動の確認（現在はプレビューの `DiscardAlert`）を、Unsaved Changes の部品と文言に置き換える。ブラウザの戻る操作での確認は、現在は扱っていない |
-| Confirmation | ロールの変更、2 段階認証の無効化、ポリシーの保存とリセット、アカウントとワークスペースの削除の確認（現在は `AlertDialog`）を置き換える。再認証とログアウトに確認を出さない方針が、Confirmation の判断基準と一致するか |
-| Multi-step Workflow | 組織の作成（`CreateOrganizationSetup`）を置き換える。手順の見出しへのフォーカス、作成の要求の ID、結果の不明の確認を保つ |
-| Create & Edit、Form Layout | 認証のフォーム、設定の明示的な保存のフォーム、顧客の登録と編集の入力の検証と配置を合わせる |
-| Import & Export | 長時間の処理の一覧（`JobStatusList`）、Onboarding の「既存の顧客を取り込む」の完了の判定を、Import & Export の結果と照合する |
-| Data Analysis | 集計値と Chart で、閲覧できない対象を含めないこと、集計の取得の失敗と鮮度の表示を、その Pattern の資料にも記載する |
-| 世代の管理（Forms & Workflows） | Forms & Workflows の `useFormState`、`useInstantSave`、`ConfirmAction`、Bulk Actions は、hook ごとに `generation` の ref を持ち、スコープの変更を passive effect（`useEffect`）で反映する。`useScopeGuard` と責務（古い応答の無効化）が重なる。違い：`useScopeGuard` は commit の時点（layout effect）で世代を進め、描画の中の照合、Snapshot による開始の防止（`beginIfCurrent`）、別のインスタンスの Ticket の拒否、キーの記録の `release` を持つ。passive effect で世代を進める方式は、commit から effect までの間に届いた古い応答を受け付ける可能性がある（推測。未検証）。統合の後に比べ、共通化に価値がある部分（Snapshot と開始の防止）だけを共通化する。既存の `useBrowseData` と Bulk Actions は置き換えない |
-| 保存の分類（Forms & Workflows） | Settings の `classifySaveError` と、Forms & Workflows の `outcomeOf`（`save-modes.ts`）、`form-state.ts`、`confirm-action.tsx` の判定が重なる。分類できない例外の既定は、どちらも「結果の不明」にそろえた。Settings にある `forbidden`、`conflict`、`partial`、版の照合の扱いは Forms & Workflows にない（settings.md） |
-| Data Analysis の閲覧の制限 | `AnalysisRegion` は再取得の間に前の結果を残す。権限の再確認の間は、保護された指標と明細を `resolveContentAccess`（`whileUnverified`）で隠すか、製品が選ぶ。`useBrowseData` の `scopeKey` に認可の範囲を含める。Drill-down は、移動の直前に現在の認可で判断し直す（`access.latest()`、`beginIfCurrent`） |
-| Data Analysis と System States | 接続が回復した後の再取得（`lastOutage`）、部分的な障害の間の `AnalysisRegion` の表示、運用のダッシュボードの稼働の状態と `ServiceStatusReport` の値をそろえる |
-| 共有ファイル | `catalog.ts`、`package.json` の `test:patterns`、`build.sh`、README、`button.spec.ts`、`playwright.config.ts` は 3 つのブランチが変更している。双方の変更を残す |
+| 統合する Pattern | 確かめること | 状況（Patterns Integration Review、2026-11-28） |
+| --- | --- | --- |
+| Unsaved Changes | ログアウト、アカウントとワークスペースの切り替え、設定のカテゴリの移動、通知からの移動、統合の検証画面の画面の移動の確認（現在はプレビューの `DiscardAlert`）を、Unsaved Changes の部品と文言に置き換える。ブラウザの戻る操作での確認は、現在は扱っていない | 置き換えた。統合の検証画面（`account-app.tsx`、`account-signed-in.tsx`）と Settings の単独のプレビューは `UnsavedChangesProvider` を置き、設定の明示的な保存のフォームを `useUnsavedChanges` で登録する（`settings-parts.tsx` の `useSettingsFormUnsaved`）。ブラウザの戻る・進む（`hashchange`）も確認する。Dialog と Sheet の中の破棄の確認（招待、顧客の登録、通知の設定の例、Authentication の例）は `DiscardChangesAlert` に置き換えた。結果が不明な入力の文は、製品の `labels.description`（`describeUnsavedSettings`）で変える |
+| Confirmation | ロールの変更、2 段階認証の無効化、ポリシーの保存とリセット、アカウントとワークスペースの削除の確認（現在は `AlertDialog`）を置き換える。再認証とログアウトに確認を出さない方針が、Confirmation の判断基準と一致するか | 未実施。`AlertDialog` のまま（`confirm-action.tsx` は別の担当が並行して変更しているため、現在の API の確定を待つ） |
+| Multi-step Workflow | 組織の作成（`CreateOrganizationSetup`）を置き換える。手順の見出しへのフォーカス、作成の要求の ID、結果の不明の確認を保つ | 置き換えた（2 回目の `fix/pi-system2`。onboarding.md の「統合時に確認する事項」） |
+| Create & Edit、Form Layout | 認証のフォーム、設定の明示的な保存のフォーム、顧客の登録と編集の入力の検証と配置を合わせる | 未実施 |
+| Import & Export | 長時間の処理の一覧（`JobStatusList`）、Onboarding の「既存の顧客を取り込む」の完了の判定を、Import & Export の結果と照合する | 未実施 |
+| Data Analysis | 集計値と Chart で、閲覧できない対象を含めないこと、集計の取得の失敗と鮮度の表示を、その Pattern の資料にも記載する | この担当の範囲外（Data Analysis の担当が確かめる） |
+| 世代の管理（Forms & Workflows） | Forms & Workflows の `useFormState`、`useInstantSave`、`ConfirmAction`、Bulk Actions は、hook ごとに `generation` の ref を持ち、スコープの変更を passive effect（`useEffect`）で反映する。`useScopeGuard` と責務（古い応答の無効化）が重なる。違い：`useScopeGuard` は commit の時点（layout effect）で世代を進め、描画の中の照合、Snapshot による開始の防止（`beginIfCurrent`）、別のインスタンスの Ticket の拒否、キーの記録の `release` を持つ。passive effect で世代を進める方式は、commit から effect までの間に届いた古い応答を受け付ける可能性がある（推測。未検証）。統合の後に比べ、共通化に価値がある部分（Snapshot と開始の防止）だけを共通化する。既存の `useBrowseData` と Bulk Actions は置き換えない | `38174eb`（共通の hook の修正）で、`useFormState`、`useInstantSave` などをスコープと組にした状態と commit の時点の ref に直した。この資料の範囲では再確認していない |
+| 保存の分類（Forms & Workflows） | Settings の `classifySaveError` と、Forms & Workflows の `outcomeOf`（`save-modes.ts`）、`form-state.ts`、`confirm-action.tsx` の判定が重なる。分類できない例外の既定は、どちらも「結果の不明」にそろえた。Settings にある `forbidden`、`conflict`、`partial`、版の照合の扱いは Forms & Workflows にない（settings.md） | 未実施（変更なし） |
+| Data Analysis の閲覧の制限 | `AnalysisRegion` は再取得の間に前の結果を残す。権限の再確認の間は、保護された指標と明細を `resolveContentAccess`（`whileUnverified`）で隠すか、製品が選ぶ。`useBrowseData` の `scopeKey` に認可の範囲を含める。Drill-down は、移動の直前に現在の認可で判断し直す（`access.latest()`、`beginIfCurrent`） | この担当の範囲外 |
+| Data Analysis と System States | 接続が回復した後の再取得（`lastOutage`）、部分的な障害の間の `AnalysisRegion` の表示、運用のダッシュボードの稼働の状態と `ServiceStatusReport` の値をそろえる | この担当の範囲外。統合の検証画面のお知らせは、`lastOutage.seq` の変化で取得し直すようにした（SYS-3） |
+| 共有ファイル | `catalog.ts`、`package.json` の `test:patterns`、`build.sh`、README、`button.spec.ts`、`playwright.config.ts` は 3 つのブランチが変更している。双方の変更を残す | 変更なし |
 
 ## 検品
 
@@ -422,7 +482,7 @@ v0.1 の最終調整の後、別のエージェント（Opus）が、実装者�
 | Next.js（App Router）での導入 | 未検証（Registry & Gallery の課題）。`"use client"` の境界を規則で確かめ、純粋な関数のファイルが hook を使わないことを確かめている |
 | Concurrent Rendering の破棄された描画 | `useScopeGuard`、`useAccess`、Settings の hook は、検品用の画面の中断された transition で確かめた。ほかの hook とプレビューの部品は、コードを読んだ範囲で直しており、破棄された描画の検品はない。追加の検品は Patterns Integration Review へ引き継ぐ |
 | 実際の認証・認可・通知の配信の基盤 | 模擬のサーバーだけで確かめている |
-| Forms & Workflows、Data Analysis との統合 | main の取り込み（`b5ea769`）と全件の検品は行った。部品の置き換え、接続、共通の hook（`useScopeGuard`、`useInstantSave`、Settings の保存の hook）の責務の整理は、Patterns Integration Review へ引き継ぐ（「統合時に確認する事項」） |
-| 図 | 図（System States の offline-recovery）に、接続の未確認（`unknown`）の状態を加えていない。Patterns Integration Review へ引き継ぐ |
+| Forms & Workflows、Data Analysis との統合 | main の取り込み（`b5ea769`）と全件の検品は行った。Patterns Integration Review で Unsaved Changes を接続した。Confirmation、Multi-step Workflow、Create & Edit、Import & Export の置き換えと、共通の hook の責務の整理は未実施（「統合時に確認する事項」の状況の列） |
+| 図 | Patterns Integration Review で、System States の offline-recovery に、接続の未確認（`unknown`）、疎通の確認がない場合の経路、`offline` の `reason`、製品が管理する「復旧を確認中」を加えた（DOC-1。`scripts/diagrams/sa_system.py` から再生成） |
 | 残りの時間依存の検品 | Data Browsing の IME（600ms）と Skeleton（300ms）の固定の待機（「時間に依存する検品」）。Patterns Integration Review へ引き継ぐ |
 | 検品の環境 | Node.js の LTS の版での確認、同じ worktree の中で並行する Vite のサーバーの `cacheDir` の分離。Registry & Gallery の課題 |

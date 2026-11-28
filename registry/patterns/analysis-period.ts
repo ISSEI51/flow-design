@@ -770,9 +770,13 @@ function comparisonRangeRaw({ period, mode, custom, basis: basisArg, context, bu
     }
     case "weekday": {
       // 曜日をそろえる：暦でずらした日数に最も近い 7 の倍数だけずらす（前年同期は 364 日）。
-      let shift = months ? Math.round(differenceInCalendarDays(from.date, range.from) / 7) * 7 : -Math.ceil(days / 7) * 7
+      const calendarShift = differenceInCalendarDays(from.date, range.from)
+      let shift = months ? Math.round(calendarShift / 7) * 7 : -Math.ceil(days / 7) * 7
       // 分析の対象と重なる場合（31 日間の前月など）は、重ならなくなるまでさらに 7 日ずつ前にずらす
       while (addDays(range.to, shift).getTime() >= range.from.getTime()) shift -= 7
+      // 暦でずらした日数より 7 日を超えて前にずらす場合（85 日間の期間の前月を 91 日前にする、など）は、
+      // 前月・前四半期・前年同期の比較ではなくなる。比較の意味を変えず、重なりとして比較できないことにする
+      if (months && -shift > -calendarShift + 7) return { status: "invalid", reason: "overlap" }
       const r = { from: addDays(range.from, shift), to: addDays(range.to, shift) }
       return ready({ mode, basis, range: r, alignment: "shifted", note: `曜日をそろえるため、${-shift} 日前の期間と比べます` })
     }
@@ -811,6 +815,19 @@ function comparisonRangeRaw({ period, mode, custom, basis: basisArg, context, bu
       const cap = unitEnd ? zonedStartOfDay(toDateString(addDays(unitEnd, 1)), tz) : Infinity
       const bEnd = Math.min(bStart + elapsed, cap)
       const truncated = bEnd < bStart + elapsed
+      // 集計済みの時刻が分析の対象の始まり以前（経過時間が 0）の場合は、比べる時間がない。長さ 0 の区間どうしを公平な比較としない
+      if (elapsed === 0) {
+        return ready({
+          mode,
+          basis,
+          range: { from: from.date, to: from.date },
+          alignment: "same-elapsed",
+          fair: false,
+          reason: "集計済みの時刻が分析の対象の始まり以前のため、比べる経過時間がありません",
+          instant: { start: bStart, end: bStart },
+          note: `${isoWithOffset(bStart, tz)} から ${isoWithOffset(bStart, tz)} まで（経過時間 0）`,
+        })
+      }
       // 終了の時刻を含む日（半開区間の終わりが 0 時ちょうどなら、その前日）
       const lastDay = (() => {
         const iso = isoWithOffset(bEnd - 1, tz).slice(0, 10)
@@ -870,13 +887,23 @@ function comparisonRangeRaw({ period, mode, custom, basis: basisArg, context, bu
       }
       const to = shiftMonthsClamped(range.to, -months)
       const adjusted = from.clamped || to.clamped
+      // 月をずらした期間は、月末に合わせた場合や月末をまたぐ場合に日数が変わる（3/1〜3/30 の前月は 2/1〜2/28）。
+      // 期間の合計の指標を日数の異なる期間と比べると、日数の差が増減に含まれるため、公平な比較としない。
+      // 時点の指標（point-in-time）は上の分岐で扱い、この判定の対象にしない。
+      const r = { from: from.date, to: to.date }
+      const d = periodDays(r)
+      const sameLength = d === days
+      const adjustNote = adjusted ? `${formatDate(range.to)} に対応する日がないため、${formatDate(to.date)} までと比べます` : null
       return ready({
         mode,
         basis,
-        range: { from: from.date, to: to.date },
+        range: r,
         alignment: "shifted",
         adjusted,
-        note: adjusted ? `${formatDate(range.to)} に対応する日がないため、${formatDate(to.date)} までと比べます` : null,
+        truncated: d < days,
+        fair: sameLength,
+        reason: sameLength ? null : `比較期間と分析の対象の日数が異なります（分析の対象は ${days} 日間、比較期間は ${d} 日間）`,
+        note: sameLength ? adjustNote : [adjustNote, `比較期間は ${d} 日間です（分析の対象は ${days} 日間）`].filter(Boolean).join("。"),
       })
     }
   }
@@ -981,10 +1008,11 @@ function alignBuckets(
       seen.set(id, n)
       return calendarKey(b, first, n)
     }
-    // 経過：時間別は期間の始まりからの実際の時間（分）、週は何週目、日以上は暦の日の差
-    if (b.hour !== null && b.start !== null && first.start !== null) return `t${Math.round((b.start - first.start) / 60000)}`
-    if (b.fullLabel.endsWith("の週")) return `w${i}`
-    if (/年\d+月$|Q\d$|年度?$/.test(b.fullLabel)) return `u${i}`
+    // 経過：時間別は期間の始まりからの実際の時間（分）、週は何週目、月以上は何番目、日は暦の日の差。
+    // 単位は区間の granularity で判定する（表示の名前 fullLabel から推測しない。名前はロケールや製品で変わりうる）
+    if (b.granularity === "hour" && b.start !== null && first.start !== null) return `t${Math.round((b.start - first.start) / 60000)}`
+    if (b.granularity === "week") return `w${i}`
+    if (b.granularity === "month" || b.granularity === "quarter" || b.granularity === "year") return `u${i}`
     return `d${differenceInCalendarDays(b.from, first.from)}`
   }
   const rows = new Map<string, AlignedRow>()

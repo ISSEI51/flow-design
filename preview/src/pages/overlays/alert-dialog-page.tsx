@@ -151,7 +151,7 @@ function SaveWithoutConfirm() {
   const [saved, setSaved] = useState(false)
   return (
     <div className="flex flex-wrap items-center gap-4">
-      <Button onClick={() => setSaved(true)}>変更を保存</Button>
+      <Button onClick={() => setSaved(true)}>保存する</Button>
       <p role="status" className="text-ui text-muted-foreground">
         {saved ? "保存しました" : ""}
       </p>
@@ -220,7 +220,7 @@ export function AlertDialogPage() {
         <Compare
           bad={
             <ConfirmExample
-              trigger="変更を保存"
+              trigger="保存する"
               triggerVariant="secondary"
               title="保存しますか？"
               cancel="キャンセル"

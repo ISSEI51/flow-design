@@ -8,6 +8,7 @@ import { useBrowseData } from "@/patterns/browse-data"
 import { NotificationIndicator } from "@/patterns/notification-indicator"
 import { describeDelivery, formatAbsoluteTime, getUnreadIndicator, notificationTriggerLabel } from "@/patterns/notification-state"
 import { useScopeGuard } from "@/patterns/scope-guard"
+import { DiscardChangesAlert } from "@/patterns/unsaved-changes"
 
 import { channelLabels, referenceNow, seedNotifications, users, workspaces, type Channel, type UserId, type WorkspaceId } from "../../data/system-account/model"
 import { notificationsApi, notificationsServer, type AppNotification } from "../../data/system-account/notifications-server"
@@ -15,7 +16,6 @@ import { Compare, Row, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
 import { DemoControls, DemoFrame, Mock, Radio, Rules } from "../data-browsing/doc-parts"
-import { DiscardAlert } from "../overlays/discard-alert"
 import {
   NotificationHeaderCenter,
   NotificationInbox,
@@ -474,9 +474,9 @@ function NavigationDemo() {
           </TargetScreen>
         </AppFrame>
       </div>
-      <DiscardAlert
+      <DiscardChangesAlert
         open={discard}
-        testId="ntf-discard"
+        data-testid="ntf-discard"
         onOpenChange={(o) => {
           setDiscard(o)
           if (!o && decide.current) {
@@ -581,7 +581,7 @@ function LifecycleDemo() {
             ))}
           </DemoControls>
           <Button variant="outline" size="sm" onClick={data.reload} loading={data.status === "refreshing"}>
-            最新の状態を取得する
+            最新の情報に更新
           </Button>
         </div>
         {item ? (

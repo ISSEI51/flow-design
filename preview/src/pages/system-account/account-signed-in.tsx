@@ -27,7 +27,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useToast } from "@/components/ui/toast"
-import { decideAccess } from "@/patterns/access"
+import { decideAccess, restrictionText, unverifiedStatus } from "@/patterns/access"
 import { AccessState } from "@/patterns/access-state"
 import { AppShell, AppShellBody, AppShellHeader, AppShellMain } from "@/patterns/app-shell"
 import { useBrowseData } from "@/patterns/browse-data"
@@ -36,22 +36,25 @@ import { PageLayout } from "@/patterns/page-layout"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { useScopeGuard } from "@/patterns/scope-guard"
 import { SidebarNav, SidebarNavItem, type NavGroup } from "@/patterns/sidebar-nav"
+import { UnsavedChangesProvider, useNavigationGuard } from "@/patterns/unsaved-changes"
 
-import { membershipOf, roles, users, workspaces, workspacesOf, type OnboardingTaskId, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
+import { membershipOf, roles, users, workspacesOf, type OnboardingTaskId, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
+import { onboardingTaskDefinitions } from "../../data/system-account/onboarding-data"
 import { onboardingApi } from "../../data/system-account/onboarding-server"
 import { notificationsApi } from "../../data/system-account/notifications-server"
 import { scopeKeyOf } from "../../data/system-account/permission-data"
 import { permissionServer } from "../../data/system-account/permission-server"
-import { settingsApi } from "../../data/system-account/settings-server"
+import { orgNameOf, settingsApi } from "../../data/system-account/settings-server"
+import { systemServer } from "../../data/system-account/system-server"
 import { ProductMark } from "../app-structure/structure-sidebar"
-import { DiscardAlert } from "../overlays/discard-alert"
 import { accountHref, pagePermission, type AccountPage, type AccountRoute } from "./account-route"
 import { AccountVerifyPanel } from "./account-verify"
 import { NotificationHeaderCenter, NotificationInbox, NotificationSettingsMatrix, useMockNotificationFeed, type BrowserPermission, type OnNavigate } from "./notification-screens"
 import { GettingStartedConnected, useGettingStarted } from "./onboarding-screens"
 import { contactText, CustomerEditor, RestrictedOperations, RoleManagement, usePermissionAccess, type OperationConditions, type PermissionAccess } from "./permission-screens"
+import { describeUnsavedSettings, useOrgSettingsVersion } from "./settings-parts"
 import { SettingsArea, type SettingsCategoryId } from "./settings-screens"
-import { BackgroundJobsPanel, StatusPageExample, SystemBannerArea, type SystemMonitor } from "./system-screens"
+import { BackgroundJobsPanel, mutationReason, StatusPageExample, SystemBannerArea, useConnectedApi, type SystemMonitor } from "./system-screens"
 
 // System & Account の統合の検証画面のうち、ログインした後の製品の画面（製品側のコード）。正式な Pages の実装ではない。
 //
@@ -61,17 +64,44 @@ import { BackgroundJobsPanel, StatusPageExample, SystemBannerArea, type SystemMo
 //   前のスコープのデータ、選択、未保存の入力、非同期の結果を表示しない。Toast も閉じる（別のスコープへの誤操作を防ぐ）。
 // - 所属していないワークスペースの URL を信頼しない（canEnterWorkspace。呼び出し側で確かめる）。
 
+// 接続を確認できない間は送らない登録・更新・削除（useConnectedApi）
+const settingsMutations = [
+  "saveDisplay",
+  "saveDisplayBatch",
+  "saveProfile",
+  "changePassword",
+  "setGoogle",
+  "scheduleAccountDeletion",
+  "saveOrgInfo",
+  "saveSecurity",
+  "scheduleWorkspaceDeletion",
+  "invite",
+] as const satisfies readonly (keyof typeof settingsApi)[]
+const notificationMutations = ["updateRead", "markAllRead", "remove", "saveSetting"] as const satisfies readonly (keyof typeof notificationsApi)[]
+
 const settingsCategoryIds: SettingsCategoryId[] = ["profile", "display", "notifications", "security", "organization", "members"]
 const asCategory = (v: string | null): SettingsCategoryId | null => (settingsCategoryIds.includes(v as SettingsCategoryId) ? (v as SettingsCategoryId) : null)
 
-/** Checklist の作業を開く画面（製品のルーター）。開くだけで、作業を完了にはしない */
+/**
+ * Checklist の作業を開く画面（製品のルーター）。開くだけで、作業を完了にはしない。
+ * この検証画面には、支払い方法の登録の画面と、プロフィールの写真の設定がない。これらの作業は対象にしない（accountTasks）。
+ */
 const taskRoute: Partial<Record<OnboardingTaskId, Partial<AccountRoute>>> = {
   "first-customer": { page: "customers" },
   "import-customers": { page: "jobs" },
   "invite-members": { page: "members" },
-  "set-billing": { page: "settings", cat: "organization" },
-  "complete-profile": { page: "settings", cat: "profile" },
 }
+
+/** この検証画面の Checklist の作業。作業の画面（taskRoute）と、完了を判定する製品のデータがある作業だけ */
+const accountTasks = onboardingTaskDefinitions.filter((t) => t.id in taskRoute)
+
+/** 権限を確定できない間は、前の権限から Checklist の対象を導かない（ONB-1） */
+const checklistPendingText = {
+  loading: "権限を確認しています。",
+  error: "権限を確認できませんでした。確認できるまで、利用開始の準備を表示しません。",
+  refreshing: "最新の権限を確認しています。確認できるまで、利用開始の準備を表示しません。",
+  stale: "最新の権限を確認できませんでした。確認できるまで、利用開始の準備を表示しません。",
+} as const
 
 const navLabels: Record<AccountPage, string> = {
   home: "ホーム",
@@ -84,6 +114,12 @@ const navLabels: Record<AccountPage, string> = {
   status: "稼働状況",
 }
 
+/**
+ * 製品のルーターの外からの移動（ブラウザの戻る・進む、アドレスバーの URL の変更）の確認。
+ * proceed を、未保存の変更がなければすぐに呼んで true を返す。あれば確認を開いて false を返し、許可されたら proceed を呼ぶ
+ */
+export type NavigationBlocker = (proceed: () => void, options?: { onCancel?: () => void }) => boolean
+
 export type SignedInAppProps = {
   userId: UserId
   route: AccountRoute & { ws: WorkspaceId }
@@ -91,17 +127,40 @@ export type SignedInAppProps = {
   /** URL を変える（製品のルーター）。未保存の変更の確認は、この部品が済ませてから呼ぶ */
   onRouteChange: (route: Partial<AccountRoute>) => void
   onSignOut: () => void
-  onExpireSession: () => void
+  /**
+   * セッションの有効期限を切る（検証用の操作）。確認を挟まずに呼ぶ（セッション切れは利用者の操作ではないため、遅らせない）。
+   * discardedInput：保存していない入力（未保存の変更、保存の結果を確認していない入力）があった
+   */
+  onExpireSession: (info: { discardedInput: boolean }) => void
+  /** ブラウザの戻る・進むの確認を、製品のルーター（account-app.tsx の hashchange）に渡す。アンマウントで null にする */
+  onBlockerChange?: (blocker: NavigationBlocker | null) => void
 }
 
-export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, onExpireSession }: SignedInAppProps) {
+/**
+ * 移動の前の未保存の変更の確認は、Unsaved Changes（Forms & Workflows）の部品で行う。設定の明示的な保存のフォームが
+ * useSettingsFormUnsaved で登録し、Sidebar、アカウントメニュー、通知からの移動、ブラウザの戻る・進むが confirmNavigation を通る。
+ * beforeunload（再読み込み、タブを閉じる）も、未保存の変更がある間だけ登録される。
+ */
+export function SignedInApp(props: SignedInAppProps) {
+  return (
+    <UnsavedChangesProvider labels={{ description: describeUnsavedSettings }}>
+      <SignedInAppContent {...props} />
+    </UnsavedChangesProvider>
+  )
+}
+
+function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, onExpireSession, onBlockerChange }: SignedInAppProps) {
   const ws = route.ws
+  // 組織名は Settings の模擬のサーバーの正本から読む。組織の設定を保存したら、Header と Sidebar の組織名を描画し直す
+  useOrgSettingsVersion()
   const scope = useMemo(() => ({ userId, workspaceId: ws }), [userId, ws])
   const { access, revision, notice } = usePermissionAccess({ scope, api: permissionServer.api })
   // 表示と各部品のスコープに使う権限。確定していない間は空（許可しない）。再確認中は前の確定した権限で表示を決める。
   const grants = access.grants && access.grants.scope === scopeKeyOf(scope) ? access.grants : null
   const permissions: readonly Permission[] = useMemo(() => grants?.permissions ?? [], [grants])
   const permissionKey = [...permissions].sort().join(",")
+  // 最新の権限を確認していない（取得中、再確認中、失敗）
+  const permissionUnverified = access.status !== "ready" || unverifiedStatus(access) !== null
 
   // ワークスペースや権限が変わったら、表示中の Toast を閉じる（前のスコープの「元に戻す」などを押させない）
   const { toasts, dismiss } = useToast()
@@ -111,46 +170,85 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
     for (const t of toastsRef.current) dismiss(t.id)
   }, [ws, permissionKey, dismiss])
 
-  // 未保存の変更（設定の明示的な保存のフォーム）。画面の外への移動の前に確認する。
-  const [dirty, setDirty] = useState(false)
-  const [pendingNav, setPendingNav] = useState<{ next: Partial<AccountRoute> | "sign-out"; resolve: (ok: boolean) => void; returnFocus?: () => void } | null>(null)
+  // 未保存の変更（設定の明示的な保存のフォーム）。移動の前に Unsaved Changes の確認を通す
+  const guard = useNavigationGuard()
+  const { confirmNavigation } = guard
   const requestNavigate = useCallback(
-    (next: Partial<AccountRoute> | "sign-out", options: { beforeConfirm?: () => void; returnFocus?: () => void } = {}) =>
-      new Promise<boolean>((resolve) => {
-        const leaving = next === "sign-out" || next.page !== "settings"
-        if (dirty && leaving) {
-          options.beforeConfirm?.()
-          setPendingNav({ next, resolve, returnFocus: options.returnFocus })
-          return
+    (
+      next: Partial<AccountRoute> | "sign-out",
+      options: {
+        beforeConfirm?: () => void
+        returnFocus?: () => void
+        /** 移動の直前（未保存の変更の確認を閉じた後を含む）に、移動してよいかを判断し直す。false なら移動しない */
+        recheck?: () => boolean
+      } = {}
+    ) =>
+      new Promise<"navigated" | "cancelled" | "blocked">((resolve) => {
+        const proceed = () => {
+          // 確認の Dialog を開いている間に権限が変わることがあるため、Dialog を閉じた時点で判断し直す（NTF-3）
+          if (options.recheck && !options.recheck()) {
+            resolve("blocked")
+            return
+          }
+          if (next === "sign-out") onSignOut()
+          else onRouteChange(next)
+          resolve("navigated")
         }
-        if (next === "sign-out") onSignOut()
-        else onRouteChange(next)
-        resolve(true)
+        const proceeded = confirmNavigation(proceed, {
+          onCancel: () => {
+            resolve("cancelled")
+            // Alert Dialog がフォーカスを戻し終わった後に移す
+            if (options.returnFocus) window.setTimeout(options.returnFocus, 0)
+          },
+        })
+        // 確認の Dialog の前に閉じる Overlay（通知センター）。同じ処理の中で閉じるため、確認の Dialog と同時には開かない
+        if (!proceeded) options.beforeConfirm?.()
       }),
-    [dirty, onRouteChange, onSignOut]
+    [confirmNavigation, onRouteChange, onSignOut]
   )
   const go = (next: Partial<AccountRoute>) => void requestNavigate({ ws, ...next })
+  // ブラウザの戻る・進むも、同じ確認を通す
+  const blockerRef = useRef(onBlockerChange)
   useEffect(() => {
-    if (route.page !== "settings") setDirty(false)
-  }, [route.page])
+    blockerRef.current = onBlockerChange
+  })
+  useEffect(() => {
+    const register = blockerRef.current
+    register?.(confirmNavigation)
+    return () => register?.(null)
+  }, [confirmNavigation])
+  // セッション切れは確認せずに進める。保存していない入力があったかだけを、再認証の画面に渡す
+  const hasPendingInput = guard.hasUnsavedChanges || guard.saving
+  const expireSession = () => onExpireSession({ discardedInput: hasPendingInput })
 
   // お知らせ（Header の通知センターと専用のページで 1 つの状態を共有する）。専用のページの表示中は、新着を保留する。
   // 通知センターを開いている間と専用のページの表示中は、新着を保留する（閲覧の位置とフォーカスを動かさない）
   const [centerOpen, setCenterOpen] = useState(false)
+  // 業務の要求を接続の監視とつなぐ。接続を確認できない間は、既読の更新と設定の保存を送らない（SYS-3）
+  const connectedNotificationsApi = useConnectedApi(notificationsApi, monitor, notificationMutations)
   const feed = useMockNotificationFeed({
+    api: connectedNotificationsApi,
     userId,
     workspaceId: ws,
     scopeVersion: permissionKey,
-    holdIncoming: centerOpen || route.page === "notifications",
+    // 権限の再確認中は、新着を一覧に加えない（前の権限のスコープの購読から届いた通知を、確認が終わる前に表示しない。PERM-5）。
+    // 確認の結果、権限が変われば scopeVersion が変わり、保留した新着ごと取得し直す。変わらなければ「新着を表示」で表示できる
+    holdIncoming: centerOpen || route.page === "notifications" || permissionUnverified,
     subscriberLabel: "account-app",
   })
   useEffect(() => setCenterOpen(false), [ws])
+  // 接続が回復したら（切断の後に online）、お知らせを取得し直す。結果が不明な既読の更新は再実行しない（取得だけを再開する）
+  const outageSeq = monitor.connectivity.lastOutage?.seq ?? 0
+  const { reload: reloadFeed } = feed
+  useEffect(() => {
+    if (outageSeq > 0) reloadFeed()
+  }, [outageSeq, reloadFeed])
   // 通知から移動する処理は、開始したワークスペースと権限のスコープでだけ続ける。確認の応答を待つ間に切り替えたら、移動しない
   const navigationGuard = useScopeGuard(`${userId}:${ws}:${permissionKey}`)
   const onNotificationNavigate: OnNavigate = async (target, { workspaceId }) => {
     const ticket = navigationGuard.begin("navigate")
     // 通知のリンクを認可済みとして信頼しない。対象の存在と閲覧の権限を、移動の前に確かめる。
-    const check = await notificationsApi.resolveTarget({ userId, workspaceId }, target, { signal: ticket.signal })
+    const check = await connectedNotificationsApi.resolveTarget({ userId, workspaceId }, target, { signal: ticket.signal })
     const current = navigationGuard.isLatest(ticket)
     navigationGuard.release(ticket)
     if (!current) return { status: "cancelled" }
@@ -161,19 +259,30 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
     const needed = pagePermission[next.page as AccountPage]
     // クリックした時点ではなく、確認の応答の後の最新の権限で判断する（再確認中は許可しない）。
     // access.latest() は commit した時点の値で照合する。変更の知らせを受けた処理の中で reload() を呼んだ後は、確認済みの権限を返さない
-    if (needed && !decideAccess(access.latest(), { permissions: [needed] }).allowed) {
-      return { status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" }
-    }
-    const ok = await requestNavigate(
+    const decide = () => (needed ? decideAccess(access.latest(), { permissions: [needed] }) : null)
+    const blockedResult = (decision: NonNullable<ReturnType<typeof decide>>) =>
+      // 権限を確認している間（再確認中、確認の失敗）は、権限がないとは示さず、通知を既読にしない（NTF-1）
+      !decision.allowed && decision.reason.kind === "unresolved"
+        ? ({ status: "unavailable", reason: "unresolved", message: `${restrictionText(decision.reason)}。確認できてから、もう一度開いてください。` } as const)
+        : ({ status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" } as const)
+    const decision = decide()
+    if (decision && !decision.allowed) return blockedResult(decision)
+    const result = await requestNavigate(
       { ws: workspaceId as WorkspaceId, ...next },
       {
         // 確認の Dialog の前に通知センターを閉じる（モバイルの通知センターはモーダルの Sheet で、外の Dialog を操作できなくなるため）
         beforeConfirm: () => setCenterOpen(false),
         // 取りやめた場合は、通知センターを開くボタンへフォーカスを戻す（押した通知は閉じた通知センターの中にあり、戻せない）
         returnFocus: () => document.querySelector<HTMLElement>("[data-testid=ntf-trigger]")?.focus(),
+        // 未保存の変更の確認を閉じた後の移動も、その時点の最新の権限で判断し直す（NTF-3）
+        recheck: () => decide()?.allowed !== false,
       }
     )
-    return ok ? { status: "navigated" } : { status: "cancelled" }
+    if (result === "blocked") {
+      const latest = decide()
+      return latest && !latest.allowed ? blockedResult(latest) : { status: "cancelled" }
+    }
+    return result === "navigated" ? { status: "navigated" } : { status: "cancelled" }
   }
 
   const page = (pagePermissionKnown(route.page) ? route.page : null) as AccountPage | null
@@ -204,7 +313,15 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
     )
   } else if (decision && !decision.allowed && decision.reason.kind === "unresolved" && decision.reason.status === "loading") {
     body = <PageFrame title={navLabels[page]} busy="権限を確認しています" />
-  } else if (decision && !decision.allowed && decision.reason.kind === "unresolved" && decision.reason.status === "error") {
+  } else if (decision && !decision.allowed && decision.reason.kind === "unresolved" && decision.reason.status === "refreshing" && decision.reason.missing?.length) {
+    // 前の権限では開けなかったページ。新しい権限で開ける可能性があるため「権限がない」とは示さず、確認が終わるまで内容を描画しない（PERM-6）
+    body = <PageFrame title={navLabels[page]} busy="最新の権限を確認しています" />
+  } else if (
+    decision &&
+    !decision.allowed &&
+    decision.reason.kind === "unresolved" &&
+    (decision.reason.status === "error" || (decision.reason.status === "stale" && decision.reason.missing?.length))
+  ) {
     body = (
       <PageFrame title={navLabels[page]}>
         <DataRegionError title="権限を確認できませんでした" description="表示できる内容を確かめられないため、表示していません。" onRetry={access.reload} />
@@ -235,9 +352,9 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
         permissions={permissions}
         monitor={monitor}
         feed={feed}
+        notificationsApi={connectedNotificationsApi}
         onNavigate={onNotificationNavigate}
         go={go}
-        onDirtyChange={setDirty}
       />
     )
   }
@@ -266,7 +383,7 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
             <span className="truncate">Flow 営業管理</span>
           </span>
           <span className="hidden min-w-0 truncate text-ui text-muted-foreground md:inline" data-testid="acct-workspace">
-            {workspaces[ws].name}
+            {orgNameOf(ws)}
           </span>
           <div className="ml-auto flex items-center">
             <NotificationHeaderCenter
@@ -296,30 +413,10 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
         <AppShellMain pageKey={`${ws}:${route.page}:${route.id ?? ""}:${route.page === "settings" ? "" : route.cat ?? ""}`} data-testid="acct-main">
           {body}
           <div className="px-4 pb-16 md:px-6">
-            <AccountVerifyPanel phase="app" start="signin" onStartChange={() => undefined} signedIn={{ userId, workspaceId: ws }} onExpireSession={onExpireSession} />
+            <AccountVerifyPanel phase="app" start="signin" onStartChange={() => undefined} signedIn={{ userId, workspaceId: ws }} onExpireSession={expireSession} />
           </div>
         </AppShellMain>
       </AppShellBody>
-      <DiscardAlert
-        open={pendingNav !== null}
-        onOpenChange={(open) => {
-          if (open || !pendingNav) return
-          pendingNav.resolve(false)
-          setPendingNav(null)
-          // Alert Dialog がフォーカスを戻し終わった後に移す
-          if (pendingNav.returnFocus) window.setTimeout(pendingNav.returnFocus, 0)
-        }}
-        onDiscard={() => {
-          if (!pendingNav) return
-          const { next, resolve } = pendingNav
-          setPendingNav(null)
-          setDirty(false)
-          if (next === "sign-out") onSignOut()
-          else onRouteChange(next)
-          resolve(true)
-        }}
-        testId="acct-discard"
-      />
     </AppShell>
   )
 }
@@ -359,13 +456,14 @@ type PageBodyProps = {
   permissions: readonly Permission[]
   monitor: SystemMonitor
   feed: ReturnType<typeof useMockNotificationFeed>
+  /** 接続の監視とつないだお知らせの API */
+  notificationsApi: typeof notificationsApi
   onNavigate: OnNavigate
   go: (next: Partial<AccountRoute>) => void
-  onDirtyChange: (dirty: boolean) => void
 }
 
 function PageBody(props: PageBodyProps) {
-  const { page, route, userId, scope, access, revision, monitor, feed, onNavigate, go, onDirtyChange } = props
+  const { page, route, userId, scope, access, revision, monitor, feed, onNavigate, go } = props
   const ws = route.ws
   switch (page) {
     case "home":
@@ -406,7 +504,7 @@ function PageBody(props: PageBodyProps) {
         </PageLayout>
       )
     case "settings":
-      return <SettingsPage {...props} onDirtyChange={onDirtyChange} />
+      return <SettingsPage {...props} />
     case "members":
       return (
         <PageFrame title="メンバーと権限" description="ロールの名前だけでなく、ロールごとに実際にできる操作を示します。">
@@ -424,7 +522,8 @@ function PageBody(props: PageBodyProps) {
           <BackgroundJobsPanel
             monitor={monitor}
             workspace={ws}
-            unavailableReason={!canExport ? exportBlockedText(access) : !mutation.allowed ? "接続とサービスの状態を確かめるまで、開始できません。" : undefined}
+            // 接続とサービスの状態は、理由ごとの文にする（オフライン、接続の確認中、障害、メンテナンスを 1 つの文にしない。PERM-4）
+            unavailableReason={!canExport ? exportBlockedText(access) : !mutation.allowed ? mutationReason(mutation.reason, "書き出しを開始") : undefined}
             canStart={canStart}
           />
         </PageFrame>
@@ -442,11 +541,14 @@ function PageBody(props: PageBodyProps) {
 // ---------------------------------------------------------------- 監視の状態を、操作の条件に分ける
 // 接続（オフライン、未確認）と、サービスの状態（障害、メンテナンス）を区別する。障害を「オフライン」と示さない。
 
-/** 接続の状態。unknown（確認していない）は unconfirmed として渡し、確認済みの online と区別する（操作は許可しない） */
+/**
+ * 接続の状態。unknown（確認していない）と connecting（再接続の確認中）は unconfirmed として渡し、確認済みの online と区別する
+ * （操作は許可しない）。connecting を「オフライン」と示さない（Banner は「再接続しています」と示すため。SYS-1）
+ */
 function connectivityOf(monitor: SystemMonitor): "online" | "offline" | "unconfirmed" {
   const status = monitor.connectivity.status
   if (status === "online") return "online"
-  if (status === "unknown") return "unconfirmed"
+  if (status === "unknown" || status === "connecting") return "unconfirmed"
   return "offline"
 }
 
@@ -475,19 +577,23 @@ function exportBlockedText(access: PermissionAccess) {
 }
 
 function HomePage(props: PageBodyProps) {
-  const { userId, route, permissions, go } = props
+  const { userId, route, permissions, access, go } = props
   const ws = route.ws
   const membership = membershipOf(userId, ws)
   const viewer = useMemo(
     () => ({ userId, workspaceId: ws as string, permissions, joinedBy: membership?.joinedBy ?? ("invited" as const) }),
     [userId, ws, permissions, membership?.joinedBy]
   )
-  const state = useGettingStarted({ viewer, api: onboardingApi })
+  // 権限を確定できない間（取得中、再確認中、失敗）は、前の権限で対象の作業を導かない
+  const unresolved = access.status === "loading" || access.status === "error" ? access.status : unverifiedStatus(access)
+  const pending = unresolved ? checklistPendingText[unresolved] : null
+  const product = useChecklistResults(props, !pending)
+  const state = useGettingStarted({ viewer, api: onboardingApi, tasks: accountTasks, results: product.results, resultsError: product.error, pending })
   const hidden = state.checklist?.presentation === "hidden"
   return (
     <PageFrame
       title="ホーム"
-      description={`${workspaces[ws].name}・${membership ? roles[membership.role].name : ""}`}
+      description={`${orgNameOf(ws)}・${membership ? roles[membership.role].name : ""}`}
       actions={
         hidden ? (
           <Button variant="outline" onClick={() => state.setVisibility("expanded")} data-testid="acct-checklist-show">
@@ -502,6 +608,41 @@ function HomePage(props: PageBodyProps) {
       </div>
     </PageFrame>
   )
+}
+
+/**
+ * Checklist の作業結果を、この製品のデータから導く（ONB-2）。Onboarding の模擬のサーバーの作業結果は使わない。
+ * - 最初の顧客：顧客の一覧（権限の模擬のサーバー）に 1 件以上ある
+ * - 既存の顧客の取り込み：処理の状況（System States の模擬のサーバー）に、1 件以上を取り込んだ取り込みがある
+ * - メンバーの招待：組織のメンバー（権限の模擬のサーバー）が 2 人以上いる
+ * 取得の権限がない作業は、作業の権限（customers.edit、members.manage）がなく Checklist の対象にならない。
+ * results が null の間は取得中（Checklist を導かない）。
+ */
+function useChecklistResults({ scope, revision, permissions, route }: PageBodyProps, enabled: boolean) {
+  const scopeKey = scopeKeyOf(scope)
+  const canView = permissions.includes("customers.view")
+  const overview = useBrowseData({
+    query: revision,
+    queryKey: `checklist:${revision}`,
+    scopeKey,
+    enabled: enabled && canView,
+    fetcher: (_, { signal }) => permissionServer.api.fetchOverview(scopeKey, "", { signal }),
+  })
+  const jobs = useBrowseData({
+    query: route.ws,
+    scopeKey,
+    enabled: enabled && canView,
+    fetcher: (ws, { signal }) => systemServer.listJobs(ws, signal),
+  })
+  if (!enabled) return { results: null, error: false }
+  if (!canView) return { results: { account: [], workspace: [] }, error: false }
+  if (overview.status === "error" || jobs.status === "error") return { results: null, error: true }
+  if (!overview.isCurrent || !jobs.isCurrent || !overview.data || !jobs.data) return { results: null, error: false }
+  const workspace: OnboardingTaskId[] = []
+  if (overview.data.customerCount > 0) workspace.push("first-customer")
+  if (jobs.data.some((j) => j.kind === "import" && (j.counts?.succeeded ?? 0) > 0)) workspace.push("import-customers")
+  if ((overview.data.members?.length ?? 0) > 1) workspace.push("invite-members")
+  return { results: { account: [], workspace }, error: false }
 }
 
 function CustomersPage(props: PageBodyProps) {
@@ -576,28 +717,35 @@ function CustomerLinks({ scope, revision, go, limit, title }: PageBodyProps & { 
   )
 }
 
-function SettingsPage({ userId, route, permissions, go, onDirtyChange }: PageBodyProps) {
+function SettingsPage({ userId, route, permissions, access, monitor, notificationsApi: connectedNotificationsApi, go }: PageBodyProps) {
   const ws = route.ws
+  // 設定の保存を接続の監視とつなぐ。接続を確認できない間（オフラインなど）は、即時保存と明示的な保存を送らない（SYS-3）
+  const connectedSettingsApi = useConnectedApi(settingsApi, monitor, settingsMutations)
   const settingsScope = useMemo(() => ({ userId, workspaceId: ws, permissions }), [userId, ws, permissions])
   const [browserPermission, setBrowserPermission] = useState<BrowserPermission>("default")
   return (
-    <PageFrame title="設定" description={`${users[userId].name}さんの個人の設定と、${workspaces[ws].name}の設定`}>
+    <PageFrame title="設定" description={`${users[userId].name}さんの個人の設定と、${orgNameOf(ws)}の設定`}>
       <SettingsArea
         scope={settingsScope}
-        api={settingsApi}
+        api={connectedSettingsApi}
+        // 権限の再確認中は、組織の設定とメンバーの一覧（保護された情報）を表示せず、保存と削除を始めない
+        access={access}
         category={asCategory(route.cat)}
         onCategoryChange={(cat) => go({ page: "settings", cat })}
         hrefFor={(cat) => accountHref({ page: "settings", ws, cat })}
-        onPermissionDenied={() => undefined}
-        onAnyDirtyChange={onDirtyChange}
+        // 保存が権限不足で拒否された：最新の権限を取り直す（Sidebar、ページのアクセス、設定の表示を更新する）
+        onPermissionDenied={access.reload}
         notifications={
           <NotificationSettingsMatrix
+            api={connectedNotificationsApi}
             userId={userId}
             workspaceId={ws}
             browserPermission={browserPermission}
             // 模擬：実際の Notification.requestPermission() は呼ばない
             onRequestBrowserPermission={() => setBrowserPermission("granted")}
             headingLevel={3}
+            // 保存が権限不足で拒否された：最新の権限を取り直す（個人の設定と同じ）
+            onPermissionDenied={access.reload}
           />
         }
       />
@@ -666,7 +814,7 @@ function AccountSidebar({
                 </div>
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate font-medium text-sidebar-foreground">{user.name}</span>
-                  <span className="truncate text-caption">{workspaces[ws].name}</span>
+                  <span className="truncate text-caption">{orgNameOf(ws)}</span>
                 </span>
                 <ChevronsUpDown aria-hidden="true" className="ml-auto size-4! group-data-[collapsible=icon]/sidebar:hidden" />
               </SidebarMenuButton>
@@ -683,7 +831,7 @@ function AccountSidebar({
                         {list.map((w) => (
                           // 選んだら閉じる（Base UI の RadioItem は既定では閉じない。切り替えの後もメニューが開いたまま残らないように）
                           <DropdownMenuRadioItem key={w.id} value={w.id} closeOnClick>
-                            {w.name}
+                            {orgNameOf(w.id)}
                           </DropdownMenuRadioItem>
                         ))}
                       </DropdownMenuRadioGroup>

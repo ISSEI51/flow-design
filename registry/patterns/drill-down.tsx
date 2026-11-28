@@ -6,6 +6,7 @@ import { ChevronRight } from "lucide-react"
 import { toDateString } from "@/lib/date"
 import type { AnalysisPeriod, Bucket, ComparisonRange, PeriodContext, ResolvedPeriod } from "@/patterns/analysis-period"
 import { isValidTimeZone, nextDayStart, zonedStartOfDay } from "@/patterns/analysis-time"
+import { watchUserInteraction } from "@/patterns/list-detail"
 import { cn } from "@/lib/utils"
 
 // Flow Design Drill-down（Patterns / Data Analysis）
@@ -56,19 +57,16 @@ function DrillDownLink({
  * - current：解決した分析の対象の期間。相対期間は固定の日付にし、未来の終了日を今日までに切り詰めた期間はその期間を使う
  *   （入力された期間ではなく、値の集計に使った期間を引き継ぐ）
  * - baseline：比較期間の側のデータ点から進む場合。現在の期間と誤認させず、比較の系列の期間を使う
+ * 引き継ぐ期間は current（解決した期間）と comparison から求める。period は互換のために受け付けるが、使わない
  */
 function drillPeriodFor(
   series: "current" | "baseline",
-  { comparison, current }: { comparison: ComparisonRange; current: ResolvedPeriod; period?: AnalysisPeriod }
+  { comparison, current }: { comparison: ComparisonRange; current: ResolvedPeriod; /** 使わない（互換のため） */ period?: AnalysisPeriod }
 ): AnalysisPeriod | null {
   const range = series === "current" ? (current.status === "ready" ? current.range : null) : comparison.status === "ready" ? comparison.range : null
   return range ? { kind: "absolute", from: toDateString(range.from), to: toDateString(range.to) } : null
 }
 
-/**
- * グラフの 1 つのデータ点（区間）から進む場合の期間。区間の実際の開始日と終了日（期間の境界で切られた区間は、その部分）と、
- * 時刻がある場合（時間別、タイムゾーンを渡した区間）は、実際の開始と終了の時刻（半開区間）を返す。
- */
 /**
  * drillPeriodFor に加えて、実際に集計した時刻の範囲を返す。比較の系列が同じ経過時間（elapsed-time）の場合は、
  * 日の全体ではなく、集計した時刻までの半開区間（instant）を引き継ぐ。
@@ -90,6 +88,10 @@ function drillRangeFor(
   return { period, instant: { start, end: Math.max(start, Math.min(asOf, nextDayStart(toDateString(args.current.range.to), tz))) } }
 }
 
+/**
+ * グラフの 1 つのデータ点（区間）から進む場合の期間。区間の実際の開始日と終了日（期間の境界で切られた区間は、その部分）と、
+ * 時刻がある場合（時間別、タイムゾーンを渡した区間）は、実際の開始と終了の時刻（半開区間）を返す。
+ */
 function drillBucketPeriod(bucket: Pick<Bucket, "from" | "to" | "start" | "end">): { period: AnalysisPeriod; instant: { start: number; end: number } | null } {
   return {
     period: { kind: "absolute", from: toDateString(bucket.from), to: toDateString(bucket.to) },
@@ -111,6 +113,7 @@ type GroupedItem<T> =
  * - 値が数値でない項目（欠損、NaN、Infinity）は、まとめから除いて skipped で返す
  * - 分類の key が重複している場合と、otherKey（既定 "__other"）と同じ key がある場合は RangeError（製品のデータの誤り）
  * - limit が 0 以下ならすべてを「その他」に、件数以上なら「その他」を作らない。1 件だけを「その他」にしない
+ * - includeSkippedInOther で欠損した分類がある場合は、まとめる値のある項目が 0〜1 件でも「その他」を作る
  */
 function groupOther<T>(
   items: readonly T[],
@@ -152,11 +155,15 @@ function groupOther<T>(
   const head = sorted.slice(0, n)
   const rest = sorted.slice(n)
   const groups: GroupedItem<T>[] = head.map((i) => ({ kind: "item", key: key(i), label: label(i), value: value(i) as number, item: i }))
-  if (rest.length === 1 && n > 0) {
+  // 欠損した分類を「その他」に含める場合は、まとめる項目が 0〜1 件でも「その他」を作る（欠損した分類の明細へ進めなくしない）。
+  // 値は、値のある項目（rest）だけから求める。値のある項目がない場合は null（0 にしない）
+  const keepSkipped = includeSkippedInOther && skipped.length > 0
+  if (rest.length === 1 && n > 0 && !keepSkipped) {
     groups.push({ kind: "item", key: key(rest[0]), label: label(rest[0]), value: value(rest[0]) as number, item: rest[0] })
-  } else if (rest.length > 0) {
+  } else if (rest.length > 0 || keepSkipped) {
     let v: number | null
-    if (aggregate === "sum") {
+    if (rest.length === 0) v = null
+    else if (aggregate === "sum") {
       const total = rest.reduce((s, i) => s + (value(i) as number), 0)
       v = Number.isFinite(total) ? total : null
     } else {
@@ -254,15 +261,39 @@ function useAnalysisPositionRestore({
   onRestored?: (result: { focused: "origin" | "section" | "fallback" | "none" }) => void
 }) {
   const done = React.useRef<AnalysisPosition | null>(null)
+  // 復元の前に利用者が操作した記録（useListPositionRestore と同じ規則。フォーカスとスクロールを奪わない）
+  const cancelled = React.useRef<AnalysisPosition | null>(null)
+  const stopWatching = React.useRef<(() => void) | null>(null)
   const fallbackRef = React.useRef(fallbackFocus)
-  fallbackRef.current = fallbackFocus
   const restoredRef = React.useRef(onRestored)
-  restoredRef.current = onRestored
+  React.useLayoutEffect(() => {
+    fallbackRef.current = fallbackFocus
+    restoredRef.current = onRestored
+  })
+
+  // 記録した位置があり、まだ復元していない間は、利用者の操作（クリック、キー、ホイール、タッチ、フォーカスの移動）を監視する。
+  // 操作があれば復元を取りやめる（読み込みの間に条件を変え始めた場合などに、フォーカスとスクロールを奪わない）
+  React.useEffect(() => {
+    if (!position || done.current === position || cancelled.current === position) return
+    const stop = watchUserInteraction(() => {
+      cancelled.current = position
+      restoredRef.current?.({ focused: "none" })
+    })
+    stopWatching.current = stop
+    return () => {
+      stop()
+      if (stopWatching.current === stop) stopWatching.current = null
+    }
+  }, [position])
 
   React.useEffect(() => {
-    if (!position || !ready || done.current === position) return
+    if (!position || !ready || done.current === position || cancelled.current === position) return
     const frame = requestAnimationFrame(() => {
+      if (cancelled.current === position || done.current === position) return
       done.current = position
+      // 自分で移すフォーカスを、利用者の操作として扱わない
+      stopWatching.current?.()
+      stopWatching.current = null
       const scroller = scrollElement.current
       const area = root.current
       if (scroller) scroller.scrollTop = position.scrollTop

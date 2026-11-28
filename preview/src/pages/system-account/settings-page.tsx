@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { UnsavedChangesProvider } from "@/patterns/unsaved-changes"
 
 import { memberships, roles, users, workspaces, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
 import type { MockOutcome } from "../../data/system-account/mock"
@@ -10,6 +11,7 @@ import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets } from "../app-structure/parts"
 import { DemoControls, DemoFrame, Mock, Radio, Rules } from "../data-browsing/doc-parts"
+import { describeUnsavedSettings } from "./settings-parts"
 import { DisplaySettingsSection, ProfileSection, SettingsArea, type SettingsCategoryId, type SettingsScope } from "./settings-screens"
 
 // Patterns / System & Account / Settings の資料のページ。
@@ -209,17 +211,20 @@ function SettingsDemo({ c, setC }: { c: ServerControls; setC: (c: ServerControls
           </DemoControls>
         </div>
         <div className={narrow ? "max-w-[360px]" : undefined} data-testid="set-demo-area">
-          <SettingsArea
-            scope={scope}
-            api={settingsApi}
-            category={category}
-            onCategoryChange={setCategory}
-            hrefFor={(id) => (id ? `#/settings?category=${id}` : "#/settings")}
-            // 保存が権限不足で拒否されたら、サーバーから最新の権限を取り直す（製品の責務の例）
-            onPermissionDenied={() => setPermissions(permissionsOf(workspaceId, userId))}
-            saveContract={c.contract}
-            headingLevel={3}
-          />
+          {/* カテゴリの移動の前の確認は Unsaved Changes（Forms & Workflows）の部品で行う。製品では画面に 1 つ置く */}
+          <UnsavedChangesProvider labels={{ description: describeUnsavedSettings }}>
+            <SettingsArea
+              scope={scope}
+              api={settingsApi}
+              category={category}
+              onCategoryChange={setCategory}
+              hrefFor={(id) => (id ? `#/settings?category=${id}` : "#/settings")}
+              // 保存が権限不足で拒否されたら、サーバーから最新の権限を取り直す（製品の責務の例）
+              onPermissionDenied={() => setPermissions(permissionsOf(workspaceId, userId))}
+              saveContract={c.contract}
+              headingLevel={3}
+            />
+          </UnsavedChangesProvider>
         </div>
       </div>
     </DemoFrame>
@@ -407,7 +412,7 @@ export function SettingsPatternPage() {
               ["明示的な保存", "「プロフィールを保存」で、フォームの項目をまとめて保存する。保存するまで「保存していない変更があります」を示す"],
               ["Switch と保存の方式", "Switch であることだけを理由に即時保存にしない。2 段階認証を無効にするなど影響の大きい変更は、確認の後に保存する"],
               ["確定した失敗", "即時保存は、最後に確認できたサーバーの値へ戻す。明示的な保存は、入力した内容を残す"],
-              ["結果が不明", "表示を戻さず、「保存できたかを確認できませんでした」と「確認する」を示す。確認の結果で、保存されていたか、されていなかったかを示す"],
+              ["結果が不明", "表示を戻さず、「保存できたかを確認できませんでした」と「保存されたかを確認」を示す。確認の結果で、保存されていたか、されていなかったかを示す"],
               ["権限不足", "保存されなかったことを示し、最新の権限を取り直す。閲覧だけの表示に変わった後も、保存されていないことを示す"],
             ]}
           />

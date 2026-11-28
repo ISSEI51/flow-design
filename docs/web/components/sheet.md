@@ -81,7 +81,7 @@
     {mode === "edit" && (
       <SheetFooter>
         <Button variant="secondary" onClick={cancel}>キャンセル</Button>
-        <Button type="submit">変更を保存</Button>
+        <Button type="submit">保存する</Button>
       </SheetFooter>
     )}
   </SheetContent>
@@ -115,6 +115,7 @@
 - 中に Dropdown Menu を置ける。Escape はメニューだけを閉じる。
 - 入れ子の Alert Dialog が開いている間は、面を 10% 暗くする。
 - 動きを減らす設定では、移動せずに表示し、開閉の時間を 0ms にする。
+- `SheetFooter` の表示中は、Toast の表示の範囲と横に重なる場合（下の Sheet、右の Sheet、狭い画面の全幅の Sheet）、Toast を Footer の上に表示する（`--toast-offset-overlay`。[toast.md](toast.md)）。
 
 ## 6. Anti-patterns
 

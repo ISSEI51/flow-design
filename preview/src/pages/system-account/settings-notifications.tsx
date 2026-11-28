@@ -26,6 +26,9 @@ import { notificationPolicies, notificationsApi, type NotificationsApi, type Set
 // 通知の設定（種類 × 配信チャネルの Matrix、まとめて受け取る、通知を控える時間）。製品側のコードの例。Registry には含めない。
 // 保存は Settings の即時保存（useInstantSettings）を使う：項目ごとの最新の要求だけの反映、スコープの境界、
 // 確定した失敗の戻し、結果の不明の確認、確認するまで同じ項目を送らない規則は、Settings と同じ。
+// 状態の文と確認の方法も、個人の設定（Settings）と同じにする（SET-6）：結果の不明と競合は、利用者が「保存されたかを確認」を押して
+// サーバーの値を取得する（自動では取得し直さない）。文は useInstantSettings の文（項目の名前を前に付ける）。
+// 権限不足（forbidden）は確定した失敗の文にせず、onPermissionDenied で製品が最新の権限を取り直す。
 // 区別するもの：必須の通知（無効にできない）、個人の設定（保存されている値）、組織のポリシー（使えないチャネル）、
 // 端末（OS、ブラウザ）の通知の許可（製品の設定とは別）。配信されることと、既読になることは別の状態である。
 // 通知の配信、メール、プッシュ通知、ブラウザの通知の許可は、すべて模擬の処理である。
@@ -42,6 +45,8 @@ export type NotificationSettingsMatrixProps = {
   /** ブラウザの通知の許可を求める（模擬）。製品は Notification.requestPermission() などを呼ぶ */
   onRequestBrowserPermission?: () => void
   headingLevel?: 2 | 3
+  /** 保存が権限不足で拒否された。製品が最新の権限を取り直す（Settings の onPermissionDenied と同じ） */
+  onPermissionDenied?: () => void
 }
 
 const types = Object.keys(notificationTypeLabels) as NotificationType[]
@@ -66,14 +71,30 @@ const patchOf = (key: string, value: unknown): SettingPatch => {
 // 通知を控える時間は、開始、終了、オンとオフをまとめた 1 つの値（1 つの保存の単位）。値で比べる
 const sameValue = (a: unknown, b: unknown) => Object.is(a, b) || (typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b))
 
-type CellStatus = { state: "failed" | "unknown"; message: string }
+/** 項目の下に示す保存の状態（保存中と保存しましたは、読み上げの領域だけで伝える） */
+const shownStates = new Set<SettingSaveState["state"]>(["failed", "invalid", "forbidden", "conflict", "unknown", "verifying"])
 
-/** 保存の失敗（destructive）と、結果の不明（warning。取得し直している）を区別して示す */
-function StatusText({ status }: { status: CellStatus }) {
+/** 状態の文。useInstantSettings の文の前に、項目の名前を付ける */
+const statusText = (label: string, status: SettingSaveState) =>
+  status.state === "saved" ? `${label}を保存しました` : status.state === "verifying" ? `${label}は、保存されたかを確認しています…` : "message" in status ? `${label}は、${status.message}` : ""
+
+/**
+ * 処理されなかったことが確かな失敗（destructive）と、権限不足・競合・結果の不明（warning）を区別して示す（Settings の SettingSaveStatus と同じ）。
+ * 結果の不明と競合は「保存されたかを確認」でサーバーの値を取得する。同じ保存を送り直さない
+ */
+function StatusText({ label, status, onVerify }: { label: string; status: SettingSaveState; onVerify: () => void }) {
+  const definite = status.state === "failed" || status.state === "invalid"
   return (
-    <p data-testid="ntf-setting-error" data-state={status.state} className={cn("mt-1 text-caption", status.state === "failed" ? "text-destructive" : "text-warning")}>
-      {status.message}
-    </p>
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+      <p data-testid="ntf-setting-error" data-state={status.state} className={cn("text-caption", definite ? "text-destructive" : status.state === "verifying" ? "text-muted-foreground" : "text-warning")}>
+        {statusText(label, status)}
+      </p>
+      {(status.state === "unknown" || status.state === "conflict") && (
+        <Button variant="outline" size="sm" onClick={onVerify} aria-label={`${label}が保存されたかを確認`} data-testid="ntf-setting-verify">
+          保存されたかを確認
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -106,6 +127,7 @@ function MatrixForm({
   browserPermission,
   onRequestBrowserPermission,
   headingLevel = 2,
+  onPermissionDenied,
   settings,
 }: NotificationSettingsMatrixProps & { api: NotificationsApi; settings: PersonalSettings }) {
   const baseId = useId()
@@ -113,16 +135,9 @@ function MatrixForm({
   const H2 = headingLevel === 2 ? "h3" : "h4"
   const policy = notificationPolicies[workspaceId]
   const labels = new Map<string, string>()
-  // 項目ごとの結果の文（失敗と結果の不明）。次の変更まで残す。announcement は常に置いた読み上げの領域の中身
-  const [notices, setNotices] = useState<Map<string, CellStatus>>(new Map())
+  // 項目ごとの状態は useInstantSettings の statusOf が持つ（次の変更まで残る）。announcement は常に置いた読み上げの領域の中身
   const [announcement, setAnnouncement] = useState("")
-  const notice = (key: string, status: CellStatus | null) =>
-    setNotices((m) => {
-      const next = new Map(m)
-      if (status) next.set(key, status)
-      else next.delete(key)
-      return next
-    })
+  const announce = (key: string, status: SettingSaveState) => setAnnouncement(statusText(labels.get(key) ?? "", status))
 
   const s = useInstantSettings<MatrixValues>({
     values: flatten(settings),
@@ -131,38 +146,25 @@ function MatrixForm({
     save: (key, value) => api.saveSetting(userId, workspaceId, patchOf(key, value), { signal: new AbortController().signal }).then((r) => flatten(r)[key]),
     verify: (key, { signal }) => api.loadSettings(userId, { signal }).then((r) => flatten(r)[key]),
     equals: sameValue,
-    onSettled: (key, status) => settled(key, status),
-    onVerified: (key, status) => {
-      // 結果が不明だった項目を取得し直した。示している文は残し、取得した値を表示していることを加える
-      const label = labels.get(key) ?? ""
-      if (status.state === "unknown") notice(key, { state: "unknown", message: `${label}を保存できたかを確認できませんでした。最新の設定も取得できませんでした。` })
-      else notice(key, { state: "unknown", message: `${label}を保存できたかを確認できませんでした。取得し直した最新の設定を表示しています。` })
+    onSettled: (key, status) => {
+      // 失敗と結果の不明も、常に置いた読み上げの領域で伝える
+      announce(key, status)
+      // 権限不足は、前の保存の結果が不明なため結果の不明として示す場合（cause が forbidden）も、権限を取り直す（Settings と同じ）
+      if (status.state === "forbidden" || (status.state === "unknown" && status.cause === "forbidden")) onPermissionDenied?.()
     },
+    // 「保存されたかを確認」の結果（saved：保存されていた、failed：保存されていなかった、unknown：確かめられなかった）
+    onVerified: (key, status) => announce(key, status),
   })
-
-  function settled(key: string, status: SettingSaveState) {
-    const label = labels.get(key) ?? ""
-    if (status.state === "saved") {
-      notice(key, null)
-      setAnnouncement(`${label}を保存しました`)
-      return
-    }
-    // 結果の不明と競合：保存されたかがわからない。同じ保存を送り直さず、最新の設定を取得し直す（取得は副作用のない要求）
-    const unknown = status.state === "unknown" || status.state === "conflict"
-    const cell: CellStatus = unknown
-      ? { state: "unknown", message: `${label}を保存できたかを確認できませんでした。最新の設定を取得し直しています。` }
-      : { state: "failed", message: `${label}を保存できませんでした。もう一度お試しください。` }
-    notice(key, cell)
-    // 失敗と結果の不明も、常に置いた読み上げの領域で伝える
-    setAnnouncement(cell.message)
-    if (unknown) s.verify(key)
-  }
 
   const change = (key: string, value: unknown, label: string) => {
     labels.set(key, label)
     if (!s.change(key, value)) return
-    notice(key, null)
     setAnnouncement("")
+  }
+  /** 項目の下に示す状態。保存中と保存しましたは示さない */
+  const shown = (key: string) => {
+    const status = s.statusOf(key)
+    return shownStates.has(status.state) ? status : null
   }
   // 描画のたびに、項目の名前を登録する（結果の文に使う）
   const register = (key: string, label: string) => {
@@ -236,7 +238,11 @@ function MatrixForm({
           </div>
           {types.map((type) => {
             const mandatory = mandatoryNotifications.filter((m) => m.type === type)
-            const rowErrors = channels.map((c) => notices.get(`${type}:${c}`)).filter(Boolean) as CellStatus[]
+            const rowErrors = channels.flatMap((c) => {
+              const key = `${type}:${c}`
+              const status = shown(key)
+              return status ? [{ key, label: `${notificationTypeLabels[type]}：${channelLabels[c]}の設定`, status }] : []
+            })
             return (
               <div
                 key={type}
@@ -254,8 +260,8 @@ function MatrixForm({
                       {channelLabels[m.channel]}は無効にできません：{m.reason}
                     </p>
                   ))}
-                  {rowErrors.map((e, i) => (
-                    <StatusText key={i} status={e} />
+                  {rowErrors.map((e) => (
+                    <StatusText key={e.key} label={e.label} status={e.status} onVerify={() => s.verify(e.key)} />
                   ))}
                 </div>
                 {channels.map((channel) => {
@@ -307,7 +313,7 @@ function MatrixForm({
               <p id={`${baseId}-digest-note`} className="mt-1 text-caption text-muted-foreground">
                 セキュリティの通知と、すぐに対応が必要な通知は、まとめずにすぐ届きます。
               </p>
-              {notices.get(register("digest", "まとめて受け取る設定")) && <StatusText status={notices.get("digest")!} />}
+              {shown(register("digest", "まとめて受け取る設定")) && <StatusText label="まとめて受け取る設定" status={shown("digest")!} onVerify={() => s.verify("digest")} />}
             </div>
             <Switch
               checked={digest === "daily"}
@@ -330,7 +336,7 @@ function MatrixForm({
                     : "設定していません。"}
                   セキュリティの通知と、すぐに対応が必要な通知は、この時間も届きます。
                 </p>
-                {notices.get(register("quiet", "通知を控える時間")) && <StatusText status={notices.get("quiet")!} />}
+                {shown(register("quiet", "通知を控える時間")) && <StatusText label="通知を控える時間" status={shown("quiet")!} onVerify={() => s.verify("quiet")} />}
               </div>
               <Switch
                 checked={quiet.enabled}

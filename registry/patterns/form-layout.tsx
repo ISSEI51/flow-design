@@ -170,6 +170,8 @@ const kindLabel = { missing: "未入力", incomplete: "入力の途中", invalid
  * - 非同期の検証の結果を待っている間は「確認しています」と示す。検証できなかった（check-failed）場合は、保存できない理由として示す。
  * detail を指定すると、該当する項目へ移動するボタンを置く（長いフォーム）。項目が detailLimit 以下なら項目ごとに並べ、
  * 超える場合は最初の項目へのボタンだけを置く。
+ * reason：項目以外の、保存できない理由。指定すると、項目の理由の代わりに示す（Focusable Disabled の保存ボタンの
+ * aria-describedby の参照先を空にしない）。unknown は画面に示し、submitting と composing は支援技術にだけ伝える。
  * 理由がないときは、何も表示しない（要素は残し、aria-describedby の参照先を保つ）。
  */
 function SaveBlockerNotice<V extends FormValues>({
@@ -179,6 +181,7 @@ function SaveBlockerNotice<V extends FormValues>({
   detailLimit = 3,
   goal = "保存できます",
   unchanged = false,
+  reason,
   onFocusField,
   className,
   ...props
@@ -197,9 +200,15 @@ function SaveBlockerNotice<V extends FormValues>({
    * （変更していないフォームの保存ボタンが押せないことは見ればわかるため。原則 04）
    */
   unchanged?: boolean
+  /**
+   * 項目以外の、保存できない理由（useFormState の状態）。
+   * unknown：保存の結果が不明（status が "unknown"）。「保存されたかを確かめると{goal}」を示す。
+   * submitting：保存中。composing：IME の変換中。どちらも見た目では示さず（Loading と入力中の表示でわかるため）、支援技術にだけ伝える。
+   */
+  reason?: "unknown" | "submitting" | "composing"
   onFocusField?: (name: FormBlocker<V>["name"]) => void
 }) {
-  const list = hidden ? [] : blockers
+  const list = hidden || reason ? [] : blockers
   const toFill = list.filter((b) => b.kind === "missing" || b.kind === "incomplete")
   const invalid = list.filter((b) => b.kind === "invalid")
   const checking = list.filter((b) => b.kind === "checking")
@@ -218,7 +227,10 @@ function SaveBlockerNotice<V extends FormValues>({
   return (
     <div data-slot="save-blocker-notice" className={cn("flex min-w-0 flex-col gap-2 text-ui", className)} {...props}>
       {summary && <p className="text-muted-foreground [word-break:auto-phrase]">{summary}</p>}
-      {!summary && unchanged && !hidden && <p className="sr-only">変更がありません。変更すると{goal}</p>}
+      {reason === "unknown" && <p className="text-muted-foreground [word-break:auto-phrase]">保存されたかを確かめると{goal}</p>}
+      {reason === "submitting" && <p className="sr-only">保存しています</p>}
+      {reason === "composing" && <p className="sr-only">文字を変換しています。確定すると、入力した値を確かめます</p>}
+      {!summary && !reason && unchanged && !hidden && <p className="sr-only">変更がありません。変更すると{goal}</p>}
       {detail && onFocusField && ordered.length > detailLimit && (
         <button
           type="button"

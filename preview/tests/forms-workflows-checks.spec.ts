@@ -121,13 +121,18 @@ test.describe("async validation", { tag: "@webkit" }, () => {
     await resolve(page, "check", null)
     await expect.poll(async () => (await asyncState(page)).status).toBe("valid")
     await page.getByTestId("toggle-scope").click()
+    // スコープが変わったら、前のスコープの入力値を引き継がない（initialValues から始める。9.4）
+    await expect(page.getByTestId("code")).toHaveValue("")
+    expect((await asyncState(page)).canSubmit).toBe(false)
+    // 同じ値を入れ直しても、前のスコープの検証の結果（valid）を使わず、新しいスコープで確かめ直す
+    await page.getByTestId("code").fill("C1")
     await waitCount(page, "check", 1)
     expect((await asyncState(page)).canSubmit).toBe(false)
   })
 })
 
 // ------------------------------------------------------------------ Enter による送信
-type SubmitState = { submits: number; shownErrors: string[]; canSubmit: boolean; unchanged: boolean }
+type SubmitState = { submits: number; shownErrors: string[]; canSubmit: boolean; unchanged: boolean; due: string | null }
 const submitState = (page: Page) => state<SubmitState>(page, "submit-state")
 
 test.describe("Enter submission", { tag: "@webkit" }, () => {
@@ -162,6 +167,21 @@ test.describe("Enter submission", { tag: "@webkit" }, () => {
       expect(await submitState(page)).toMatchObject({ submits: 0, shownErrors: [] })
     })
   }
+
+  // D10：Components の DatePicker の文字の入力欄での Enter は、日付の確定であり、送信ではない（保存できる状態のフォームでも）。
+  // 固定の時間を待たずに確かめる：後から送信になる Enter を押し、送信の回数が 1 になることで、前の Enter が送信しなかったことを確かめる
+  test("Enter in the DatePicker text input commits the date and does not submit", async ({ page }) => {
+    await page.getByTestId("f-name").fill("山田")
+    await expect.poll(async () => (await submitState(page)).canSubmit).toBe(true)
+    const date = page.locator("#f-datepicker")
+    await date.fill("2026/12/01")
+    await date.press("Enter")
+    await expect.poll(async () => (await submitState(page)).due).toBe("2026-12-1")
+    await expect(date).toHaveValue("2026/12/01")
+    expect((await submitState(page)).submits).toBe(0)
+    await page.getByTestId("f-name").press("Enter")
+    await expect.poll(async () => (await submitState(page)).submits).toBe(1)
+  })
 
   test("Enter inside a Combobox popup and inside another Dialog does not submit", async ({ page, isMobile }) => {
     test.skip(isMobile, "ハードウェアキーボードの操作")
@@ -396,6 +416,39 @@ test.describe("scope boundaries and stale results", { tag: "@webkit" }, () => {
     await expect(page.locator("[data-slot=toast]").getByRole("button", { name: "元に戻す" })).toHaveCount(0)
   })
 
+  // D8：アンマウントしたら、表示中の「元に戻す」の通知を閉じる
+  test("undo: unmounting the hook closes its open undo toasts", async ({ page }) => {
+    await page.getByTestId("u-first").click()
+    const toast = page.locator("[data-slot=toast]", { hasText: "操作1を実行しました" })
+    await expect(toast).toBeVisible()
+    await page.getByTestId("undo-mount-toggle").click()
+    await expect(toast).toHaveCount(0)
+  })
+
+  // D9：A → B → A の後に、最初の A の取り消し（画面に残した handle）で、現在の A のデータを戻さない
+  test("undo: after A → B → A, the handle from the first A is refused", async ({ page }) => {
+    await page.getByTestId("u-first").click()
+    await expect(page.locator("[data-slot=toast]", { hasText: "操作1を実行しました" })).toBeVisible()
+    await page.getByTestId("scope-toggle").click()
+    await page.getByTestId("scope-toggle").click()
+    await expect(page.getByTestId("scope-toggle")).toContainText("（A）")
+    await page.getByTestId("u-handle-undo").click()
+    await expect.poll(() => state<unknown[]>(page, "undo-results")).toEqual([{ ok: true }, { handleUndo: false }])
+    expect(await count(page, "undo")).toBe(0)
+    expect(await state(page, "undo-state")).toEqual([])
+    await expect(page.locator("[data-slot=toast]", { hasText: "表示している範囲（ワークスペースなど）が変わったため、元に戻せません" })).toBeVisible()
+  })
+
+  // D9：実行の間にスコープが変わった場合は、新しいスコープに通知を出さず、実行の結果（performed）を返す
+  test("undo: a result arriving after a scope change is stale, reports what was performed and shows no toast", async ({ page }) => {
+    await page.getByTestId("u-slow").click()
+    await waitCount(page, "perform", 1)
+    await page.getByTestId("scope-toggle").click()
+    await resolve(page, "perform", undefined)
+    await expect.poll(() => state<unknown[]>(page, "undo-results")).toEqual([{ ok: false, outcome: "stale", performed: "succeeded" }])
+    await expect(page.locator("[data-slot=toast]", { hasText: "操作3を実行しました" })).toHaveCount(0)
+  })
+
   test("undo: a failed undo can be retried from the toast within the window; an unknown undo is not offered again", async ({ page }) => {
     const toasts = page.locator("[data-slot=toast]")
     await page.getByTestId("u-first").click()
@@ -459,6 +512,56 @@ test.describe("confirm dialog unknown result", { tag: "@webkit" }, () => {
     await expect(dialog.getByRole("button", { name: "Yを削除" })).toBeEnabled()
     expect(await state(page, "confirm-state")).toEqual([])
   })
+
+  // D4：結果が不明になると実行のボタンを取り除く。フォーカスを body に落とさず、知らせに移す
+  test("an unknown result moves the focus from the removed confirm button to the notice", async ({ page }) => {
+    const dialog = page.getByTestId("c-dialog")
+    await page.getByTestId("c-open-x").click()
+    const confirm = dialog.getByRole("button", { name: "Xを削除" })
+    await confirm.focus()
+    await page.keyboard.press("Enter")
+    await waitCount(page, "confirm", 1)
+    await resolve(page, "confirm", { unknown: "削除されたかを確かめられていません" })
+    const notice = dialog.locator("[data-slot=confirm-action-unknown]")
+    await expect(notice).toBeFocused()
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false)
+    await page.keyboard.press("Tab")
+    await expect(dialog.getByRole("button", { name: "閉じる" })).toBeFocused()
+  })
+
+  // PERM-2：権限の不足などで実行できない間は、理由を示し、実行のボタンを Focusable Disabled にする
+  test("blockedReason: the confirm button is focusable disabled with the reason and cannot run by click, Enter or Space", async ({ page }) => {
+    await page.getByTestId("c-block").click()
+    await page.getByTestId("c-open-x").click()
+    const dialog = page.getByTestId("c-dialog")
+    const confirm = dialog.getByRole("button", { name: "Xを削除" })
+    await expect(confirm).toHaveAttribute("aria-disabled", "true")
+    await expect(confirm).toHaveAccessibleDescription("削除する権限がなくなりました。管理者に権限を確認してください。")
+    await confirm.focus()
+    await expect(confirm).toBeFocused()
+    await page.keyboard.press("Enter")
+    await page.keyboard.press("Space")
+    await confirm.click({ force: true })
+    expect(await count(page, "confirm")).toBe(0)
+    await expect(dialog).toBeVisible()
+  })
+
+  // D16：progress="external" は、閉じるまでの間の 2 回目の押下で二重に実行しない
+  test("external progress: two presses before the dialog closes run once", async ({ page }) => {
+    await page.getByTestId("e-open").click()
+    await expect(page.getByTestId("e-dialog")).toBeVisible()
+    await page.evaluate(() => {
+      const button = [...document.querySelectorAll<HTMLButtonElement>("[data-testid=e-dialog] button")].find((b) => b.textContent === "3件を削除")!
+      button.click()
+      button.click()
+    })
+    await expect(page.getByTestId("e-dialog")).toBeHidden()
+    await expect.poll(() => state(page, "external-runs")).toBe(1)
+    // 開き直すと、もう一度実行できる
+    await page.getByTestId("e-open").click()
+    await page.getByTestId("e-dialog").getByRole("button", { name: "3件を削除" }).click()
+    await expect.poll(() => state(page, "external-runs")).toBe(2)
+  })
 })
 
 // ------------------------------------------------------------------ 未保存の変更と移動
@@ -520,6 +623,82 @@ test.describe("unsaved changes and navigation", { tag: "@webkit" }, () => {
   })
 })
 
+test.describe("unsaved changes: scope change, authorization loss and unknown results", { tag: "@webkit" }, () => {
+  test.beforeEach(async ({ page }) => open(page, "unsaved"))
+
+  // D2：確認の表示中に保存の単位がなくなった（スコープの変更でアンマウントされた）場合は、確認を閉じて要求を取り消す（移動しない）
+  test("the confirmation closes without moving when its units unmount while it is shown", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await page.evaluate(() => (document.querySelector("[data-testid=unmount-units]") as HTMLButtonElement).click())
+    await expect(dialog).toBeHidden()
+    expect(await unsaved(page)).toMatchObject({ page: "a", log: ["cancelled"], hasUnsaved: false })
+  })
+
+  test("cancelNavigation closes the confirmation and calls onCancel; the input stays protected", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await page.evaluate(() => (document.querySelector("[data-testid=cancel-navigation]") as HTMLButtonElement).click())
+    await expect(dialog).toBeHidden()
+    expect(await unsaved(page)).toMatchObject({ page: "a", log: ["cancelled"], hasUnsaved: true })
+    await expect(page.getByTestId("u-one")).toHaveValue("1")
+    await page.getByTestId("go").click()
+    await expect(dialog).toBeVisible()
+  })
+
+  // D3：認可の失効では、確認を出さずに移動する。表示中の確認は取り消す
+  test("releaseAll cancels the shown confirmation and moves without asking", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await expect(dialog).toBeVisible()
+    await page.evaluate(() => (document.querySelector("[data-testid=release-all]") as HTMLButtonElement).click())
+    await expect(dialog).toBeHidden()
+    await expect.poll(async () => (await unsaved(page)).page).toBe("signed-out")
+    expect((await unsaved(page)).log).toEqual(["cancelled", "moved-signed-out"])
+  })
+
+  test("after releaseAll, closing the page shows no beforeunload confirmation", async ({ page }) => {
+    const dialogs: string[] = []
+    page.on("dialog", (d) => {
+      dialogs.push(d.type())
+      void d.dismiss()
+    })
+    // 利用者の操作（入力）で変更を作る。releaseAll の前は、ブラウザの確認が出る
+    await page.getByTestId("u-one").click()
+    await page.keyboard.type("1")
+    await page.close({ runBeforeUnload: true })
+    await expect.poll(() => dialogs, { timeout: 5000 }).toEqual(["beforeunload"])
+    expect(page.isClosed()).toBe(false)
+    // 登録は残っている（アンマウントしていない）が、releaseAll の後は確認の対象ではない
+    await page.getByTestId("release-only").click()
+    await expect.poll(async () => (await unsaved(page)).hasUnsaved).toBe(false)
+    await page.close({ runBeforeUnload: true })
+    await expect.poll(() => page.isClosed()).toBe(true)
+    expect(dialogs).toEqual(["beforeunload"])
+  })
+
+  // SET-2：保存の結果が不明な単位を「保存されていません」と示さない。保存して移動の対象にもしない
+  test("a unit whose save result is unknown is described as not confirmed and is not offered save and move", async ({ page }) => {
+    await page.getByTestId("u-one").fill("1")
+    await page.getByTestId("go").click()
+    const dialog = page.getByRole("alertdialog")
+    await dialog.getByRole("button", { name: "保存して移動" }).click()
+    await waitCount(page, "save-one", 1)
+    await resolve(page, "save-one", { status: "unknown", formError: "保存されたかを確かめられていません" })
+    await expect(dialog).toBeHidden()
+    await page.getByTestId("go").click()
+    await expect(dialog).toContainText("「1 つ目」は、保存されたかを確認できていません。")
+    await expect(dialog).not.toContainText("保存されていません")
+    await expect(dialog.getByRole("button", { name: "保存して移動" })).toHaveCount(0)
+    await expect(dialog.getByRole("button", { name: "変更を破棄" })).toBeVisible()
+  })
+})
+
 test.describe("unsaved changes: a unit without onDiscard", { tag: "@webkit" }, () => {
   test.beforeEach(async ({ page }) => open(page, "unsaved"))
 
@@ -568,6 +747,31 @@ test.describe("pure helpers v0.1", () => {
     expect(rows.integrity).toMatchObject({ duplicateRows: [2], unexpectedRows: [99], missingRows: [4], countsDisagree: true, complete: false })
     expect(rows.result).toEqual({ created: 1, updated: 0, skipped: 0, failed: 0, unknown: 2, total: 3 })
     expect(importOutcome({ created: 1, updated: 0, skipped: 0, failed: 0, unknown: 0, total: Number.NaN })).toBe("unknown")
+  })
+
+  // D6：サーバーが一部の件数しか返さない場合に、返さなかった件数を 0 として成功させない
+  test("reconcileImportResult: counts the server did not return are missing, not zero; the outcome is unknown", () => {
+    const partial = reconcileImportResult({ total: 10 }, { created: 10 })
+    expect(partial.integrity.missingCounts).toEqual(["updated", "skipped", "failed"])
+    expect(partial.integrity.invalidCounts).toEqual([])
+    expect(partial.integrity.complete).toBe(false)
+    expect(partial.outcome).toBe("unknown")
+    expect(importOutcome(partial.result, partial.integrity)).toBe("unknown")
+    // すべての件数がそろえば成功（unknown の件数は省略してよい）
+    const full = reconcileImportResult({ total: 10 }, { created: 8, updated: 0, skipped: 2, failed: 0 })
+    expect(full.integrity).toMatchObject({ missingCounts: [], complete: true })
+    expect(full.outcome).toBe("success")
+    // 形式が正しくない件数（値はある）は invalidCounts、返さなかった件数は missingCounts
+    const mixed = reconcileImportResult({ total: 3 }, { created: "3", updated: 0, skipped: 0 })
+    expect(mixed.integrity).toMatchObject({ invalidCounts: ["created"], missingCounts: ["failed"] })
+    expect(mixed.outcome).toBe("unknown")
+    // 行ごとの結果がすべての対象にあれば、重なった同じ結果と対象ではない行の結果は complete を false にするが、件数で判定する
+    const rows = reconcileImportResult(
+      { total: 2, rows: [2, 3] },
+      { rows: [{ row: 2, outcome: "created" }, { row: 2, outcome: "created" }, { row: 3, outcome: "failed" }, { row: 99, outcome: "created" }] }
+    )
+    expect(rows.integrity).toMatchObject({ duplicateRows: [2], unexpectedRows: [99], missingRows: [], complete: false })
+    expect(rows.outcome).toBe("partial")
   })
 
   test("sanitizeMapping: unknown columns are dropped, unknown field ids become skip", () => {
@@ -666,12 +870,49 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
     expect(text.split("\r\n")[0]).toContain("電話番号")
   })
 
+  // D13：個人情報の確認の対象には、選んだ行の ID を含める。件数が同じでも行が入れ替わったら、確かめ直させる
+  test("export of selected rows with personal data: swapping a selected row while confirming asks to review again", async ({ page }) => {
+    await openApp(page, "page=customers")
+    const rows = listRows(page)
+    await rows.nth(0).getByRole("checkbox").click()
+    const second = await rows.nth(1).getAttribute("data-row-id")
+    const third = await rows.nth(2).getAttribute("data-row-id")
+    await rows.nth(1).getByRole("checkbox").click()
+    await page.getByTestId("customers-export-selected").click()
+    await expect(page.getByTestId("export-scope")).toHaveText("選んだ行（2件）")
+    await page.getByTestId("export-columns").getByRole("checkbox", { name: "電話番号" }).click()
+    await page.getByTestId("export-run").click()
+    const confirm = page.getByTestId("export-sensitive-confirm")
+    await expect(confirm.getByRole("button", { name: "ダウンロード" })).toBeEnabled()
+    // 件数は 2 件のまま、選んだ行を入れ替える
+    await page.evaluate(([a, b]) => {
+      window.__fdFormsSetSelected!(a!, false)
+      window.__fdFormsSetSelected!(b!, true)
+    }, [second, third] as const)
+    await expect(confirm.locator("[data-slot=confirm-action-changed]")).toBeVisible()
+    await expect(confirm.getByRole("button", { name: "ダウンロード" })).toBeDisabled()
+  })
+
+  // D14：raw の形式（ほかのシステムへの取り込み）は既定にせず、選んだときに表計算ソフトで開く場合の注意を示す
+  test("export format: spreadsheet is the default; choosing raw shows the spreadsheet warning", async ({ page }) => {
+    await openApp(page, "page=customers")
+    await page.getByTestId("customers-export").click()
+    await page.getByRole("menuitem", { name: "項目を選んでエクスポート…" }).click()
+    const dialog = page.getByTestId("export-dialog")
+    const format = dialog.getByRole("combobox", { name: "形式" })
+    await expect(format).toHaveText("CSV（Excel で開く。BOM 付きの UTF-8）")
+    await expect(dialog.getByTestId("export-raw-warning")).toHaveCount(0)
+    await format.click()
+    await page.getByRole("option", { name: "CSV（UTF-8。ほかのシステムへの取り込み）" }).click()
+    await expect(dialog.getByTestId("export-raw-warning")).toContainText("表計算ソフトで開くと式として実行されることがあります")
+  })
+
   test("canOperate false (refresh failed): row operations and export are disabled", async ({ page }) => {
     await openApp(page, "page=customers")
     await server(page, (s) => (s.listMode = "fail"))
     await page.getByTestId("row-actions-cu-1").click()
     await page.getByRole("menuitem", { name: "アーカイブ" }).click()
-    await expect(page.getByRole("alert").filter({ hasText: "再取得するまで、変更の操作はできません" })).toBeVisible()
+    await expect(page.getByRole("alert").filter({ hasText: "再試行するまで、変更の操作はできません" })).toBeVisible()
     await expect(page.getByTestId("row-actions-cu-2")).toBeDisabled()
     await expect(page.getByTestId("customers-export")).toBeDisabled()
   })
@@ -684,6 +925,12 @@ test.describe("Data Browsing integration", { tag: "@webkit" }, () => {
     await page.locator("[data-testid=forms-verify] summary").click()
     await page.getByTestId("external-ws-kyushu").click()
     await expect(page.getByTestId("forms-main")).toHaveAttribute("data-ws", "kyushu")
+    // 前のワークスペースで入力した値を、新しいワークスペースのフォームに引き継がない（9.4）。前の検証の結果も示さない
+    await expect(page.locator("#new-code")).toHaveValue("")
+    await expect(page.getByTestId("new-code-error")).toHaveCount(0)
+    // 同じコードを入れ直すと、新しいワークスペースで重複を確かめ直す
+    await page.locator("#new-code").fill("C-0001")
+    await page.locator("#new-code").blur()
     await expect(page.getByTestId("new-code-status")).toHaveText("このコードは使えます")
   })
 

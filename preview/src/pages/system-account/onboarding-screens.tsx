@@ -16,6 +16,11 @@ import { GettingStartedChecklist } from "@/patterns/getting-started"
 import { deriveChecklist, pickGuidance, type Checklist, type ChecklistVisibility, type OnboardingTaskResults } from "@/patterns/onboarding"
 import { useScopeGuard, type ScopeSnapshot, type ScopeTicket } from "@/patterns/scope-guard"
 import { cn } from "@/lib/utils"
+import { FormActions, SaveBlockerNotice, focusFormControl } from "@/patterns/form-layout"
+import { submitOnEnter, useFormState, type FormFields } from "@/patterns/form-state"
+import { useStepFlow, type StepDefinition } from "@/patterns/step-flow"
+import { Stepper } from "@/patterns/stepper"
+import { DiscardChangesAlert, useUnsavedChanges } from "@/patterns/unsaved-changes"
 
 import { MockRequestError } from "../../data/system-account/mock"
 import { users, type OnboardingTaskId, type Permission, type UserId } from "../../data/system-account/model"
@@ -29,7 +34,6 @@ import {
   type ProductScreen,
 } from "../../data/system-account/onboarding-data"
 import type { DataSpace, OnboardingApi, SetupDraft } from "../../data/system-account/onboarding-server"
-import { DiscardAlert } from "../overlays/discard-alert"
 
 // Onboarding の画面の部品（プレビュー）。統合の検証画面でも使えるよう、利用者（OnboardingViewer）、模擬のサーバーの関数（api）、
 // コールバックを props で受け取る。状態は api（模擬のサーバー）に保存し、部品は保存しない。
@@ -46,28 +50,39 @@ export const viewerScope = (v: OnboardingViewer) => `${v.userId}:${v.workspaceId
 // ---------------------------------------------------------------- Getting Started Checklist の接続
 
 /**
- * Checklist の状態をまとめる。
+ * Checklist の状態をまとめる（プレビューの製品側の hook。Registry の部品ではない）。
  * - results を渡した場合は、それを実際の作業結果として使う（統合の検証画面は、製品のデータから作って渡す）。
- *   渡さない場合は api.getResults で取得し、resultsVersion が変わるたびに取得し直す。
+ *   null は、製品のデータを取得している間（Checklist を導かない）。resultsError は、製品のデータを取得できなかった。
+ *   渡さない（undefined）場合は api.getResults で取得し、resultsVersion が変わるたびに取得し直す。
+ * - tasks：対象にする作業の定義。製品の画面にない作業（作業の画面へ移れない作業）を除く場合に渡す。既定はすべての作業。
+ * - pending：Checklist を導けない理由（権限の再確認中など）。渡している間は、前の権限から対象の作業を導かず、理由を示す。
  * - 表示の状態（折りたたみ、非表示）は api に保存する。保存に失敗した場合は、保存されている状態に戻す。
+ *   保存されたかが不明な場合は、保存されている状態を取得し直し、取得が終わるまで「確認しています」と示す。
  */
 export function useGettingStarted({
   viewer,
   api,
   results: externalResults,
+  resultsError = false,
   resultsVersion = 0,
+  tasks = onboardingTaskDefinitions,
+  pending = null,
 }: {
   viewer: OnboardingViewer
   api: OnboardingApi
-  results?: OnboardingTaskResults<OnboardingTaskId>
+  results?: OnboardingTaskResults<OnboardingTaskId> | null
+  resultsError?: boolean
   resultsVersion?: number
+  tasks?: typeof onboardingTaskDefinitions
+  pending?: string | null
 }) {
   const scope = viewerScope(viewer)
+  const external = externalResults !== undefined
   const fetched = useBrowseData({
     query: resultsVersion,
     queryKey: `${scope}|${resultsVersion}`,
     scopeKey: scope,
-    enabled: !externalResults,
+    enabled: !external,
     fetcher: (_, { signal }) => api.getResults(viewer.userId, viewer.workspaceId, { signal }),
   })
   const progress = useBrowseData({
@@ -79,26 +94,29 @@ export function useGettingStarted({
   // 保存中の表示の状態。保存を始めたときのスコープと世代（Ticket）と組で持ち、現在のスコープと世代のものだけを使う
   // （A → B → A の最初の A で始めた保存の値を、戻った A で使い続けない）
   const [override, setOverride] = useState<{ ticket: ScopeTicket; visibility: ChecklistVisibility } | null>(null)
-  const [notice, setNotice] = useState<{ scope: string; text: string } | null>(null)
+  // unknown：保存されたかが不明。since は取得し直す前の取得の時刻（それより後の取得が終わるまで「確認しています」と示す）
+  const [notice, setNotice] = useState<{ scope: string; kind: "failed" | "unknown"; since: number | null } | null>(null)
 
   // 再取得中は、同じスコープの前の結果を使う（useBrowseData は別のスコープのデータを返さない）。
-  const results = externalResults ?? (fetched.status === "error" ? undefined : fetched.data)
+  const results = external ? (resultsError ? undefined : externalResults ?? undefined) : fetched.status === "error" ? undefined : fetched.data
   const visibility = override && guard.isSameScope(override.ticket) ? override.visibility : progress.status === "error" ? undefined : progress.data?.visibility
   const checklist = useMemo(
     () =>
-      results && visibility
+      results && visibility && !pending
         ? deriveChecklist({
-            tasks: onboardingTaskDefinitions,
+            tasks,
             permissions: viewer.permissions,
             audience: viewer.joinedBy === "created" ? "creator" : "invited",
             results,
             visibility,
           })
         : null,
-    [results, visibility, viewer.permissions, viewer.joinedBy]
+    [results, visibility, pending, tasks, viewer.permissions, viewer.joinedBy]
   )
 
   const setVisibility = (next: ChecklistVisibility) => {
+    // Checklist を導けない間（権限の再確認中など）は、表示の状態を変えない
+    if (pending) return
     const ticket = guard.begin("visibility")
     // 前のスコープの描画の関数から呼ばれた場合（無効な Ticket）は、保存を始めない
     if (!guard.isCurrent(ticket)) return
@@ -119,26 +137,41 @@ export function useGettingStarted({
         guard.release(ticket)
         clear()
         if (!isConfirmedFailure(error)) {
-          // 保存されたかがわからない（確定した失敗ではない）。保存されている状態を取得し直して表示する。
+          // 保存されたかがわからない（確定した失敗ではない）。保存されている状態を取得し直す。
+          // 取得し直した結果が届くまでは、表示している状態を保存されている状態と示さない（確認中と示す）。
+          setNotice({ scope, kind: "unknown", since: progress.fetchedAt ?? null })
           progress.reload()
-          setNotice({ scope, text: "表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。" })
         } else {
-          setNotice({ scope, text: "表示の状態を保存できませんでした。もう一度お試しください。" })
+          setNotice({ scope, kind: "failed", since: null })
         }
       }
     )
   }
 
-  const error = (!externalResults && fetched.status === "error") || progress.status === "error"
+  const error = (external ? resultsError : fetched.status === "error") || progress.status === "error"
+  const current = notice?.scope === scope ? notice : null
+  // 保存されたかが不明な後の再取得が終わった（または失敗した）か
+  const rechecked = current?.kind === "unknown" && (progress.status === "error" || (progress.status === "ready" && progress.fetchedAt !== null && progress.fetchedAt !== current.since))
+  const noticeText = !current
+    ? ""
+    : current.kind === "failed"
+      ? "表示の状態を保存できませんでした。もう一度お試しください。"
+      : rechecked
+        ? progress.status === "error" || progress.refreshFailed
+          ? "表示の状態を保存できたかを確認できませんでした。保存されている状態も取得できませんでした。"
+          : "表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。"
+        : "表示の状態を保存できたかを確認しています。"
   return {
     scope,
     checklist,
-    loading: !checklist && !error,
-    error,
-    notice: notice?.scope === scope ? notice.text : "",
+    loading: !checklist && !error && !pending,
+    error: !pending && error,
+    /** Checklist を導けない理由（権限の再確認中など） */
+    pending,
+    notice: noticeText,
     setVisibility,
     retry: () => {
-      if (fetched.status === "error") fetched.reload()
+      if (!external && fetched.status === "error") fetched.reload()
       if (progress.status === "error") progress.reload()
     },
   }
@@ -169,6 +202,12 @@ export function GettingStartedConnected({
     <div className={cn("flex min-w-0 flex-col gap-3 empty:hidden", className)} data-testid="onb-checklist-region">
       {state.error && (
         <DataRegionError title="利用開始の準備を取得できませんでした" description="ほかの機能はそのまま使えます。" onRetry={state.retry} />
+      )}
+      {state.pending && (
+        // 前の権限で対象の作業を導かない（権限の再確認中など）。作業のボタンも示さない
+        <p className="text-ui text-muted-foreground" aria-busy="true" data-testid="onb-checklist-pending">
+          {state.pending}
+        </p>
       )}
       {checklist && (
         <GettingStartedChecklist
@@ -366,7 +405,7 @@ type RunOptions<T> = { success: (v: T) => string; onSuccess?: (v: T) => void; on
 /**
  * 変更の操作の実行。
  * - 二重実行を防ぐ（同じ操作の実行中は受け付けない）。操作ごとに要求の ID を付け、模擬のサーバーは同じ ID を 1 回だけ処理する。
- * - 結果が不明な場合は、同じ操作をもう一度実行させない。「処理されたかを確認する」（confirm）で要求の ID を照会し、
+ * - 結果が不明な場合は、同じ操作をもう一度実行させない。「状態を確認」（confirm）で要求の ID を照会し、
  *   処理されていれば成功として扱い、処理されていなければもう一度実行できるようにする。最新の状態（作業結果）も取得し直す。
  * - 確定した失敗（MockRequestError：サーバーが拒否した）だけを失敗とし、それ以外の例外（通信の例外など）は結果が不明として扱う
  *   （サーバーで処理が終わっている可能性があるため。もう一度実行する前に確認する）。
@@ -486,7 +525,7 @@ function useActions(scope: string, api: OnboardingApi) {
 
 type Actions = ReturnType<typeof useActions>
 
-/** 操作のボタン。結果が不明な間は、同じ操作の代わりに「処理されたかを確認する」を置く */
+/** 操作のボタン。結果が不明な間は、同じ操作の代わりに「状態を確認」を置く */
 function ActionButton({
   actions,
   actionKey,
@@ -509,7 +548,7 @@ function ActionButton({
   if (actions.unresolved(actionKey))
     return (
       <Button type="button" variant="outline" size={size} loading={actions.pending(actionKey)} onClick={() => actions.confirm(actionKey)} data-testid={testId ? `${testId}-confirm` : undefined}>
-        処理されたかを確認する
+        状態を確認
       </Button>
     )
   return (
@@ -933,7 +972,7 @@ function CustomersScreen({
               </ActionButton>
             </SheetFooter>
           </form>
-          <DiscardAlert
+          <DiscardChangesAlert
             open={discard}
             onOpenChange={setDiscard}
             onDiscard={() => {
@@ -1103,7 +1142,7 @@ function ProfileScreen({ viewer, api, onChanged, Title }: { viewer: OnboardingVi
   )
 }
 
-// ---------------------------------------------------------------- 組織の作成（最小限の手順の画面）
+// ---------------------------------------------------------------- 組織の作成（Multi-step Workflow）
 
 type StepId = SetupDraft["step"]
 
@@ -1115,27 +1154,57 @@ const newDraft = (requestId = ""): SetupDraft => ({
   skipped: [],
 })
 
-/** 分岐で不要になった手順を除いた、現在の手順の並び。自分だけで使う場合は招待の手順を除く */
-export const setupStepsOf = (values: SetupDraft["values"]): StepId[] => (values.usage === "team" ? ["org", "invite", "data"] : ["org", "data"])
-
 const parseInvites = (s: string) =>
   s
     .split(/[\s,、]+/)
     .map((x) => x.trim())
     .filter(Boolean)
 
+/** フォームの値。skipInvite は、任意の招待の手順をスキップした（入力していても送信しない） */
+type SetupValues = SetupDraft["values"] & { skipInvite: boolean }
+
+const setupFields: FormFields<SetupValues> = {
+  name: { label: "組織名", required: true, requiredMessage: "組織名を入力してください", normalize: (v) => v.trim() },
+  usage: { label: "使い方" },
+  invites: {
+    label: "招待するメンバーのメールアドレス",
+    // 自分だけで使う場合と、スキップした場合は、検証と送信から除く（値は残す）
+    active: (v) => v.usage === "team" && !v.skipInvite,
+    validate: (v) => {
+      const bad = parseInvites(v).find((x) => !/^[^\s@]+@[^\s@]+$/.test(x))
+      return bad ? `「${bad}」はメールアドレスの形式ではありません` : null
+    },
+  },
+  start: { label: "最初に表示する顧客の一覧" },
+  skipInvite: { label: "メンバーの招待" },
+}
+
+const stepFields: Record<StepId, (keyof SetupValues)[]> = { org: ["name", "usage"], invite: ["invites"], data: ["start"] }
+
+/** 必須の手順（組織名）と任意の手順（招待、データの始め方）。任意の手順は Stepper の名前でも示す */
 const stepMeta: Record<StepId, { title: string; required: boolean }> = {
   org: { title: "組織を作成", required: true },
   invite: { title: "メンバーを招待", required: false },
   data: { title: "顧客データの始め方", required: false },
 }
 
+/** 分岐で不要になった手順を除いた、現在の手順の並び。自分だけで使う場合は招待の手順を除く */
+export const setupStepsOf = (values: Pick<SetupDraft["values"], "usage">): StepDefinition<StepId>[] =>
+  (values.usage === "team" ? (["org", "invite", "data"] as const) : (["org", "data"] as const)).map((id) => ({
+    id,
+    label: stepMeta[id].required ? stepMeta[id].title : `${stepMeta[id].title}（任意）`,
+  }))
+
+const valuesOf = (draft: SetupDraft): SetupValues => ({ ...draft.values, skipInvite: draft.skipped.includes("invite") })
+
 /**
- * 組織の作成。Multi-step Workflow（Forms & Workflows、未統合）の代わりに、既存の Components で最小限の手順の画面として作る。
+ * 組織の作成。Multi-step Workflow（useStepFlow、Stepper、useFormState、handleSubmit）と Unsaved Changes で作る。
  * - 必須（組織名）と任意（招待、データの始め方）を区別し、任意の手順はスキップできる。合理的な初期値を用意する。
- * - 手順を移るたびに途中の入力を api に保存する。再マウント（再読み込み、別の端末）では続きから再開する。
+ * - 手順を移るたびに途中の入力を api に保存する（下書き）。再マウント（再読み込み、別の端末）では続きから再開する。
  * - 自分だけで使う場合は、招待の手順を除く（入力していても送信しない）。
- * - 作成の後は、成功の画面を挟まずに onComplete で製品の利用画面へ移る。結果が不明な場合は、作成されたかを確かめる。
+ * - 作成の要求の ID（requestId）で、同じ組織を二重に作成しない。結果が不明な場合は、作成されたかを確かめるまで作成し直せない。
+ * - 作成の後は、成功の画面を挟まずに onComplete で製品の利用画面へ移る。
+ * - 前回の手順の保存の後に入力した内容は、移動（UnsavedChangesProvider の中）と再読み込みの前に確かめる。
  */
 export function CreateOrganizationSetup({
   userId,
@@ -1156,14 +1225,9 @@ export function CreateOrganizationSetup({
   const [phase, setPhase] = useState<"loading" | "ready" | "load-error">("loading")
   const [draft, setDraft] = useState<SetupDraft>(() => newDraft())
   const [resumed, setResumed] = useState(false)
-  const [errors, setErrors] = useState<{ name?: string; invites?: string }>({})
-  const [submit, setSubmit] = useState<"idle" | "saving" | "failed" | "unknown" | "checking" | "not-created">("idle")
+  const [restarted, setRestarted] = useState(false)
   const [saveNote, setSaveNote] = useState("")
   const [loadToken, setLoadToken] = useState(0)
-  const headingRef = useRef<HTMLHeadingElement>(null)
-  const moved = useRef(false)
-  // 実行中の作成と確認の Ticket。利用者が変わった後（前の世代）の Ticket は guard.isLatest が false になり、新しい作成を妨げない。
-  const inflight = useRef<ScopeTicket | null>(null)
   const onActiveRef = useRef(onActiveChange)
   onActiveRef.current = onActiveChange
 
@@ -1189,123 +1253,23 @@ export function CreateOrganizationSetup({
     )
   }, [userId, loadToken, api, guard])
 
-  // 手順を移ったら、その手順の見出しにフォーカスを移す（最初の表示では移さない）。
-  useEffect(() => {
-    if (moved.current) headingRef.current?.focus()
-    moved.current = false
-  }, [draft.step])
-
-  const steps = setupStepsOf(draft.values)
-  const step: StepId = steps.includes(draft.step) ? draft.step : "data"
-  const index = steps.indexOf(step)
-  const meta = stepMeta[step]
-  const Title = titleAs
-  const setValues = (patch: Partial<SetupDraft["values"]>) => setDraft((d) => ({ ...d, values: { ...d.values, ...patch } }))
-
-  const persist = (next: SetupDraft | null) => {
+  // 最初から入力し直す：保存した途中の入力を削除し、新しい作成の要求の ID のフォームを作り直す（key で再マウント）
+  const restart = () => {
     const ticket = guard.begin("save")
     setSaveNote("")
-    api.saveDraft(userId, next).then(
-      () => {
-        if (!guard.isLatest(ticket)) return
-        guard.release(ticket)
-        onActiveRef.current?.({ hasDraft: !!next })
-      },
-      () => {
-        if (!guard.isLatest(ticket)) return
-        guard.release(ticket)
-        setSaveNote("途中の入力を保存できませんでした。この画面を閉じると、入力した内容は失われます。")
-      }
-    )
-  }
-  const moveTo = (target: StepId, patch: Partial<SetupDraft> = {}) => {
-    const next = { ...draft, ...patch, step: target }
-    moved.current = true
-    setDraft(next)
-    persist(next)
-  }
-
-  const next = () => {
-    if (step === "org") {
-      if (!draft.values.name.trim()) {
-        setErrors({ name: "組織名を入力してください" })
-        return
-      }
-      setErrors({})
-      moveTo(steps[index + 1])
-    } else if (step === "invite") {
-      const list = parseInvites(draft.values.invites)
-      const bad = list.find((x) => !/^[^\s@]+@[^\s@]+$/.test(x))
-      if (bad) {
-        setErrors({ invites: `「${bad}」はメールアドレスの形式ではありません` })
-        return
-      }
-      setErrors({})
-      // 入力がない場合はスキップとして扱う。
-      moveTo("data", { skipped: list.length === 0 ? ["invite"] : draft.skipped.filter((s) => s !== "invite") })
-    }
-  }
-  const back = () => {
-    setErrors({})
-    moveTo(steps[Math.max(0, index - 1)])
-  }
-  const skip = () => {
-    setErrors({})
-    moveTo("data", { skipped: ["invite"] })
-  }
-  const restart = () => {
-    const fresh = newDraft(crypto.randomUUID())
-    moved.current = true
-    setDraft(fresh)
+    setDraft(newDraft(crypto.randomUUID()))
     setResumed(false)
-    setErrors({})
-    setSubmit("idle")
-    persist(null)
-  }
-
-  const busyNow = () => inflight.current !== null && guard.isLatest(inflight.current)
-  const create = () => {
-    if (busyNow()) return
-    const ticket = guard.begin("create")
-    inflight.current = ticket
-    setSubmit("saving")
-    const { values } = draft
-    // 分岐で不要になった手順（自分だけで使う場合の招待）と、スキップした手順の入力は送信しない。
-    const invites = values.usage === "team" && !draft.skipped.includes("invite") ? parseInvites(values.invites) : []
-    api.createWorkspace(userId, { requestId: draft.requestId, name: values.name.trim(), invites, start: values.start }).then(
-      (r) => {
-        if (inflight.current === ticket) inflight.current = null
+    setRestarted(true)
+    api.saveDraft(userId, null).then(
+      () => {
         if (!guard.isLatest(ticket)) return
         guard.release(ticket)
-        onComplete({ workspaceId: r.workspaceId, start: values.start })
-      },
-      (error) => {
-        if (inflight.current === ticket) inflight.current = null
-        if (!guard.isLatest(ticket)) return
-        guard.release(ticket)
-        // 確定した失敗だけを、もう一度作成できる状態にする。それ以外（通信の例外など）は、作成されたかを確かめる。
-        setSubmit(isConfirmedFailure(error) ? "failed" : "unknown")
-      }
-    )
-  }
-  const confirm = () => {
-    if (busyNow()) return
-    const ticket = guard.begin("create")
-    inflight.current = ticket
-    setSubmit("checking")
-    api.findCreated(userId, draft.requestId, { signal: ticket.signal }).then(
-      (r) => {
-        if (inflight.current === ticket) inflight.current = null
-        if (!guard.isLatest(ticket)) return
-        guard.release(ticket)
-        if (r) onComplete({ workspaceId: r.workspaceId, start: draft.values.start })
-        else setSubmit("not-created")
+        onActiveRef.current?.({ hasDraft: false })
       },
       () => {
-        if (inflight.current === ticket) inflight.current = null
         if (!guard.isLatest(ticket)) return
         guard.release(ticket)
-        setSubmit("unknown")
+        setSaveNote("保存した途中の入力を削除できませんでした。もう一度開くと、前回の入力から再開します。")
       }
     )
   }
@@ -1321,146 +1285,385 @@ export function CreateOrganizationSetup({
       </div>
     )
 
-  const busy = submit === "saving" || submit === "checking"
+  // 利用者と作成の要求ごとに、フォームと手順の状態を作り直す（新しいスコープは initialValues から始める）
+  return (
+    <SetupForm
+      key={`${userId}:${draft.requestId}`}
+      userId={userId}
+      api={api}
+      draft={draft}
+      resumed={resumed}
+      focusOnMount={restarted}
+      onRestart={restart}
+      saveNote={saveNote}
+      setSaveNote={setSaveNote}
+      onComplete={onComplete}
+      onDraftSaved={(hasDraft) => onActiveRef.current?.({ hasDraft })}
+      titleAs={titleAs}
+    />
+  )
+}
+
+function SetupForm({
+  userId,
+  api,
+  draft,
+  resumed,
+  focusOnMount,
+  onRestart,
+  saveNote,
+  setSaveNote,
+  onComplete,
+  onDraftSaved,
+  titleAs,
+}: {
+  userId: UserId
+  api: OnboardingApi
+  draft: SetupDraft
+  resumed: boolean
+  focusOnMount: boolean
+  onRestart: () => void
+  saveNote: string
+  setSaveNote: (note: string) => void
+  onComplete: (result: { workspaceId: string; start: "empty" | "sample" }) => void
+  onDraftSaved: (hasDraft: boolean) => void
+  titleAs: Heading
+}) {
+  const idPrefix = useId()
+  const fieldId = (name: keyof SetupValues) => `${idPrefix}-${name}`
+  const guard = useScopeGuard(userId)
+  const form = useFormState<SetupValues>({ initialValues: valuesOf(draft), fields: setupFields })
+  const steps = setupStepsOf(form.values)
+  const blocked = new Set(form.blockers.map((b) => b.name))
+  const isComplete = (id: StepId) => !stepFields[id].some((f) => blocked.has(f))
+  // 下書きの現在の手順から再開する。手前の手順は、次へで進んだ（完了した）ものとして扱う
+  const [initialFlow] = useState(() => {
+    const ids = setupStepsOf(draft.values).map((s) => s.id)
+    const at = Math.max(0, ids.indexOf(draft.step))
+    return { current: ids[at], reached: ids.slice(0, at + 1), completed: ids.slice(0, at) }
+  })
+  const flow = useStepFlow<StepId>({ steps, isComplete, initial: initialFlow })
+  const step: StepId = flow.current ?? "org"
+  const meta = stepMeta[step]
+  const Title = titleAs
+  const [draftSaving, setDraftSaving] = useState(false)
+  const [check, setCheck] = useState<"idle" | "checking" | "not-created">("idle")
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const headingEl = useRef<HTMLElement | null>(null)
+  const noticeId = `${idPrefix}-notice`
+
+  // 最初から入力し直した後は、最初の手順の見出しにフォーカスを移す（useStepFlow は最初の表示では移さない）
+  useEffect(() => {
+    if (focusOnMount) headingEl.current?.focus()
+    // マウントの時だけ
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 手順を移ったら、途中の入力を下書きとして保存する。保存できた値を基準値にする（未保存の変更の確認に使う）
+  const lastStep = useRef(step)
+  useEffect(() => {
+    if (lastStep.current === step) return
+    lastStep.current = step
+    const values = form.values
+    const next: SetupDraft = {
+      requestId: draft.requestId,
+      step,
+      values: { name: values.name, usage: values.usage, invites: values.invites, start: values.start },
+      skipped: values.skipInvite ? ["invite"] : [],
+    }
+    const ticket = guard.begin("save")
+    setSaveNote("")
+    setDraftSaving(true)
+    api.saveDraft(userId, next).then(
+      () => {
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        setDraftSaving(false)
+        form.markSaved(values)
+        onDraftSaved(true)
+      },
+      () => {
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        setDraftSaving(false)
+        setSaveNote("途中の入力を保存できませんでした。この画面を閉じると、入力した内容は失われます。")
+      }
+    )
+  }, [step, form, draft.requestId, guard, api, userId, setSaveNote, onDraftSaved])
+
+  const unknown = form.status === "unknown"
+  // 前回の手順の保存の後の入力と、結果が不明な作成を、移動と再読み込みから守る（下書きの保存中は、終わるまで待つ）
+  useUnsavedChanges({ dirty: form.isDirty || unknown, saving: draftSaving, unknown, label: "組織の作成", revision: form.revision, onDiscard: form.discard })
+
+  // 作成した組織。handleSubmit の onSuccess（世代が変わっていない場合だけ呼ばれる）で使う
+  const created = useRef<string | null>(null)
+  const submit = form.handleSubmit(
+    async (values) => {
+      setCheck("idle")
+      // 分岐で不要になった手順（自分だけで使う場合の招待）と、スキップした手順の入力は送信しない（active で除かれ、values に含まれない）。
+      const invites = values.invites !== undefined ? parseInvites(values.invites) : []
+      try {
+        const r = await api.createWorkspace(userId, { requestId: draft.requestId, name: (values.name ?? "").trim(), invites, start: values.start ?? "empty" })
+        created.current = r.workspaceId
+        return { status: "success" }
+      } catch (error) {
+        // 確定した失敗だけを、もう一度作成できる状態にする。それ以外（通信の例外など）は、作成されたかを確かめる。
+        return isConfirmedFailure(error)
+          ? { status: "failed", formError: "入力した内容は残っています。もう一度お試しください。" }
+          : { status: "unknown", formError: "通信が途中で切れました。もう一度作成する前に、作成されたかを確かめます。" }
+      }
+    },
+    {
+      onBlocked: () => {
+        const target = flow.firstIncomplete()
+        if (target) flow.goTo(target)
+      },
+      // 閉じた画面（アンマウントの後）、別の利用者に変わった後の応答では呼ばれない
+      onSuccess: (saved) => {
+        if (created.current) onComplete({ workspaceId: created.current, start: saved.start })
+      },
+    }
+  )
+
+  // 次へ、または最後の手順では作成。完了していない場合は、この手順の項目だけエラーを示し、最初の項目へフォーカスを移す
+  const advance = () => {
+    if (flow.isLast) {
+      void submit()
+      return
+    }
+    if (!flow.next()) {
+      form.reveal(stepFields[step])
+      const first = form.blockers.find((b) => stepFields[step].includes(b.name))
+      if (first) focusFormControl(fieldId(first.name))
+    }
+  }
+  // スキップと、招待の手順の次へは、skipInvite を変えた後の描画（検証の対象が変わった後）で進む
+  const [advanceRequest, setAdvanceRequest] = useState(0)
+  useEffect(() => {
+    if (advanceRequest) advance()
+    // advanceRequest が変わったときだけ
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [advanceRequest])
+  const requestAdvance = (skipInvite: boolean) => {
+    if (form.values.skipInvite !== skipInvite) form.setValue("skipInvite", skipInvite, { commit: true })
+    setAdvanceRequest((n) => n + 1)
+  }
+  const onNext = () => {
+    // 招待の手順：入力がない場合はスキップとして扱う。入力がある場合は、スキップしていても検証して送信の対象に戻す
+    if (step === "invite") requestAdvance(parseInvites(form.values.invites).length === 0)
+    else advance()
+  }
+
+  const busyNow = () => check === "checking" || form.submitting
+  const confirm = () => {
+    if (busyNow() || !unknown) return
+    const ticket = guard.begin("check")
+    setCheck("checking")
+    api.findCreated(userId, draft.requestId, { signal: ticket.signal }).then(
+      (r) => {
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        if (r) {
+          form.resolveUnknown({ saved: true })
+          setCheck("idle")
+          onComplete({ workspaceId: r.workspaceId, start: form.submittedValues?.start ?? form.values.start })
+        } else {
+          form.resolveUnknown({ saved: false })
+          setCheck("not-created")
+        }
+      },
+      () => {
+        if (!guard.isLatest(ticket)) return
+        guard.release(ticket)
+        setCheck("idle")
+      }
+    )
+  }
+
+  const stepBlockers = form.blockers.filter((b) => stepFields[step].includes(b.name))
+  const err = (name: keyof SetupValues) => {
+    const e = form.error(name)
+    return e ? <FieldError>{e}</FieldError> : null
+  }
+
   return (
     <div className="flex w-full max-w-[32rem] min-w-0 flex-col gap-6" data-testid="onb-setup" data-step={step}>
-      <div className="flex flex-col gap-2">
-        <p className="text-ui text-muted-foreground tabular-nums" data-testid="onb-setup-position">
-          手順 {index + 1} / {steps.length}・{meta.required ? "必須" : "任意"}
-        </p>
-        <Title ref={headingRef} tabIndex={-1} className="text-section outline-none">
-          {meta.title}
-        </Title>
-        {resumed && (
-          <p className="text-ui text-muted-foreground" data-testid="onb-setup-resumed">
-            前回の入力の続きから再開しています。
-            <Button variant="link" size="sm" className="ms-2" onClick={restart}>
-              最初から入力し直す
-            </Button>
+      {/* 見出しが直後に続くため、簡易の Stepper には現在の手順の名前を重ねない（支援技術には sr-only で伝える） */}
+      <Stepper items={flow.items} total={flow.total} onSelect={(id) => flow.goTo(id)} layout="compact" currentLabel="hidden" aria-label="組織の作成の手順" data-testid="onb-setup-stepper" />
+      <form
+        noValidate
+        className="flex min-w-0 flex-col gap-6"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onNext()
+        }}
+        onKeyDown={(e) => submitOnEnter(e, onNext)}
+      >
+        <div className="flex flex-col gap-2">
+          <Title
+            ref={(el: HTMLHeadingElement | null) => {
+              flow.headingRef(el)
+              headingEl.current = el
+            }}
+            tabIndex={-1}
+            className="text-section outline-none"
+          >
+            {meta.title}
+          </Title>
+          <p className="text-ui text-muted-foreground" data-testid="onb-setup-requirement" data-required={meta.required}>
+            {meta.required ? "必須の手順です。" : "任意の手順です。スキップしても、あとで設定できます。"}
           </p>
-        )}
-      </div>
+          {resumed && (
+            <p className="text-ui text-muted-foreground" data-testid="onb-setup-resumed">
+              前回の入力の続きから再開しています。
+              <Button type="button" variant="link" size="sm" className="ms-2" disabled={form.submitting || unknown || check === "checking" || draftSaving} onClick={() => setConfirmRestart(true)}>
+                最初から入力し直す
+              </Button>
+            </p>
+          )}
+        </div>
 
-      {step === "org" && (
-        <div className="flex flex-col gap-6">
-          <Field invalid={!!errors.name}>
-            <FieldLabel>組織名</FieldLabel>
-            <Input
-              value={draft.values.name}
-              required
-              autoComplete="organization"
+        {step === "org" && (
+          <div className="flex flex-col gap-6">
+            <Field invalid={!!form.error("name")}>
+              <FieldLabel>組織名</FieldLabel>
+              <Input {...form.inputProps("name")} id={fieldId("name")} autoComplete="organization" data-testid="onb-setup-name" />
+              <FieldDescription>会社名や部署名など。あとで組織の設定で変更できます。</FieldDescription>
+              {err("name")}
+            </Field>
+            <Field>
+              <FieldSet render={<RadioGroup value={form.values.usage} onValueChange={(v) => form.setValue("usage", v as "team" | "solo", { commit: true })} />}>
+                <FieldLegend variant="label">使い方</FieldLegend>
+                <div>
+                  <FieldItem>
+                    <RadioGroupItem value="team" />
+                    <FieldLabel>チームで使う</FieldLabel>
+                  </FieldItem>
+                  <FieldItem>
+                    <RadioGroupItem value="solo" />
+                    <FieldLabel>自分だけで使う</FieldLabel>
+                  </FieldItem>
+                </div>
+              </FieldSet>
+              <FieldDescription>自分だけで使う場合は、メンバーの招待の手順を省きます。あとから招待することもできます。</FieldDescription>
+            </Field>
+          </div>
+        )}
+
+        {step === "invite" && (
+          <Field invalid={!!form.error("invites")}>
+            <FieldLabel>招待するメンバーのメールアドレス</FieldLabel>
+            <Textarea
+              {...form.inputProps("invites")}
               onChange={(e) => {
-                setValues({ name: e.target.value })
-                if (errors.name) setErrors({})
+                // スキップした後に入力し直した場合は、送信の対象に戻す
+                if (form.values.skipInvite) form.setValue("skipInvite", false, { commit: true })
+                form.inputProps("invites").onChange(e)
               }}
-              data-testid="onb-setup-name"
+              id={fieldId("invites")}
+              rows={3}
+              data-testid="onb-setup-invites"
             />
-            <FieldDescription>会社名や部署名など。あとで組織の設定で変更できます。</FieldDescription>
-            {errors.name && <FieldError>{errors.name}</FieldError>}
+            <FieldDescription>複数の場合は改行かカンマで区切ります。招待のメールは模擬の処理で、実際には送信しません。あとでメンバーの画面からも招待できます。</FieldDescription>
+            {err("invites")}
           </Field>
+        )}
+
+        {step === "data" && (
           <Field>
-            <FieldSet render={<RadioGroup value={draft.values.usage} onValueChange={(v) => setValues({ usage: v as "team" | "solo" })} />}>
-              <FieldLegend variant="label">使い方</FieldLegend>
+            <FieldSet render={<RadioGroup value={form.values.start} onValueChange={(v) => form.setValue("start", v as "empty" | "sample", { commit: true })} />}>
+              <FieldLegend variant="label">最初に表示する顧客の一覧</FieldLegend>
               <div>
                 <FieldItem>
-                  <RadioGroupItem value="team" />
-                  <FieldLabel>チームで使う</FieldLabel>
+                  <RadioGroupItem value="empty" />
+                  <FieldLabel>空の状態から始める</FieldLabel>
                 </FieldItem>
                 <FieldItem>
-                  <RadioGroupItem value="solo" />
-                  <FieldLabel>自分だけで使う</FieldLabel>
+                  <RadioGroupItem value="sample" />
+                  <FieldLabel>サンプルデータで試す</FieldLabel>
                 </FieldItem>
               </div>
             </FieldSet>
-            <FieldDescription>自分だけで使う場合は、メンバーの招待の手順を省きます。あとから招待することもできます。</FieldDescription>
+            <FieldDescription>サンプルデータは実際の顧客とは別に表示し、いつでも削除できます。顧客の登録と CSV ファイルの取り込みは、作成した後に顧客の一覧から行えます。</FieldDescription>
           </Field>
-        </div>
-      )}
-
-      {step === "invite" && (
-        <Field invalid={!!errors.invites}>
-          <FieldLabel>招待するメンバーのメールアドレス</FieldLabel>
-          <Textarea
-            value={draft.values.invites}
-            rows={3}
-            onChange={(e) => {
-              setValues({ invites: e.target.value })
-              if (errors.invites) setErrors({})
-            }}
-            data-testid="onb-setup-invites"
-          />
-          <FieldDescription>複数の場合は改行かカンマで区切ります。招待のメールは模擬の処理で、実際には送信しません。あとでメンバーの画面からも招待できます。</FieldDescription>
-          {errors.invites && <FieldError>{errors.invites}</FieldError>}
-        </Field>
-      )}
-
-      {step === "data" && (
-        <Field>
-          <FieldSet render={<RadioGroup value={draft.values.start} onValueChange={(v) => setValues({ start: v as "empty" | "sample" })} />}>
-            <FieldLegend variant="label">最初に表示する顧客の一覧</FieldLegend>
-            <div>
-              <FieldItem>
-                <RadioGroupItem value="empty" />
-                <FieldLabel>空の状態から始める</FieldLabel>
-              </FieldItem>
-              <FieldItem>
-                <RadioGroupItem value="sample" />
-                <FieldLabel>サンプルデータで試す</FieldLabel>
-              </FieldItem>
-            </div>
-          </FieldSet>
-          <FieldDescription>サンプルデータは実際の顧客とは別に表示し、いつでも削除できます。顧客の登録と CSV ファイルの取り込みは、作成した後に顧客の一覧から行えます。</FieldDescription>
-        </Field>
-      )}
-
-      {submit === "failed" && (
-        <Alert variant="destructive" role="alert" data-testid="onb-setup-error">
-          <AlertTitle>組織を作成できませんでした</AlertTitle>
-          <AlertDescription>入力した内容は残っています。もう一度お試しください。</AlertDescription>
-        </Alert>
-      )}
-      {(submit === "unknown" || submit === "checking") && (
-        <Alert variant="warning" role="alert" data-testid="onb-setup-unknown">
-          <AlertTitle>組織が作成されたかを確認できませんでした</AlertTitle>
-          <AlertDescription>通信が途中で切れました。もう一度作成する前に、作成されたかを確かめます。</AlertDescription>
-          <AlertAction>
-            <Button variant="outline" size="sm" loading={submit === "checking"} onClick={confirm}>
-              作成されたかを確認する
-            </Button>
-          </AlertAction>
-        </Alert>
-      )}
-      {submit === "not-created" && (
-        <Alert data-testid="onb-setup-not-created">
-          <AlertTitle>組織は作成されていませんでした</AlertTitle>
-          <AlertDescription>入力した内容で、もう一度作成できます。</AlertDescription>
-        </Alert>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2">
-        {index > 0 && (
-          <Button variant="ghost" onClick={back} disabled={busy}>
-            戻る
-          </Button>
         )}
-        <div className="ms-auto flex flex-wrap gap-2">
+
+        {form.status === "failed" && form.formError && (
+          <Alert variant="destructive" role="alert" data-testid="onb-setup-error">
+            <AlertTitle>組織を作成できませんでした</AlertTitle>
+            <AlertDescription>{form.formError}</AlertDescription>
+          </Alert>
+        )}
+        {unknown && (
+          <Alert variant="warning" role="alert" data-testid="onb-setup-unknown">
+            <AlertTitle>組織が作成されたかを確認できませんでした</AlertTitle>
+            <AlertDescription>{form.formError}</AlertDescription>
+            <AlertAction>
+              <Button type="button" variant="outline" size="sm" loading={check === "checking"} onClick={confirm}>
+                登録されたかを確認
+              </Button>
+            </AlertAction>
+          </Alert>
+        )}
+        {check === "not-created" && form.status === "idle" && (
+          <Alert data-testid="onb-setup-not-created">
+            <AlertTitle>組織は作成されていませんでした</AlertTitle>
+            <AlertDescription>入力した内容で、もう一度作成できます。</AlertDescription>
+          </Alert>
+        )}
+
+        <FormActions
+          notice={
+            <SaveBlockerNotice
+              id={noticeId}
+              blockers={stepBlockers}
+              reason={unknown ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}
+              goal={flow.isLast ? "作成できます" : "次へ進めます"}
+              data-testid="onb-setup-notice"
+            />
+          }
+        >
+          {!flow.isFirst && (
+            <Button type="button" variant="secondary" onClick={() => flow.back()} disabled={form.submitting || check === "checking"}>
+              戻る
+            </Button>
+          )}
           {step === "invite" && (
-            <Button variant="ghost" onClick={skip}>
+            <Button type="button" variant="ghost" onClick={() => requestAdvance(true)}>
               スキップ
             </Button>
           )}
-          {step === "data" ? (
-            <Button onClick={create} loading={busy} disabled={submit === "unknown"} data-testid="onb-setup-create">
+          {flow.isLast ? (
+            <Button
+              type="submit"
+              loading={form.submitting || check === "checking"}
+              disabled={!form.canSubmit}
+              focusableWhenDisabled
+              aria-describedby={noticeId}
+              data-testid="onb-setup-create"
+            >
               組織を作成して始める
             </Button>
           ) : (
-            <Button onClick={next}>次へ</Button>
+            <Button type="submit" disabled={!flow.canNext} focusableWhenDisabled aria-describedby={noticeId} data-testid="onb-setup-next">
+              次へ
+            </Button>
           )}
-        </div>
-      </div>
+        </FormActions>
+      </form>
       <p role="status" className="text-ui text-muted-foreground empty:hidden">
         {saveNote}
       </p>
+      <DiscardChangesAlert
+        open={confirmRestart}
+        onOpenChange={setConfirmRestart}
+        title="入力した内容を破棄して、最初から入力し直しますか？"
+        description="保存した途中の入力も削除します。"
+        onDiscard={() => {
+          setConfirmRestart(false)
+          onRestart()
+        }}
+      />
     </div>
   )
 }

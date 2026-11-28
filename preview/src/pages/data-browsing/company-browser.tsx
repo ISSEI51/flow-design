@@ -2,16 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent,
 import { useTable, type ColumnPinningState, type ColumnVisibilityState } from "@tanstack/react-table"
 import { CalendarDays, ChevronDown, Ellipsis, Kanban, SlidersHorizontal, Table2, Trash2, UserRound } from "lucide-react"
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   DataTable,
@@ -33,6 +23,7 @@ import { useBrowseData, useDelayedFlag } from "@/patterns/browse-data"
 import { useBrowseQuery, useFilterDraft } from "@/patterns/browse-query"
 import { BulkResultAlert, BulkRunStatus } from "@/patterns/bulk-actions"
 import { isBulkFullySucceeded, useBulkAction, useBulkSelection } from "@/patterns/bulk-selection"
+import { ConfirmActionDialog } from "@/patterns/confirm-action"
 import { DataRefreshIndicator, DataRegionError, LoadingReveal } from "@/patterns/data-states"
 import { captureListPosition, getRecordNeighbors, useListPositionRestore, type ListPosition } from "@/patterns/list-detail"
 import { TableScrollArea } from "@/patterns/table-scroll-area"
@@ -74,12 +65,19 @@ export const viewOptions: ViewOption<BrowseView>[] = [
 ]
 
 export type BrowserSnapshot = {
+  /**
+   * 記録したときのスコープ（この画面ではワークスペース。製品ではアカウント、ワークスペース、権限の版を含める）。
+   * 製品は、現在のスコープと一致する場合だけ、この記録を一覧に渡す
+   */
+  scope: string
   query: CompanyQuery
   view: BrowseView
   calendarMonth: string
   position: ListPosition | null
-  /** 一覧に戻ったときに、取得し直す間も表示するデータ（同じ条件の結果） */
-  page: { data: CompanyPage; key: string } | null
+  /** 一覧に戻ったときに、取得し直す間も表示するデータ（同じ条件の結果）。useBrowseData の initialData にそのまま渡す */
+  page: { data: CompanyPage; key: string; fetchedAt: number | null; scope: string } | null
+  /** ID で選んだ行（全件の選択は記録しない。戻ったときに、対象を検索結果の全件へ広げない） */
+  selectedIds: string[]
 }
 
 type Features = {
@@ -175,8 +173,11 @@ export function CompanyBrowser({
     fetcher: (query, { signal }) => listCompanies(workspace, query, signal),
     scopeKey: workspace,
     enabled: view === "table",
+    // 記録したときのスコープ（page.scope）が現在のワークスペースと異なる場合、useBrowseData は使わずに初回の読み込みにする。
     initialData: initial?.page ?? undefined,
   })
+  // 戻ったときの復元の対象の条件のキー（useBrowseData の既定のキーと同じ）。表示中のデータがこの条件の結果のときだけ位置を戻す。
+  const [restoreKey] = useState(() => (initial?.position ? JSON.stringify(q) : null))
   const reloadRef = useRef(data.reload)
   reloadRef.current = data.reload
   useEffect(() => {
@@ -189,6 +190,17 @@ export function CompanyBrowser({
   // isCurrent（表示できる）ではなく canOperate（最新の取得に成功した）で判断する。読み込みの表示だけを 200ms 遅らせる。
   const locked = view === "table" && !data.canOperate
   const showLoading = useDelayedFlag(data.status === "loading" || data.status === "refreshing")
+  // 読み込み中の Skeleton の行数。同じスコープと条件の総件数がわかっている場合は、表示予定の行数にする（表の下の内容を動かさない）。
+  // 最後に確定した総件数（commit した描画の値）。記録は効果の中で行い、描画の中では読むだけにする。
+  const knownTotal = useRef<{ scope: string; key: string; total: number } | null>(null)
+  useLayoutEffect(() => {
+    if (data.isCurrent && page && page.total !== null) knownTotal.current = { scope: workspace, key: selectionKey(q), total: page.total }
+  })
+  const known = knownTotal.current
+  const expectedRows =
+    known && known.scope === workspace && known.key === selectionKey(q)
+      ? Math.max(1, Math.min(q.pagination.pageSize, known.total - q.pagination.pageIndex * q.pagination.pageSize))
+      : q.pagination.pageSize
   // 最後のページの行がなくなった（一括削除、ほかの利用者の削除）場合は、未登録や 0 件と表示せず、最後のページへ戻して取得し直す。
   const outOfRange = data.isCurrent && rows.length === 0 && q.pagination.pageIndex > 0
   useEffect(() => {
@@ -212,6 +224,15 @@ export function CompanyBrowser({
     visibleIds: view === "table" ? rows.map((r) => r.id) : [],
     total,
   })
+  // 戻ったとき：ID で選んでいた行の選択を戻す。記録は、製品が同じスコープの場合だけ渡す（initial）。
+  // 条件（検索語、フィルター）も記録した値で始まるため、選択の条件と一致する。全件の選択は記録しない（対象を広げない）。
+  const restoredSelection = useRef(false)
+  useEffect(() => {
+    if (restoredSelection.current) return
+    restoredSelection.current = true
+    const ids = initial?.scope === workspace ? (initial?.selectedIds ?? []) : []
+    if (ids.length > 0) selection.onRowSelectionChange(() => Object.fromEntries(ids.map((id) => [id, true])))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // 操作の内容。結果（summary）に保存し、再試行で同じ内容を使う。
   type Payload = { kind: "patch"; patch: CompanyPatch } | { kind: "delete" } | { kind: "restore-owner"; owners: Record<string, string> }
   const previousOwners = useRef<Record<string, string>>({})
@@ -284,6 +305,13 @@ export function CompanyBrowser({
   })
   const running = action.running !== null
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // 削除の確認の対象のキー：スコープ、ID の一覧（件数が同じでも ID が違えば変わる）、全件の選択は条件、除外した ID、件数。
+  // 確認の表示中に対象か件数が変わったら、ConfirmActionDialog が確かめ直させる。
+  const deleteKey = JSON.stringify(
+    selection.mode === "ids"
+      ? ["ids", workspace, [...selection.selectedIds].sort()]
+      : ["query", workspace, selectionKey(q), [...selection.excludedIds].sort(), selection.count]
+  )
   const startAction = (label: string, payload: Payload) => {
     void action.start(label, selection.snapshot(), payload)
     keepFocus(() => root.current?.querySelector<HTMLElement>("[data-slot=bulk-run-status]") ?? null)
@@ -318,11 +346,14 @@ export function CompanyBrowser({
     lastOpen.current ? (root.current?.querySelector<HTMLElement>(`[data-row-id="${lastOpen.current}"] :is([data-slot=data-table-row-trigger],[data-row-focus])`) ?? null) : null
 
   const snapshot = (rowId: string | null): BrowserSnapshot => ({
+    scope: workspace,
     query: q,
     view,
     calendarMonth,
     position: captureListPosition({ scrollElement: scroller.current, root: root.current, rowId }),
-    page: data.isCurrent && page && data.dataKey ? { data: page, key: data.dataKey } : null,
+    // 取得した時刻も記録する（戻った後の再取得に失敗したとき、「前回」ではなく取得した時刻を示す）。
+    page: data.isCurrent && page && data.dataKey ? { data: page, key: data.dataKey, fetchedAt: data.fetchedAt, scope: workspace } : null,
+    selectedIds: selection.mode === "ids" ? [...selection.selectedIds] : [],
   })
   const openPage = (id: string, event?: MouseEvent) => {
     if (!onOpenPage) return
@@ -332,10 +363,16 @@ export function CompanyBrowser({
   }
 
   // 一覧に戻ったとき：データの表示が終わってから、スクロールの位置とフォーカスを戻す。
+  // 復元の前に利用者が操作を始めたら（読み込み中に検索欄へ入力した場合など）、復元を取りやめる（useListPositionRestore）。
   useListPositionRestore({
     position: initial?.position ?? null,
-    // 保持していたデータで先に表示し、取得し直した結果（行の削除などを反映した結果）が届いてから復元する。
+    // 保持していたデータで先に表示し、取得し直した結果（行の削除などを反映した結果）が届いてから、フォーカスを戻す。
     ready: view === "table" ? data.isCurrent : true,
+    // 保持していたデータ（同じ条件の行）を表示している間に、スクロールの位置だけを先に戻す。
+    scrollReady: view === "table" && data.data !== undefined && data.dataKey === restoreKey,
+    // 条件が変わった後の結果には、前の条件の位置を当てはめない。
+    targetKey: view === "table" ? restoreKey : null,
+    dataKey: view === "table" ? data.dataKey : null,
     root,
     scrollElement: scroller,
     fallbackFocus: () => root.current?.querySelector<HTMLElement>("[data-slot=empty-content] button") ?? searchRef.current,
@@ -373,6 +410,8 @@ export function CompanyBrowser({
 
   // ---------------------------------------------------------------- 表示
   const selectedLabel = selection.count === null ? "検索結果すべて" : `${fmt(selection.count)}件`
+  // 件数の行を、一括操作のバーが入りきらない幅では、あらかじめ 2 行にする（モバイルは一括操作のバーを画面の下に置くため対象外）。
+  const stackStatus = bulkEnabled && !mobile
   const bar = bulkEnabled && view === "table" && selection.hasSelection && (
     <DataTableSelectionBar
       // 幅を内容に合わせ、一括操作を件数のすぐ右に置く（行の中央に離して置かない）。
@@ -566,38 +605,55 @@ export function CompanyBrowser({
         )}
 
         {/* ---------------------------------------- 件数、一括操作、表示形式（データ領域の直上・右） */}
-        <div className="flex min-h-12 flex-wrap items-center gap-x-4 gap-y-2" data-testid={`${testId}-status-row`}>
-          {bar && !showBottomBar ? (
-            bar
-          ) : view === "table" ? (
-            <p
-              className={cn("text-ui tabular-nums", !data.isCurrent && data.status !== "loading" && "text-muted-foreground")}
-              data-testid={`${testId}-count`}
-              data-stale={(!data.isCurrent && data.status !== "loading") || undefined}
-            >
-              {countText}
-            </p>
-          ) : (
-            selection.hasSelection && (
-              // 一括操作に対応しない表示形式でも、選択を無言で隠さない。
-              <p className="text-ui" data-testid={`${testId}-selection-kept`}>
-                {selectedLabel}を選択中。一括操作は表で行えます。
-                <Button variant="link" size="sm" onClick={() => setView("table")}>
-                  表に切り替える
-                </Button>
-                <Button variant="link" size="sm" onClick={selection.clear}>
-                  選択を解除
-                </Button>
+        {/*
+          2 つの列の grid：左の列（件数、または一括操作のバー）は列の中で折り返し、右の列（更新中、表示形式の切り替え）は折り返さない。
+          一括操作のバーが件数の行に入りきらない幅（行の容器の幅で判断する）では、あらかじめ 2 行にし、
+          1 行目に件数か一括操作のバー（全幅）、2 行目の右に表示形式の切り替えを置く。行を選んだ・ページの全件を選んだ・
+          再取得に失敗した時点で行の高さが変わらないため、表の位置が動かない（続けて押した位置が別の行にならない）。
+          右の列の並び順：更新中 →（エクスポートの入口を置く場合は、ここ）→ 表示形式の切り替え（右端。データ領域の右端にそろえる）。
+        */}
+        <div className={cn(stackStatus && "@container/status")}>
+          <div
+            className={cn(
+              "grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2",
+              stackStatus && (views ? "@max-[70rem]/status:grid-cols-1" : "@max-[50rem]/status:grid-cols-1")
+            )}
+            data-testid={`${testId}-status-row`}
+          >
+            <div className="flex min-h-12 min-w-0 items-center">
+              {bar && !showBottomBar ? (
+                bar
+              ) : view === "table" ? (
+                <p
+                  className={cn("text-ui tabular-nums", !data.isCurrent && data.status !== "loading" && "text-muted-foreground")}
+                  data-testid={`${testId}-count`}
+                  data-stale={(!data.isCurrent && data.status !== "loading") || undefined}
+                >
+                  {countText}
+                </p>
+              ) : (
+                selection.hasSelection && (
+                  // 一括操作に対応しない表示形式でも、選択を無言で隠さない。
+                  <p className="text-ui" data-testid={`${testId}-selection-kept`}>
+                    {selectedLabel}を選択中。一括操作は表で行えます。
+                    <Button variant="link" size="sm" onClick={() => setView("table")}>
+                      表に切り替える
+                    </Button>
+                    <Button variant="link" size="sm" onClick={selection.clear}>
+                      選択を解除
+                    </Button>
+                  </p>
+                )
+              )}
+              {/* 常に置いた読み上げの領域。検索のたびに重ならないよう、件数は結果が確定したときだけ入れる。一括操作の開始もここで伝える */}
+              <p className="sr-only" aria-live="polite" data-testid={`${testId}-announce`}>
+                {running ? `${action.running!.action}を実行中` : view === "table" && data.isCurrent ? countText : ""}
               </p>
-            )
-          )}
-          {/* 常に置いた読み上げの領域。検索のたびに重ならないよう、件数は結果が確定したときだけ入れる。一括操作の開始もここで伝える */}
-          <p className="sr-only" aria-live="polite" data-testid={`${testId}-announce`}>
-            {running ? `${action.running!.action}を実行中` : view === "table" && data.isCurrent ? countText : ""}
-          </p>
-          <div className="ms-auto flex items-center gap-3">
-            {view === "table" && <DataRefreshIndicator active={data.status === "refreshing"} />}
-            {switcher}
+            </div>
+            <div className="flex items-center justify-self-end gap-3">
+              {view === "table" && <DataRefreshIndicator active={data.status === "refreshing"} />}
+              {switcher}
+            </div>
           </div>
         </div>
 
@@ -615,8 +671,8 @@ export function CompanyBrowser({
                   caption="顧客の一覧"
                   onRowOpen={(row) => setOpenId(row.id)}
                   activeRowId={openId}
-                  // ページサイズが既知のため、表示予定の行数の Skeleton にする（高さを保つ）。
-                  loadingRowCount={q.pagination.pageSize}
+                  // 表示予定の行数の Skeleton にする（高さを保つ）。総件数がわかっている場合は、最後のページの行数に合わせる。
+                  loadingRowCount={expectedRows}
                   empty={tableEmpty}
                   noResults={noResults}
                   error={
@@ -651,6 +707,7 @@ export function CompanyBrowser({
             activeId={openId}
             onOpen={setOpenId}
             onClearAll={clearAll}
+            refetchToken={refetchToken}
             testId={`${testId}-board`}
           />
         ) : (
@@ -661,6 +718,7 @@ export function CompanyBrowser({
             activeId={openId}
             onOpen={setOpenId}
             onClearAll={clearAll}
+            refetchToken={refetchToken}
             testId={`${testId}-calendar`}
             month={calendarMonth}
             onMonthChange={setCalendarMonth}
@@ -719,33 +777,38 @@ export function CompanyBrowser({
         )}
 
         {/* ---------------------------------------- 危険な一括操作の確認 */}
-        <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-          <AlertDialogContent data-testid={`${testId}-confirm-delete`} finalFocus={() => resultRef.current ?? searchRef.current ?? true}>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{selectedLabel}の顧客を削除しますか？</AlertDialogTitle>
-              <AlertDialogDescription>
-                {selection.mode === "ids"
-                  ? `対象：${selection.selectedIds.slice(0, 3).map(nameOf).join("、")}${selection.selectedIds.length > 3 ? ` ほか ${fmt(selection.selectedIds.length - 3)}件` : ""}。`
-                  : `対象：現在の検索条件に一致する顧客${selection.excludedIds.length ? `（選択を外した ${fmt(selection.excludedIds.length)}件を除く）` : ""}。`}
-                削除すると元に戻せません。契約と請求の履歴も表示できなくなります。
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>キャンセル</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                // 確認の間に再取得が始まった、選択がなくなった、別の実行が始まった場合は、実行させない。
-                disabled={locked || running || !selection.hasSelection}
-                onClick={() => {
-                  setConfirmDelete(false)
-                  startAction("削除", { kind: "delete" })
-                }}
-              >
-                {selectedLabel}を削除する
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        {/*
+          ConfirmActionDialog（progress="external"）：実行を始めた時点で閉じ、進捗と結果は一覧の上に示す。
+          確認の表示中に対象（ID、条件、件数）が変わったら、変わったことを示し、確かめ直すまで実行させない（targetKey）。
+        */}
+        <ConfirmActionDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          variant="destructive"
+          progress="external"
+          title={`${selectedLabel}の顧客を削除しますか？`}
+          description={
+            <>
+              {selection.mode === "ids"
+                ? `対象：${selection.selectedIds.slice(0, 3).map(nameOf).join("、")}${selection.selectedIds.length > 3 ? ` ほか ${fmt(selection.selectedIds.length - 3)}件` : ""}。`
+                : `対象：現在の検索条件に一致する顧客${selection.excludedIds.length ? `（選択を外した ${fmt(selection.excludedIds.length)}件を除く）` : ""}。`}
+              削除すると元に戻せません。契約と請求の履歴も表示できなくなります。
+            </>
+          }
+          confirmLabel={`${selectedLabel}を削除する`}
+          targetKey={deleteKey}
+          data-testid={`${testId}-confirm-delete`}
+          finalFocus={() => resultRef.current ?? searchRef.current ?? true}
+          onConfirm={({ targetKey }) => {
+            // 確かめた対象（表示していた targetKey）と、実行の時点の対象が一致し、操作を受け付けられる場合だけ実行する。
+            // 確認の間に再取得が始まった、選択がなくなった、別の実行が始まった場合は、実行しない。
+            if (targetKey !== deleteKey || locked || running || !selection.hasSelection) {
+              toast({ title: "削除を実行していません", description: "一覧の状態が変わりました。選択と一覧を確かめてから、もう一度実行してください。" })
+              return
+            }
+            startAction("削除", { kind: "delete" })
+          }}
+        />
 
         <CompanyDetailSheet
           workspace={workspace}

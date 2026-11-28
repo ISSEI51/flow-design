@@ -57,7 +57,7 @@
 | --- | --- | --- | --- |
 | `unresolved`（`loading`） | 権限の取得中 | 権限を確認しています | なし（待つ） |
 | `unresolved`（`error`） | 権限の取得の失敗 | 権限を確認できませんでした。確認できるまで、この操作は行えません | 権限を再確認 |
-| `unresolved`（`refreshing`） | 権限の変更の知らせを受けて再確認中 | 最新の権限を確認しています | なし（待つ） |
+| `unresolved`（`refreshing`） | 権限の変更の知らせを受けて再確認中。前の権限に含まれていなかった権限が必要な操作は `missing` に、その権限を持つ | 最新の権限を確認しています | なし（待つ）。`missing` がある場合は、前の権限での解決の方法（申請、問い合わせ）を示したまま、申請は確認が終わるまで始めない |
 | `unresolved`（`stale`） | 再確認の失敗 | 最新の権限を確認できませんでした。確認できるまで、この操作は行えません | 権限を再確認 |
 | `entitlement`（`missing` が空） | 契約プラン | 〈機能〉は、現在の契約プランでは利用できません | 契約を変更できる利用者：契約プランを確認。できない利用者：問い合わせ先 |
 | `entitlement`（`missing` がある） | 契約プランと権限の両方 | この操作は利用できません | 問い合わせ先だけ（契約プランの案内と権限の申請を示さない） |
@@ -67,7 +67,7 @@
 | `connectivity` | 接続（オフライン） | オフラインのため利用できません。接続が戻ると利用できます | なし |
 | `pending` | 処理中 | 処理が終わるまで操作できません | なし |
 
-判断の順序：権限の未確定 → 契約プラン → 認可 → 再確認中・再確認の失敗・最新の認可を確認していない（`verified: false`） → 前提の設定 → 障害 → 接続 → 処理中。
+判断の順序：権限の未確定 → 契約プラン → 認可 → 再確認中・再確認の失敗・最新の認可を確認していない（`verified: false`） → 前提の設定 → 障害 → 接続 → 処理中。再確認中、再確認の失敗、`verified: false` の間は、前の権限に含まれていない権限が必要な操作も、認可（`authorization`）ではなく `unresolved`（`missing` に前の権限に含まれていなかった権限）を返す（PERM-6）。
 
 - 契約プランを認可より先に判断する。権限を申請しても、契約プランで利用できなければ解決しないため。
 - 契約プランと権限の両方が不足する場合は、`entitlement` に不足している権限（`missing`）を持たせる。このとき、権限のない利用者に機能の存在や契約プランの案内を示さない：`restrictionText` は機能の名前と契約プランを含まない文（「この操作は利用できません」）を返し、`presentAction` は管理の機能を、申請できる場合も表示しない（申請しても契約プランで利用できないため）。業務の操作は無効にする。
@@ -115,7 +115,7 @@
 
 | 経路 | 扱い |
 | --- | --- |
-| 件数、集計値 | 閲覧できる対象だけで数える（プレビュー：閲覧者には 8 件のうち 6 件と示す） |
+| 件数、集計値 | 一覧と検索の件数は、閲覧できる対象だけで数える（プレビュー：閲覧者には 8 件のうち 6 件と示す）。閲覧できない対象を含む集計値（全社の売上、解約した企業の数）を示すかは、明細を閲覧する権限とは別の「集計値を閲覧する権限」として製品が決める。示す場合は、集計値と閲覧できる明細の差、複数の絞り込みの結果の差、少数の集計単位から、閲覧できない対象の件数や値が推測できる。UI で明細や件数を隠すだけでは保護にならない（[Data Analysis](data-analysis.md) の「集計値と権限」） |
 | 検索の候補、検索の結果 | 閲覧できる対象だけを返す。存在しない場合と同じ 0 件にする |
 | 書き出し | 閲覧できる対象だけを書き出す。件数の表示も同じ |
 | 通知 | 閲覧できない対象についての通知を送らない。権限を失った対象の通知は、本文を表示せず、移動先も示さない（[Notifications](notifications.md)） |
@@ -166,7 +166,7 @@
 | --- | --- | --- |
 | 表示可能性（画面の構造：見出し、項目名、ナビゲーション、操作の配置） | `presentAction`、`resolveContentAccess` の `sensitivity: "public-structure"` | 前の権限で表示を決める（表示を揺らさない）。前の権限で表示しなかった機能を、確認中に表示し始めない |
 | 閲覧可能性（保護された情報：レコードの内容、メンバーの一覧、設定の値） | `resolveContentAccess` の `sensitivity: "protected"`（既定） | `whileUnverified` で製品が選ぶ。既定の `hide` は表示しない（`mode: "pending"`、`status` は `refreshing` か `stale`）。`keep` は前の権限で表示を続ける |
-| 操作可能性 | `decideAccess` | 許可しない（`unresolved`）。前の権限でも許可されない操作は、その理由を示す |
+| 操作可能性 | `decideAccess` | 許可しない（`unresolved`）。前の権限でも許可されない操作も「権限がない」とは示さず、`unresolved` の `missing` に前の権限に含まれていなかった権限を持つ。画面での扱い（`presentAction`）は前の権限と同じ（表示しなかった管理の機能と存在を知らせない機能は `hidden` のまま） |
 | 最新の認可の確認 | `isAccessVerified`、`useAccess` の `verified` | `false` |
 
 - 既定（`sensitivity: "protected"`、`whileUnverified: "hide"`）では、最新の認可を確認していない間に、保護された情報を表示し続けない。閲覧の権限を失った利用者に、取得し直すまでの間も以前の情報を表示しないため。
@@ -402,6 +402,7 @@ Permission Matrix と権限の申請を Registry の部品にしなかった理�
 | 契約プランと権限の両方が不足する場合 | 契約プランを理由にし、`entitlement.missing` に不足している権限も持つ。権限もない場合は、認可と同じく管理の機能を表示しない | 理由は 1 つだけ示すが、画面での扱い（表示するか）は、利用者の業務との関係で決めるため |
 | 管理の機能と契約プラン | 権限を持つ利用者（管理者）には、契約プランで利用できない管理の機能も無効にして理由を示す | 業務に関係するかは利用者ごとに決まる。管理者にとって監査ログは業務の機能である |
 | 権限の取得中の管理の機能 | 表示しない（業務の操作は無効にして「確認しています」） | 表示した後に消すと、存在を知らせ、表示も揺れる |
+| 再確認中の、前の権限で許可されない操作の理由（PERM-6、Patterns Integration Review の 2 回目） | `decideAccess` は `authorization` ではなく `unresolved`（`missing` 付き）を返す。理由の文は「最新の権限を確認しています」。`presentAction` は `missing` がある場合に認可と同じ規則で `hidden` と `disabled` を決める。`Restriction` の `unresolved` に省略可能な `missing` を加えた（既存の呼び出しとの互換を保つ追加。`missing` を見ない製品は、従来の `unresolved` と同じに扱える） | 変更の理由：新しいロールで許可される操作に、確認が終わるまで「この操作には「顧客を削除」の権限が必要です」と示していた（実際の認可と異なる文）。影響：再確認中の理由の文と `data-restriction` が `authorization` から `unresolved` に変わる（検品の `a role change is reflected immediately…` と単体の検品の期待値を変えた）。表示のモード（`hidden`、`disabled`）と、申請の入口（`PermissionRequest`。確認中は申請を始めない）は変えていない。統合の検証画面は、前の権限で開けなかったページを、確認中は「最新の権限を確認しています」とし、内容を描画しない（以前は「このページを表示する権限がありません」）。代替案：(1) `authorization` のまま文だけを変える（`kind` で解決の方法を選ぶ製品が、確認中に申請や問い合わせを始めるため採らない）、(2) `presentAction` も `unresolved` と同じに `disabled` にする（表示しなかった管理の機能を確認中に表示し、存在を知らせるため採らない） |
 | 再確認中の表示 | 画面の構造は前の権限で決め、操作を止める（`refreshing` と `stale` を `loading` と分ける）。保護された情報は、既定では表示しない（`whileUnverified: "hide"`）。製品が `keep` を選んだ場合だけ表示を続ける | 初期実装は前の権限で保護された情報も表示し続けていた。v0.1 の指示（認可が不明な間に機密情報を表示し続けることを標準として保証しない）に従い、既定を安全側にした。構造を保つため、知らせのたびにページ全体を置き換えない |
 | `verified` の追加 | `AccessSnapshot` に省略可能な `verified` を加え、`useAccess` は常に値を入れる。`ready` で `false` は `refreshing` と同じに扱う | 既存の呼び出し（`verified` のない `ready`）との互換を保ちつつ、製品が「確認していない」を示せるようにする（サーバーで描画した権限、知らせの直後） |
 | `reload` の実装 | `useBrowseData` の `reload` を使わず、取得の条件（`queryKey`）に reload の回数を含める | `useBrowseData` の `reload` は、効果が走るまでの描画で前の状態（`ready`）を返す。条件に含めると、呼んだ描画から `refreshing` になる |
@@ -423,12 +424,15 @@ Permission Matrix と権限の申請を Registry の部品にしなかった理�
 ## 統合時に確認する事項
 
 - Forms & Workflows の Confirmation が統合されたら、ロールの変更の確認（現在は Alert Dialog を直接使用）を Confirmation の Pattern に置き換える。
-- Forms & Workflows の Unsaved Changes が統合されたら、編集中の権限変更の「入力の保持・破棄」と、移動の際の未保存の確認（`DiscardAlert`）の関係をそろえる。
+- Forms & Workflows の Unsaved Changes が統合されたら、編集中の権限変更の「入力の保持・破棄」と、移動の際の未保存の確認（`DiscardAlert`）の関係をそろえる。Patterns Integration Review の時点：統合の検証画面の移動の確認は `UnsavedChangesProvider` に置き換えた。組織の設定は、権限の再確認中にフォームを `hidden` と `inert` にして入力を残し、確定した権限が変わった場合だけ作り直す。この資料のページの `CustomerEditor` の扱いは変えていない。
 - Forms & Workflows の Create & Edit、Form Layout が統合されたら、閲覧専用の表示と編集の画面の配置を、その Pattern に合わせる。
 - Data Analysis が統合されたら、集計値と Chart での「閲覧できない対象を含めない」を、その Pattern の資料にも記載する。
 - 統合の検証画面（`account-app.tsx`）では、Authentication のセッション、Settings の組織の設定、Notifications の通知（閲覧できない対象の通知）、System States の障害の表示と、同じ `PermissionScope` と模擬のサーバーの状態を共有するかを決める。
 - 統合の検証画面（`account-signed-in.tsx`）の `CustomerEditor` と `RoleManagement` は、`whileUnverified` を指定していないため、既定（`hide`）で動く（権限の変更の知らせの後、取得し直すまで顧客の内容とメンバーの一覧を表示しない）。製品として `keep` を選ぶかは、統合の画面で決める。
-- 統合の検証画面の通知からの移動は、描画の中で代入した ref（`accessRef.current = access`）で判断している。`access.latest()` に置き換えると、知らせの処理の中の `reload()` を反映できる。
+- 統合の検証画面の「処理の状況」の書き出しの開始できない理由は、接続とサービスの状態ごとの文にした（`monitor.mutation("export").reason` の `offline`、`connecting`、`unconfirmed`、`outage`、`maintenance` を `mutationReason` で文にする。PERM-4）。以前は、すべてを「接続とサービスの状態を確かめるまで、開始できません。」と示していた。
+- 統合の検証画面の通知からの移動は、未保存の変更の確認の Dialog を閉じた時点でも `access.latest()` で判断し直す（NTF-3。notifications.md）。
+- 統合の検証画面の通知からの移動は、`access.latest()` で判断している（v0.1 で、描画の中で代入した ref から置き換えた）。Patterns Integration Review で、最新の権限を確認している間（`unresolved`）は「権限がありません」ではなく「最新の権限を確認しています」と示し、通知を既読にしないようにした（NTF-1）。
+- 統合の検証画面の設定（Settings）：`SettingsArea` に `access` を渡し、組織の設定とメンバーの一覧を `resolveContentAccess`（既定の `hide`）で扱う。保存と削除は `access.latest()` で判断し直す。`settingAccess` は `unresolved` を受け取り、理由を `restriction: "unresolved"` で返す（PERM-1）。
 
 ## 検品
 

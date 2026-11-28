@@ -463,7 +463,13 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
             caption={mode === "client" ? "顧客の一覧" : "顧客の一覧（サーバー側の処理）"}
             onRowOpen={(row) => setOpenId(row.id)}
             activeRowId={openId}
-            loadingRowCount={8}
+            // 読み込み中の行数を表示予定の行数に合わせ、読み込みの後に下の内容を動かさない。
+            // 総件数がわかっている場合（2 回目以降）は、そのページに表示する行数。初回は表示件数（ページサイズ）。
+            loadingRowCount={
+              page.total > 0
+                ? Math.max(1, Math.min(pagination.pageSize, page.total - pagination.pageIndex * pagination.pageSize))
+                : pagination.pageSize
+            }
             empty={
               isEmptyData ? (
                 <DataTableMessage
@@ -517,7 +523,7 @@ export function CustomerTable({ mode, testId }: { mode: "client" | "server"; tes
               取得に失敗させる
             </Button>
             <Button variant="outline" size="xs" data-testid={`${testId}-reload`} onClick={() => setReloadKey((k) => k + 1)}>
-              再取得する
+              最新の情報に更新
             </Button>
           </div>
         )}

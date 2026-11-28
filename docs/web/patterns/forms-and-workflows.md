@@ -24,12 +24,12 @@ Field、Label、Input、Textarea、Select、Checkbox、Switch、Button、Dialog�
 
 | Pattern | 目的 | 資料 | 再利用できるコード（`registry/patterns/`） |
 | --- | --- | --- | --- |
-| Form Layout | 項目の並び、まとまり、間隔、操作ボタンの位置 | [form-layout.md](form-layout.md) | `form-layout.tsx`：`FormRow`、`FormActions`、`SaveBlockerNotice`、`focusFormControl` |
+| Form Layout | 項目の並び、まとまり、間隔、操作ボタンの位置 | [form-layout.md](form-layout.md) | `form-layout.tsx`：`FormRow`、`FormActions`、`SaveBlockerNotice`（`reason` を含む）、`focusFormControl` |
 | Create & Edit | 登録と編集、保存ボタンの有効と無効、保存の結果 | [create-and-edit.md](create-and-edit.md) | `form-state.ts`：`useFormState`、`submitOnEnter`、`stableKey`、`FormSaveError`、型 `FormFields`、`FieldConfig`、`FormSaveResult`、`FormBlocker`、`FormBlockerKind`、`AsyncCheckStatus`、`FormStatus`、`AutofillToken`、`FormState`<br>`save-modes.ts`：`useInstantSave`、`useAutosave`、型 `InstantSaveStatus`、`AutosaveStatus` |
-| Unsaved Changes | 未保存の変更がある間の、移動と閉じる操作の確認 | [unsaved-changes.md](unsaved-changes.md) | `unsaved-changes.tsx`：`UnsavedChangesProvider`、`useUnsavedChanges`、`useNavigationGuard`、`DiscardChangesAlert` |
-| Confirmation | 操作の前の確認と、取り消し（Undo） | [confirmation.md](confirmation.md) | `confirm-action.tsx`：`ConfirmActionDialog`、`useUndoableAction`、型 `UndoHandle` |
+| Unsaved Changes | 未保存の変更がある間の、移動と閉じる操作の確認 | [unsaved-changes.md](unsaved-changes.md) | `unsaved-changes.tsx`：`UnsavedChangesProvider`、`useUnsavedChanges`（`unknown` を含む）、`useNavigationGuard`（`confirmNavigation`、`cancelNavigation`、`releaseAll`）、`DiscardChangesAlert`（`unknown` を含む） |
+| Confirmation | 操作の前の確認と、取り消し（Undo） | [confirmation.md](confirmation.md) | `confirm-action.tsx`：`ConfirmActionDialog`（`blockedReason` を含む）、`useUndoableAction`、型 `UndoHandle` |
 | Multi-step Workflow | 複数のステップに分けた作業 | [multi-step-workflow.md](multi-step-workflow.md) | `step-flow.ts`：`useStepFlow`、型 `StepDefinition`、`StepItem`、`StepStatus`、`StepFlowSnapshot`、`StepFlow`<br>`stepper.tsx`：`Stepper` |
-| Import & Export | ファイルからの取り込みと、ファイルへの書き出し | [import-and-export.md](import-and-export.md) | `import-mapping.ts`：`createImportColumns`、`normalizeHeader`、`autoMapColumns`、`getMappingIssues`、`sanitizeMapping`、`useColumnMapping`、`importOutcome`、`reconcileImportResult`、型 `ImportColumn`、`ImportField`、`ColumnMapping`、`MappingIssues`、`ImportResult`、`ImportRowResult`、`ImportRowOutcome`、`ImportIntegrity`<br>`import-review.tsx`：`ColumnMappingList`、`ImportValidationSummary`、`ImportIssueTable`、`ImportResultSummary`、型 `ImportIssue`、`ImportRowState`、`ImportFilter`（`importOutcome` と `ImportResult` も公開する）<br>`export.ts`：`defaultExportScope`、`exportScopeLabel`、`exportFileName`、`escapeCsvCell`、型 `ExportScope`、`ExportOrigin` |
+| Import & Export | ファイルからの取り込みと、ファイルへの書き出し | [import-and-export.md](import-and-export.md) | `import-mapping.ts`：`createImportColumns`、`normalizeHeader`、`autoMapColumns`、`getMappingIssues`、`sanitizeMapping`、`useColumnMapping`、`importOutcome`、`reconcileImportResult`、`isIntegrityComplete`、型 `ImportColumn`、`ImportField`、`ColumnMapping`、`MappingIssues`、`ImportResult`、`ImportOutcome`、`ImportRowResult`、`ImportRowOutcome`、`ImportIntegrity`<br>`import-review.tsx`：`ColumnMappingList`、`ImportValidationSummary`、`ImportIssueTable`、`ImportResultSummary`、型 `ImportIssue`、`ImportRowState`、`ImportFilter`（`importOutcome`、`ImportOutcome`、`ImportResult` も公開する）<br>`export.ts`：`defaultExportScope`、`exportScopeLabel`、`exportFileName`、`escapeCsvCell`、型 `ExportScope`、`ExportOrigin` |
 
 ### コードと資料の区分
 
@@ -63,6 +63,7 @@ const save = form.handleSubmit((values) => api.saveCustomer(values), { // 製品
 useUnsavedChanges({
   dirty: form.isDirty || form.status === "unknown",
   saving: form.submitting,
+  unknown: form.status === "unknown", // 確認の文を「保存されたかを確認できていません」にする
   canSave: form.canSubmit,
   revision: form.revision,
   onSave: () => save(),
@@ -71,7 +72,7 @@ useUnsavedChanges({
 
 <form noValidate onSubmit={(e) => void save(e)} onKeyDown={(e) => submitOnEnter(e, save)}>
   …
-  <FormActions notice={<SaveBlockerNotice id="customer-notice" blockers={form.blockers} hidden={form.submitting || form.composing} unchanged={form.unchanged} detail onFocusField={(n) => focusFormControl(`customer-${n}`)} />}>
+  <FormActions notice={<SaveBlockerNotice id="customer-notice" blockers={form.blockers} reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined} unchanged={form.unchanged} detail onFocusField={(n) => focusFormControl(`customer-${n}`)} />}>
     <Button type="button" variant="secondary" onClick={cancel}>キャンセル</Button>
     <Button type="submit" loading={form.submitting} disabled={!form.canSubmit} focusableWhenDisabled aria-describedby="customer-notice">保存する</Button>
   </FormActions>
@@ -91,10 +92,10 @@ useUnsavedChanges({
 | サーバー側の検証のエラー | `useFormState`（内部の `server`） | 送信した値と組で持つ。項目の値を変えるまで、その項目のエラーとして保存を止める |
 | IME の変換 | `useFormState` の `composing` | 変換中の項目がある間は、検証の表示と非同期の検証を行わず、保存できない |
 | 保存の処理 | `useFormState` の `status`、`submitting`、`submittedValues`、`formError` | `idle`、`submitting`、`succeeded`、`failed`、`unknown`。送信した時点の値を `submittedValues` に確定する。結果が不明は `resolveUnknown` だけで解く |
-| スコープと世代 | `useFormState`、`useInstantSave`、`useAutosave`、`useUndoableAction`、`ConfirmActionDialog`（内部） | `scopeKey` の変更、`reset`、アンマウント（`ConfirmActionDialog` は開閉）で世代を進める。それより前に始めた処理の結果は、新しい状態と通知を変えない |
+| スコープと世代 | `useFormState`、`useInstantSave`、`useAutosave`、`useUndoableAction`、`ConfirmActionDialog`（内部） | `scopeKey` の変更、`reset`、アンマウント（`ConfirmActionDialog` は開閉）で世代を進める。それより前に始めた処理の結果は、新しい状態と通知を変えない。`useFormState` と `useInstantSave` は、状態をスコープと組で持ち、スコープが変わった描画から前のスコープの値と状態を返さない（`initialValues`、`value` から始める） |
 | 即時保存 | `useInstantSave` | 表示する値、`idle`、`saving`、`saved`、`failed`、`unknown`、`checking`。確定した失敗は最後に保存できた値に戻す。結果が不明は値を戻さず、`check()` か `value` の変化で解く |
 | 自動保存 | `useAutosave` | `saved`、`unsaved`、`saving`、`failed`、`unknown`、最後に保存できた時刻（`savedAt`）。結果が不明は、値が変わっても自動では保存しない |
-| 移動の確認の対象 | `UnsavedChangesProvider`（登録の一覧） | 保存の単位ごとの `dirty`、`saving`、`canSave`、`revision`、保存と破棄の処理、確認を省く印（`released`。`revision` と組）。アンマウントで解除する |
+| 移動の確認の対象 | `UnsavedChangesProvider`（登録の一覧） | 保存の単位ごとの `dirty`、`saving`、`unknown`、`canSave`、`revision`、保存と破棄の処理、確認を省く印（`released`。`revision` と組）、`releaseAll` で外した印（`forced`）。アンマウントで解除する |
 | 移動の要求 | `UnsavedChangesProvider` | 最後の 1 件だけ。段階は `waiting`（保存が終わるのを待つ）、`confirm`、`saving`（保存して移動の実行中） |
 | ステップの状態 | `useStepFlow` | 現在のステップ、到達したステップ、完了したステップ。入力の値は持たない（`useFormState` が持つ） |
 | 対応付け | `useColumnMapping` | ファイルの識別子（`sourceKey`）、列と項目の構成、列の key から項目の id への対応、利用者が選んだ列、使わなかった保存の対応付け（`rejected`）。状態のキーは `key` |
@@ -103,6 +104,46 @@ useUnsavedChanges({
 | 取り消し | `useUndoableAction` | インスタンスごとに分けた通知の id、実行したときのスコープ、期限（`expiresAt`）、取り消しの状態 |
 | エクスポートの設定 | 製品（例では `ExportDialog` の state） | 範囲、列、形式。範囲の初期値は `defaultExportScope` で決める |
 | 一覧の条件、データ、選択、一括の実行、一覧の位置 | Data Browsing の `useBrowseQuery`、`useBrowseData`、`useBulkSelection`、`useBulkAction`、`captureListPosition`（下の「Data Browsing との組み合わせ」） | Forms & Workflows の部品は持たない |
+
+## 保存と実行の結果の分類（hook の横断）
+
+すべての hook で同じ型を使う必要はない。ただし、同じ事象を異なる意味で扱わない。次の表は、各 hook がそれぞれの事象をどの値で表すかを示す。「—」は、その hook がその事象を区別しないことを示す（製品が別の値に対応付ける。下の注）。
+
+| 事象 | 意味 | `useFormState`（`FormSaveResult`、`status`） | `useInstantSave`、`useAutosave` | `ConfirmActionDialog`、`useUndoableAction` | `useBulkAction`（Data Browsing） | `useInstantSettings`、`useSettingsForm`（Settings） | 取り込み（`importOutcome`） |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 成功 | 処理が終わり、結果を確かめた | `success` → `succeeded` | `saved` | 閉じる／`{ ok: true }` | 行の `succeeded` | `saved` | `success` |
+| 確定した失敗 | 処理されていないことが確か | `failed`（`FormSaveError` の `failed`） | `failed`（値を戻す） | `{ error }`、`FormSaveError` の `failed`／`outcome: "failed"` | 行の `failed` | `failed` | 行の `failed`、`failed` |
+| バリデーションによる拒否 | サーバーが入力を拒否した（処理されていない） | `invalid`（項目のエラー） | — | — | — | `invalid` | 検証の段階のエラーの行 |
+| 権限不足 | 現在の利用者に権限がない（処理されていない） | —（`failed` に対応付ける。下の注） | —（`failed`） | —（`{ error }`。表示中なら `blockedReason`） | 行の `failed`（理由に書く） | `forbidden` | 行の `failed` |
+| 競合 | 別の変更があり、処理しなかった（版の不一致） | —（`invalid` の `formError` に対応付ける。下の注） | — | —（`{ error }`） | 行の `failed` | `conflict` | — |
+| 部分成功 | 一部だけ処理された | —（保存の単位を分ける） | — | — | `partial`（行ごとの結果） | `partial`（項目ごとの結果） | `partial` |
+| 結果が不明 | 処理されたかわからない（時間切れ、応答の前の切断、予期しない例外） | `unknown` | `unknown` | `{ unknown }`、`FormSaveError` の `unknown`、それ以外の例外／`outcome: "unknown"` | 行の `unknown` | `unknown` | `unknown` |
+| 処理中 | 応答を待っている | `submitting` | `saving`、`checking` | Loading（`inline`）／`undoing` | `running` | `saving`、`verifying` | 製品（進捗） |
+| 古い応答 | スコープ、世代、対象が変わった後に届いた | 捨てる（`handleSubmit` は false） | 捨てる | 捨てる／`outcome: "stale"`（`performed` に実行の結果） | 捨てる | `superseded` | 製品（照合の前に捨てる） |
+| クライアント側の待機の中断 | 利用者の操作、アンマウント、スコープの変更で待つのをやめた（`AbortSignal`） | 結果を使わない（状態を変えない） | 結果を使わない | 結果を使わない | `cancel()`（届いた結果は照合する） | `aborted` | 製品 |
+
+共通の規則：
+
+- 通信の例外と `AbortError` を理由に、サーバーの処理が実行されなかったと断定しない。`FormSaveError` の `failed`（または各 hook の確定した失敗）は、処理されていないことを製品が確かめた場合だけ使う。それ以外の例外は結果が不明として扱う。
+- 結果が不明の操作を、無条件に再実行しない（自動の再試行、「もう一度実行」のボタン、「保存して移動」の再送信をしない）。状態を確かめる手段（`resolveUnknown`、`check()`、`verify`、「状態を確認」）を示す。
+- 結果の照会（状態の確認、`verify`、取り込みの「状態を確認」）にも、現在のスコープの認可が必要である。照会の API は、照会の時点の権限で確かめる。前のスコープや失効した認可の照会の結果を、現在のスコープに反映しない。
+- クライアントでの応答の順序の制御（世代、スコープ、古い応答の破棄）は、サーバーでの保存の順序を保証しない。前の要求が後の要求より後にサーバーで処理されることがある。製品の責務：同じ対象への保存の直列化（前の保存の結果を待ってから次を送る。`useInstantSave` と `useAutosave` は保存中の次の保存を待たせる）、版の管理（`If-Match`、版の番号。Settings の `withVersion`）、冪等性（同じ要求の再送信で結果が変わらない。冪等キー）、競合の検出（版の不一致を `409`、`412` で拒否する）。
+
+Forms の hook で権限不足と競合を扱う場合の対応付け（`FormSaveResult` には `forbidden` と `conflict` を加えない）：
+
+| サーバーの結果 | `FormSaveResult` | 製品の処理 |
+| --- | --- | --- |
+| 権限不足（`403`、`forbidden`） | `{ status: "failed", formError: "変更する権限がないため、保存できませんでした。…" }` | 保存を止める（もう一度保存させない）。権限を取得し直し、権限がなければフォームを読み取り専用か Permission States の表示にする（[permission-states.md](permission-states.md)）。認可の失効（`401`）は、`useNavigationGuard().releaseAll()` の後にログインの画面へ移る（[unsaved-changes.md](unsaved-changes.md#スコープの変更と認可の失効)） |
+| 競合（`409`、`412`、版の不一致） | `{ status: "invalid", formError: "ほかの場所で変更されていたため、保存しませんでした。…" }`（項目がわかる場合は `fieldErrors`） | 入力を残し、競合を示す。最新の値を取得して示し、利用者が選んだ値で、新しい版を付けて保存し直す。版を付けて送るため、同じ値の再送信はサーバーが再び拒否する |
+
+- 判断の記録（Patterns Integration Review）：`FormSaveResult` に `forbidden` と `conflict` を加える案は採らなかった。理由：`useFormState` の状態（`status`）と保存の可否の規則を増やす変更になり、既存の製品の `save` の戻り値の型を広げる。権限と競合を項目ごとに扱う設定の画面は、Settings の hook（`classifySaveError`）が扱う。影響の範囲：Forms の hook では、権限不足は確定した失敗、競合はサーバー側の検証の拒否として表示される。製品は上の表の処理を行う。
+
+### 即時保存と設定の保存の hook の選び方
+
+- サーバーに保存する設定で、権限（`forbidden`）、競合（`conflict`、版）、部分的な保存（`partial`）、項目ごとの結果を扱う必要がある場合は、Settings の `useInstantSettings`、`useSettingsForm`（`setting-save.ts`、[settings.md](settings.md)）を使う。
+- `useInstantSave` は、1 つの値だけを保存し、結果が成功、確定した失敗、結果が不明の 3 つだけで足りる場合に使う（権限と競合を保存の結果として区別しない）。
+- 1 つの保存の対象は、1 つの hook のインスタンスだけが持つ。画面は、保存した値の写しを別の state に持たない（表示は hook の `value`）。
+- `useInstantSave` の `value` には、保存が終わった後に始めた取得の結果だけを渡す（[create-and-edit.md](create-and-edit.md#即時保存と設定の保存の選び方)）。
 
 Registry の部品は、どの状態も保存しない（LocalStorage、セッションのストレージ、データベース、URL に依存しない）。下書きの保存と再開の値の受け渡しは、`initialValues`、`reset`、`markSaved`、`useStepFlow` の `initial`、`snapshot`、`restore` で行う。保存した対応付けは `useColumnMapping` の `initialMapping` に渡す。
 
@@ -298,7 +339,7 @@ Sidebar のそのほかの項目は、タイトルだけの画面（App Structur
 | 表示していない項目 | `active` が false の項目は、値を消さずに残し、検証、保存の可否、送信する値、未保存の判定から除く。保存の成功の後も、その項目の基準値は変えない | 条件を戻したときに、利用者の入力を失わせない。表示していない項目の検証で、保存を止めない。保存していない値を保存済みとして扱わない |
 | 未保存の判定 | `normalize` の後の値を `stableKey`（キーの順序によらない構造の比較）で比べる。値を元に戻すと未保存でなくなる。Map、Set、クラスのインスタンスは扱わず、値は複製しない（不変のデータの契約） | オブジェクトの参照や、前後の空白の違いで未保存にしない。任意の型を深く写すと、型ごとに扱いが異なり誤りやすい（Data Browsing v0.1 の対象と操作の内容の固定と同じ考え方） |
 | 保存中の入力 | 送信した時点の値を確定し、保存の成功の後、基準値を送信した値（サーバーの値）にする。保存中に変えた項目は未保存のまま残し、「保存中に変えた内容は、まだ保存していません」と示す | 送信の後の新しい入力を、保存済みと誤って扱わない |
-| スコープの変更と値 | `scopeKey` が変わっても、`useFormState` は値と基準値を変えない。新しいスコープの値は製品が `reset` で渡す | hook は新しいスコープの値を知らない。値を消すと、製品が値を渡す前の描画で空のフォームが表示される |
+| スコープの変更と値 | `scopeKey` が変わった描画から、`useFormState` は前のスコープの値と状態を返さず、送信もさせない。状態は、その描画の `initialValues` から始める。製品は、スコープが変わる描画で新しいスコープの値を `initialValues` に渡すか、`key` で作り直す（推奨）。Patterns Integration Review で変更した（以前は「値と基準値を変えない。製品が `reset` で渡す」。[create-and-edit.md](create-and-edit.md#スコープと世代) に変更の理由、影響、代替案を記録した） | 製品が `reset` を呼ぶまでの描画で、前のスコープの値が新しいスコープで表示され、送信できた。値を空にする方式は、製品が値を渡す前の描画で空のフォームが表示される |
 | 移動の要求の競合 | 確認の表示中と保存を待つ間に別の移動の要求が来た場合は、最後の要求だけを残し、前の要求の `onCancel` を呼ぶ。「保存して移動」の実行中に来た要求は、取り消す。「保存して移動」の実行中も「移動をやめる」で移動だけを取りやめられる（保存は続き、結果はフォームに示す） | 利用者が最後に選んだ移動先に従う。保存の途中で移動先を変えない。保存が終わらない場合に、確認を閉じられなくならない |
 | 保存中の移動の要求 | 保存が終わるまで待ち、成功して未保存の変更がなければ移動する。失敗したら確認に切り替える。待つ確認の Alert Dialog は 200ms 後に表示する（`WAITING_DIALOG_DELAY_MS`） | 保存の直後の移動など、すぐに終わる場合に Dialog を一瞬だけ表示しない |
 | 確認の繰り返しの防止 | 「変更を破棄」と「保存して移動」の対象には、確認を省く印（`released`）を、その時点の `revision` と組で付ける。`revision` の変化、`dirty` が false、移動の処理の終わり（次のタスク）で解く | 移動の処理の間に、同じ変更について再び確認が出ない。移動が失敗した後と、新しい入力は、再び守る |
@@ -442,7 +483,7 @@ PR #4（共通の検品の修正）が main に統合された（`a132344`、202
 
 | 指摘 | 原因 | 対処 |
 | --- | --- | --- |
-| 高：編集で結果が不明になった後の「保存されているか確認」が、保存されていない変更を保存済みと判定する | 照合がメールアドレス、電話番号、住所、メモ、プランの 5 項目だけを比べていた。会社名などだけを変えた場合に一致と判定し、未保存の変更が失われた | 送信したすべての項目（送信した時点で表示していた項目）を、サーバーが保存する形にそろえて比べる（`matchesSavedCustomer`）。模擬のサーバーの「予期しない例外」で、編集はサーバーに保存してから例外を投げる（応答だけが届かない）。検品を追加した |
+| 高：編集で結果が不明になった後の「保存されたかを確認」が、保存されていない変更を保存済みと判定する | 照合がメールアドレス、電話番号、住所、メモ、プランの 5 項目だけを比べていた。会社名などだけを変えた場合に一致と判定し、未保存の変更が失われた | 送信したすべての項目（送信した時点で表示していた項目）を、サーバーが保存する形にそろえて比べる（`matchesSavedCustomer`）。模擬のサーバーの「予期しない例外」で、編集はサーバーに保存してから例外を投げる（応答だけが届かない）。検品を追加した |
 | 中：保存ボタンが押せる状態では、`submitOnEnter` が送信にしない Enter（日付、`data-submit-on-enter="false"`、Shift+Enter）で、ブラウザの暗黙の送信が起きる | 除外する Enter で `return` するだけで、`preventDefault` を呼んでいなかった | 暗黙の送信の対象になる入力欄（ポップアップの部品の中を除く）の除外する Enter で `preventDefault()` を呼ぶ。保存できる状態のフォームでの検品を追加した |
 | 中：結果が不明の確認の後に、保存済みの内容に対して「変更を破棄しますか？」が出る | `resolveUnknown` と同じ処理の中で移動を求め、未保存の変更の登録が前の描画のままだった | 確かめた結果の移動を、`useUnsavedChanges` の後に置いた `useEffect` で行う（登録の更新の後）。資料に要件を記した。検品を追加した |
 | 中：`ConfirmActionDialog` を閉じて開き直すと、結果が不明の状態が消え、もう一度実行できる | 開いたときに結果が不明の状態を消していた | 結果が不明を `targetKey` ごとに保持し、同じ対象で開き直しても実行のボタンを示さない。`onUnknown` を追加した。検品を追加した |
@@ -459,7 +500,7 @@ PR #4（共通の検品の修正）が main に統合された（`a132344`、202
 
 レビューで、問題がないと判断された事項：非同期の検証が pending や validating のまま止まる経路はない。`handleSubmit` の保存しない条件、Focusable Disabled のボタン（Chromium と WebKit で実測）、保存の結果の区別、`applyAutofill`、`useInstantSave`、`useUndoableAction` の通知の id とスコープ、`ConfirmActionDialog` の世代、`reconcileImportResult`、`escapeCsvCell`、Data Browsing の Registry の使い方、ルーターの戻る・進む。
 
-対処していない事項：`reconcileImportResult` は、サーバーが一部の件数だけを返した場合に、返さなかった件数を 0 と一致しないものとして `countsDisagree` にする（レビューで軽微と判断された。結果を成功として示さない側に倒れるため、変えていない）。
+対処していない事項（当時）：`reconcileImportResult` は、サーバーが一部の件数だけを返した場合に、返さなかった件数を 0 として扱っていた（レビューで軽微と判断された）。Patterns Integration Review で、返さなかった件数を `missingCounts` に記録し、結果が不明として扱うようにした（[import-and-export.md](import-and-export.md#結果の照合reconcileimportresult)）。
 
 ### 初期実装の検証の結果
 
@@ -516,12 +557,17 @@ PR #4（共通の検品の修正）が main に統合された（`a132344`、202
 | 低：「入力内容を消す」が確認なしにすべてを消す | ボタンを削除した |
 | 低：エクスポートの「表示中のページ」と「検索結果のすべて」が同じ | ページに分けていない一覧では「表示中のページ」を選択肢にしない。「すべてのデータ」はアーカイブ済みを含む |
 | 低：実行の前に「処理の対象」の件数を示していない | 内容の確認に「処理の対象」の件数を加えた |
-| 低：文言（編集での「登録されているか確認」、サーバー側の検証の文、「進捗率は取得できません」） | 場面に合わせて直した |
+| 低：文言（編集での「登録されたかを確認」、サーバー側の検証の文、「進捗率は取得できません」） | 場面に合わせて直した |
 | 低：保存の結果の切り替えが、同じページの即時保存と自動保存にも効く | 即時保存と自動保存は、それぞれの失敗の設定だけを使う |
 | 低：取り込みの全件成功と全件失敗、`importOutcome`、Sheet の閉じるボタン、契約の登録の途中の離脱の検品がない | 検品を追加した |
 | 低（資料の執筆者）：`SaveBlockerNotice` が確認中の項目だけで例外になる、編集で「確認」が常に保存済みになる、変更がない理由を示さない、空欄の扱いを送信しない、CSV の改行、コメント | 対処した（変更がない理由は `unchanged` で支援技術にだけ伝える） |
 | 低：狭い画面で、簡易の Stepper の現在のステップの名前と、ステップの見出しが続けて表示される | 初期実装では変更しなかった。v0.1 で `currentLabel` を追加し、例では `"hidden"` にした（「確定した設計判断」） |
 | 低：Drawer のスワイプの検品がない | 変更していない。Drawer の `unsavedChanges` のスワイプは Components の `overlays.spec.ts` で検品している |
+
+### Patterns Integration Review での確認
+
+- Select を閉じる動きの途中に別の Dialog を開く操作（Select の閉じる動きが終わる前に Dialog を開き、操作して閉じ、フォーカスの戻り先を確かめる）：独立した監査が、検証画面（製品の画面の例）で確かめ、フォーカスの競合は再現しなかった（監査の報告による。この作業では再現の手順を繰り返していない）。PR #4 で検品の側に加えた「Select の一覧が閉じ終わるのを待つ」処理（`choose`）は、検品の操作の順序をそろえるためのものであり、製品の問題の解消として扱わない。再現した場合は、再現の条件と、Base UI の問題か製品の問題かを記録する。
+- 検品に固定の待ち時間を加えて、製品の問題を解消したことにしていない。この作業で加えた検品は、保留した処理の解決（`window.__fdFormsChecks`）、`expect.poll`、後から送信になる操作の結果（前の操作が送信しなかったことの確認）で順序を決める。
 
 ### 未検証の事項
 
@@ -548,14 +594,14 @@ PR #4（共通の検品の修正）が main に統合された（`a132344`、202
 | 下書きの永続化、再認証と承認、XLSX の生成、本格的な CSV の解析、Shift_JIS の判定 | 製品の責務（製品の基盤で扱う） |
 | 一覧の記録（条件、データ、位置）の履歴の項目ごとの保存 | 製品の責務（例ではページのメモリに 1 件だけ置く） |
 | View Switching の切り替えとエクスポートの入口を同じ行に置く場合の並べる順序 | 次のレビュー（検証画面に表示形式の切り替えがないため、確かめていない） |
-| `asyncFailure: "allow"` の例 | 次のレビュー（プレビューには、`"allow"` を使う項目がない） |
+| `asyncFailure: "allow"` の例 | 対応済み（Patterns Integration Review）：`#/create-edit` の「入力中の確認ができなかった場合（asyncFailure）」に、保存の処理でサーバーが同じ確認を行う例を加えた。検品用の画面（`#/forms-checks?case=async`）にも `allow` の切り替えがある。`unverified` の文を、確かめ直しを求めない文にした |
 | `useScopeGuard`（System & Account）との責務の整理 | Patterns Integration Review |
-| `useInstantSave` と Settings の保存の hook の責務の整理 | Patterns Integration Review |
-| 保存の結果が不明の分類と扱いの統一（Forms & Workflows、Settings、Notifications） | Patterns Integration Review |
-| スコープの変更の後に、古いフォームの値を表示・送信しないこと | Patterns Integration Review |
+| `useInstantSave` と Settings の保存の hook の責務の整理 | 対応済み（Patterns Integration Review）：下の「即時保存と設定の保存の hook の選び方」、[create-and-edit.md](create-and-edit.md#即時保存と設定の保存の選び方) |
+| 保存の結果が不明の分類と扱いの統一（Forms & Workflows、Settings、Notifications） | 対応済み（Patterns Integration Review、Forms & Workflows と Settings）：上の「保存と実行の結果の分類（hook の横断）」。Notifications は対象に含めていない |
+| スコープの変更の後に、古いフォームの値を表示・送信しないこと | 対応済み（Patterns Integration Review、`38174eb`）：[create-and-edit.md](create-and-edit.md#スコープと世代) の Registry と製品の保証の範囲 |
 | Permission States、System States との接続 | Patterns Integration Review |
 | Concurrent Rendering と中断された描画の追加の検品 | Patterns Integration Review |
 | Data Analysis から編集画面へ移動する場合の連携 | Patterns Integration Review |
-| `reconcileImportResult` の部分的な件数（行ごとの結果の一部だけを返すサーバー）の契約の明確化 | Patterns Integration Review |
-| raw CSV（`escapeCsvCell` の `mode: "raw"`）の用途と、数式の注入の注意事項 | Patterns Integration Review |
+| `reconcileImportResult` の部分的な件数（行ごとの結果の一部だけを返すサーバー）の契約の明確化 | 対応済み（Patterns Integration Review）：[import-and-export.md](import-and-export.md) の「部分的な件数の契約」 |
+| raw CSV（`escapeCsvCell` の `mode: "raw"`）の用途と、数式の注入の注意事項 | 対応済み（Patterns Integration Review）：既定にせず、選んだときに注意を示す（[import-and-export.md](import-and-export.md)） |
 | 実際の表計算ソフトでの CSV の解釈の検品 | Registry & Gallery の公開の前の検品 |

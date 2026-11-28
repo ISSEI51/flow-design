@@ -444,6 +444,7 @@ function ContactSheet({
           open={confirm}
           onOpenChange={setConfirm}
           data-testid="contact-discard"
+          unknown={form.status === "unknown"}
           onDiscard={() => {
             setConfirm(false)
             form.discard()
@@ -506,7 +507,7 @@ function SettingsForm<V extends FormValues>({
         <FormActions
           notice={
             <>
-              <SaveBlockerNotice id={`${id("notice" as keyof V)}`} blockers={form.blockers} hidden={form.submitting} unchanged={!form.isDirty} />
+              <SaveBlockerNotice id={`${id("notice" as keyof V)}`} blockers={form.blockers} reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : undefined} unchanged={!form.isDirty} />
               {form.isDirty && !form.submitting && form.blockers.length === 0 && <p className="text-ui text-muted-foreground">保存していない変更があります</p>}
             </>
           }
@@ -533,16 +534,15 @@ const text = <V extends FormValues>(form: FormState<V>, name: keyof V & string, 
 })
 
 export function InstantSwitch({ label, description, initial, kind, ws = "hq" }: { label: string; description: string; initial: boolean; kind: string; ws?: string }) {
-  const [saved, setSaved] = useState(() => readSetting(ws, kind, initial))
-  useEffect(() => setSaved(readSetting(ws, kind, initial)), [ws, kind, initial])
+  // 取得したサーバーの値。ワークスペースと組で持ち、ワークスペースが変わった描画から、前のワークスペースの値を渡さない。
+  // 保存した値はこの画面では持たない（保存の結果は useInstantSave が持つ。同じ保存を 2 か所で管理しない）
+  const [fetched, setFetched] = useState(() => ({ ws, value: readSetting(ws, kind, initial) }))
+  const saved = fetched.ws === ws ? fetched.value : readSetting(ws, kind, initial)
+  useEffect(() => setFetched({ ws, value: readSetting(ws, kind, initial) }), [ws, kind, initial])
   const s = useInstantSave<boolean>({
     value: saved,
     scopeKey: ws,
-    // スコープの変更で中止された後は、この画面の状態を変えない（新しいワークスペースの値を、古い保存の結果で上書きしない）
-    save: async (next, { signal }) => {
-      await saveSetting(kind, next, { mode: formsServer.instantMode, ws })
-      if (!signal.aborted) setSaved(next)
-    },
+    save: (next) => saveSetting(kind, next, { mode: formsServer.instantMode, ws }),
     // 結果が不明な場合に、サーバーの値を読み直す
     verify: () => fetchSetting(kind, initial, ws),
   })
@@ -590,7 +590,7 @@ export function AutosaveMemo({ ws = "hq" }: { ws?: string }) {
       await saveSetting("memo", v, { mode: formsServer.autosaveMode, ws })
     },
   })
-  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", label: "チームのメモ", canSave: auto.status !== "unknown", onSave: () => auto.flush() })
+  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", unknown: auto.status === "unknown", label: "チームのメモ", canSave: auto.status !== "unknown", onSave: () => auto.flush() })
   const status = {
     saved: auto.savedAt ? `${auto.savedAt.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} に保存しました` : "保存済み",
     unsaved: "入力が止まると保存します",

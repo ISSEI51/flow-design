@@ -1,18 +1,20 @@
 import { useState } from "react"
 
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AnalysisRegion } from "@/patterns/analysis-region"
 import { useBrowseData } from "@/patterns/browse-data"
 import { Metric, MetricGroup } from "@/patterns/metric"
 import { PageColumns } from "@/patterns/page-layout"
 
 import { request, analysisServer } from "../../data/data-analysis/analysis-server"
-import { activeOn, ANALYSIS_TODAY, churnRateIn, defaultAnalysisFilters } from "../../data/data-analysis/subscriptions"
+import { activeOn, ANALYSIS_TODAY, churnRateIn, defaultAnalysisFilters, mrrBridge, operatingProfitIn, regionLabels, regions } from "../../data/data-analysis/subscriptions"
 import { Compare, Section } from "../../layout/section"
 import { PageHeader } from "../../layout/page-header"
 import { Bullets, S, Schematic } from "../app-structure/parts"
 import { AppLink, DemoFrame, Mock, Rules } from "../data-browsing/doc-parts"
-import { countFormat, ratioFormat } from "./analysis-parts"
+import { DiffBarChart, countFormat, ratioFormat, yenFormat } from "./analysis-parts"
 import { loadable } from "./business-dashboard"
 import { cn } from "@/lib/utils"
 
@@ -130,6 +132,46 @@ function RegionsDemo() {
   )
 }
 
+// タブと折りたたみの中のグラフ。Tabs と Accordion は既定で非表示の内容も DOM に残す（keepMounted）。
+// 非表示の間は大きさが 0 になるため、Chart は大きさを測れるまで描かず、表示されたときに親の幅で描く。
+function HiddenChartsDemo() {
+  const range = { from: new Date(ANALYSIS_TODAY.getFullYear(), ANALYSIS_TODAY.getMonth(), 1), to: ANALYSIS_TODAY }
+  const b = mrrBridge(range, defaultAnalysisFilters)
+  const bridge = [
+    { key: "added", label: "新規の契約", value: b.added },
+    { key: "expansion", label: "増額", value: b.expansion },
+    { key: "contraction", label: "減額", value: -b.contraction },
+    { key: "churn", label: "解約", value: -b.churn },
+  ]
+  const profit = regions.map((r) => ({ key: r, label: regionLabels[r], value: operatingProfitIn(range, { ...defaultAnalysisFilters, regions: [r] }) }))
+  return (
+    <DemoFrame testId="dl-hidden-charts">
+      <div className="flex flex-col gap-8">
+        <Tabs defaultValue="bridge">
+          <TabsList>
+            <TabsTrigger value="bridge">MRR の増減の内訳</TabsTrigger>
+            <TabsTrigger value="profit">地域別の営業利益</TabsTrigger>
+          </TabsList>
+          <TabsContent value="bridge" data-testid="dl-tab-bridge">
+            <DiffBarChart items={bridge} format={yenFormat} title="今月の MRR の増減の内訳" testId="dl-tab-bridge-chart" />
+          </TabsContent>
+          <TabsContent value="profit" data-testid="dl-tab-profit">
+            <DiffBarChart items={profit} format={yenFormat} title="今月の地域別の営業利益" testId="dl-tab-profit-chart" />
+          </TabsContent>
+        </Tabs>
+        <Accordion>
+          <AccordionItem value="profit">
+            <AccordionTrigger>地域別の営業利益（折りたたみ）</AccordionTrigger>
+            <AccordionContent>
+              <DiffBarChart items={profit} format={yenFormat} title="今月の地域別の営業利益（折りたたみ）" testId="dl-accordion-chart" />
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </div>
+    </DemoFrame>
+  )
+}
+
 export function DashboardLayoutPage() {
   return (
     <article>
@@ -151,6 +193,10 @@ export function DashboardLayoutPage() {
         <RegionsDemo />
       </Section>
 
+      <Section title="タブと折りたたみの中のグラフ" lead="Tabs と Accordion は、非表示の内容も DOM に残す。非表示の間のグラフは描かずに場所だけを確保し、表示したときに親の幅で描く。">
+        <HiddenChartsDemo />
+      </Section>
+
       <Section title="判断基準">
         <Rules
           rows={[
@@ -159,7 +205,7 @@ export function DashboardLayoutPage() {
             ["グラフの高さ", "補助のグラフ 96〜160px、標準 240〜320px、主要なグラフ 320〜480px を目安にし、軸の文字、凡例、データの量で決める"],
             ["操作の位置", "ページ全体の条件は Page Header の直下。グラフだけの集計単位や表示形式は、そのグラフの見出しの右"],
             ["最初の表示", "ページの目的、主要な指標、分析の対象の期間、重要な異常を先に置く。全体を 1 画面に収めることを目標にしない。入れ子のスクロールの領域を作らない"],
-            ["再取得", "前の結果を残す場合は、薄く表示し「更新中」を示す（200ms 未満の再取得では示さない）。古い結果を現在の条件の結果と誤認させない"],
+            ["再取得", "前の結果を残す場合は、内容を薄くせずに、「更新中」と表示中の結果の条件を文字で示す（200ms 未満の再取得では示さない）。古い結果を現在の条件の結果と誤認させない"],
             ["リアルタイムの更新", "値をその場で書き換え、行の順序、フォーカス、スクロールの位置を変えない。新しい項目は件数を示し、利用者が押したときに表示する。自動の更新を止められるようにする"],
             ["カスタマイズ", "製品が合理的な初期の構成を作る。並べ替えなどは、利用者ごとに目的が異なる場合だけ検討し、標準の構成に戻せるようにする"],
             ["モバイル", "考える順を保ったまま 1 列にする。グラフを読めない大きさまで縮めない。表の横スクロールは表の領域の中だけ"],

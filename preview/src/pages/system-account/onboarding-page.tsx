@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { getBrowseViewState } from "@/patterns/browse-data"
 import { getSetupStatus, resolveFirstScreen, type Checklist, type FirstScreen, type OnboardingProgress } from "@/patterns/onboarding"
+import { UnsavedChangesProvider, useNavigationGuard } from "@/patterns/unsaved-changes"
 
 import { roles, type UserId } from "../../data/system-account/model"
 import { NEW_WORKSPACE_ID, viewerOf, type OnboardingViewer } from "../../data/system-account/onboarding-data"
@@ -62,7 +63,17 @@ const progressLabels: Record<OnboardingProgress, string> = {
   completed: "完了",
 }
 
+// 画面を閉じる操作は、前回の手順の保存の後に入力した内容を Unsaved Changes で確かめる
 function SetupDemo() {
+  return (
+    <UnsavedChangesProvider>
+      <SetupDemoBody />
+    </UnsavedChangesProvider>
+  )
+}
+
+function SetupDemoBody() {
+  const guard = useNavigationGuard()
   const [open, setOpen] = useState(true)
   const [hasDraft, setHasDraft] = useState(false)
   const [created, setCreated] = useState<{ workspaceId: string; start: "empty" | "sample" } | null>(null)
@@ -102,7 +113,7 @@ function SetupDemo() {
             </p>
             {!created &&
               (open ? (
-                <Button variant="outline" size="sm" onClick={() => setOpen(false)} data-testid="onb-setup-close">
+                <Button variant="outline" size="sm" onClick={() => guard.confirmNavigation(() => setOpen(false))} data-testid="onb-setup-close">
                   画面を閉じる（中断）
                 </Button>
               ) : (

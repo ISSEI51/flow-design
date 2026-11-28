@@ -2,7 +2,7 @@ import { fromDateString, type DateString } from "@/lib/date"
 import { relativePeriods, type AnalysisPeriod, type ComparisonMode, type Granularity, type RelativePeriodId } from "@/patterns/analysis-period"
 import type { AnalysisQuery } from "@/patterns/analysis-query"
 
-import { plans, regions, terms, type AnalysisFilters, type Plan, type Region, type Term } from "../../data/data-analysis/subscriptions"
+import { plans, regionLabels, regions, terms, type AnalysisFilters, type Plan, type Region, type Term } from "../../data/data-analysis/subscriptions"
 
 // 検証画面のルーティングと、URL と分析の条件の変換（製品側のコード）。
 // - URL のハッシュ（#/analysis-app?page=...）で画面を切り替える。
@@ -37,7 +37,8 @@ export function periodFromParams(p: URLSearchParams): AnalysisPeriod | undefined
 }
 
 export function queryFromParams(p: URLSearchParams): Partial<AnalysisQuery<AnalysisFilters>> {
-  const list = <T extends string>(key: string, ok: (v: string) => v is T) => (p.get(key)?.split(",").filter(ok) ?? []) as T[]
+  // 未知の値は使わない。同じ値の重複は 1 つにする
+  const list = <T extends string>(key: string, ok: (v: string) => v is T) => [...new Set(p.get(key)?.split(",").filter(ok) ?? [])] as T[]
   const out: Partial<AnalysisQuery<AnalysisFilters>> = {}
   const period = periodFromParams(p)
   if (period) out.period = period
@@ -56,6 +57,21 @@ export function queryFromParams(p: URLSearchParams): Partial<AnalysisQuery<Analy
     out.filters = { regions: list("region", isRegion), plans: list("plan", isPlan), terms: list("term", isTerm) }
   }
   return out
+}
+
+/**
+ * 地域を 1 つだけ選べる画面（事業の状況、顧客維持の分析）で、URL の地域が複数の場合は、最初の 1 つだけを使う。
+ * 画面に示す条件と、集計に使う条件を同じにする（画面は 1 つの地域を示し、集計は全部の地域で行う、という状態を作らない）。
+ * 外した地域は notice で知らせる。製品が URL から条件を読み取るときの検証の例（useAnalysisQuery は filters を検証しない）
+ */
+export function singleRegionQuery(q: Partial<AnalysisQuery<AnalysisFilters>>): { query: Partial<AnalysisQuery<AnalysisFilters>>; notice: string | null } {
+  const list = q.filters?.regions ?? []
+  if (!q.filters || list.length <= 1) return { query: q, notice: null }
+  const [first, ...dropped] = list
+  return {
+    query: { ...q, filters: { ...q.filters, regions: [first] } },
+    notice: `この画面で選べる地域は 1 つです。URL で指定された地域のうち、${regionLabels[first]}で集計しています（${dropped.map((r) => regionLabels[r]).join("、")}は使っていません）`,
+  }
 }
 
 export function paramsFromQuery(page: string, q: AnalysisQuery<AnalysisFilters>, extra?: Record<string, string | null>) {

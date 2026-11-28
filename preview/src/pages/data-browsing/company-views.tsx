@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -26,7 +26,37 @@ type ViewProps = {
   activeId: string | null
   onOpen: (id: string) => void
   onClearAll: () => void
+  /** 変わったら、同じ条件で取得し直す（検証用の操作。表と同じ） */
+  refetchToken?: number
   testId: string
+}
+
+// 同じ条件の再取得の合図（refetchToken）。表示した時点の値では取得し直さず、変わったときだけ reload する。
+function useRefetchToken(token: number | undefined, reload: () => void) {
+  const reloadRef = useRef(reload)
+  useLayoutEffect(() => {
+    reloadRef.current = reload
+  })
+  const first = useRef(token)
+  useEffect(() => {
+    if (token !== first.current) reloadRef.current()
+  }, [token])
+}
+
+const timeOf = (fetchedAt: number | null) =>
+  fetchedAt ? new Date(fetchedAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : "前回"
+
+// 同じ条件の再取得の失敗：前の内容を表示していることを、表と同じ文で示す（取得成功と同じ表示にしない）。
+function RefreshFailed({ fetchedAt, onRetry, testId }: { fetchedAt: number | null; onRetry: () => void; testId: string }) {
+  return (
+    <DataRegionError
+      variant="warning"
+      title="最新の内容を取得できませんでした"
+      description={`${timeOf(fetchedAt)}の時点の内容を表示しています。`}
+      onRetry={onRetry}
+      data-testid={`${testId}-refresh-error`}
+    />
+  )
 }
 
 function RecordButton({ customer, active, onOpen, className, children }: { customer: Customer; active: boolean; onOpen: (id: string) => void; className?: string; children?: ReactNode }) {
@@ -62,12 +92,13 @@ function ViewMessage({ state, onClearAll }: { state: "empty" | "no-results"; onC
 }
 
 // ---------------------------------------------------------------- Kanban：契約状況ごとの件数と進み具合を把握する
-export function BoardView({ workspace, query, filtered, activeId, onOpen, onClearAll, testId }: ViewProps) {
+export function BoardView({ workspace, query, filtered, activeId, onOpen, onClearAll, refetchToken, testId }: ViewProps) {
   const data = useBrowseData({
     query,
     fetcher: (q, { signal }) => listBoard(workspace, q, PER_COLUMN, signal),
     scopeKey: workspace,
   })
+  useRefetchToken(refetchToken, data.reload)
   const total = data.data?.reduce((n, c) => n + c.total, 0) ?? 0
   const state = getBrowseViewState({ status: data.status, count: total, filtered })
   return (
@@ -77,6 +108,7 @@ export function BoardView({ workspace, query, filtered, activeId, onOpen, onClea
         <p className="text-ui text-muted-foreground">各列の先頭 {PER_COLUMN}件を、現在の並べ替えの順に表示しています。すべての行は表で確認できます。</p>
         <DataRefreshIndicator active={data.status === "refreshing"} className="ms-auto" />
       </div>
+      {data.refreshFailed && <RefreshFailed fetchedAt={data.fetchedAt} onRetry={data.reload} testId={testId} />}
       {state === "error" ? (
         <DataRegionError title="カンバンを表示できませんでした" description="サーバーに接続できませんでした。" onRetry={data.reload} />
       ) : state === "empty" || state === "no-results" ? (
@@ -145,7 +177,7 @@ export function shiftMonth(month: string, delta: number) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`
 }
 
-export function CalendarView({ workspace, query, filtered, activeId, onOpen, onClearAll, testId, month, onMonthChange }: ViewProps & {
+export function CalendarView({ workspace, query, filtered, activeId, onOpen, onClearAll, refetchToken, testId, month, onMonthChange }: ViewProps & {
   /** 表示期間（YYYY-MM）。表示形式に固有の状態 */
   month: string
   onMonthChange: (month: string) => void
@@ -157,6 +189,7 @@ export function CalendarView({ workspace, query, filtered, activeId, onOpen, onC
     fetcher: (v, { signal }) => listRenewals(workspace, v, v.month, signal),
     scopeKey: workspace,
   })
+  useRefetchToken(refetchToken, data.reload)
   const rows = data.data ?? []
   const state = getBrowseViewState({ status: data.status, count: rows.length, filtered })
   const [y, m] = month.split("-").map(Number)
@@ -189,6 +222,7 @@ export function CalendarView({ workspace, query, filtered, activeId, onOpen, onC
         </p>
         <DataRefreshIndicator active={data.status === "refreshing"} className="ms-auto" />
       </div>
+      {data.refreshFailed && <RefreshFailed fetchedAt={data.fetchedAt} onRetry={data.reload} testId={testId} />}
       {state === "error" ? (
         <DataRegionError title="カレンダーを表示できませんでした" description="サーバーに接続できませんでした。" onRetry={data.reload} />
       ) : state === "empty" || state === "no-results" ? (

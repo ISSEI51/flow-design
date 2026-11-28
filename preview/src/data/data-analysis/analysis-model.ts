@@ -2,6 +2,7 @@ import { addDays, addMonths, getDaysInMonth, startOfMonth } from "date-fns"
 
 import { fromDateString, isBeforeDate, makeDate, toDateString } from "@/lib/date"
 import { buildBuckets, type PeriodContext, type ComparisonRange, type DayRange, type Granularity, type ResolvedPeriod } from "@/patterns/analysis-period"
+import { scopeFilters, type ScopedFilters } from "@/patterns/analysis-query"
 
 import {
   ANALYSIS_TODAY,
@@ -13,6 +14,7 @@ import {
   churnMrrIn,
   churnRateIn,
   churnedAccounts,
+  defaultAnalysisFilters,
   inDataRange,
   churnedIn,
   endOfMonthDay,
@@ -55,9 +57,18 @@ export function revenueTargetFor(full: DayRange): number | null {
   return sum
 }
 
-/** ワークスペース（データのスコープ）の条件を加える。サーバーが行う（画面の絞り込みで外せない） */
-export function withScope(workspace: string, filters: AnalysisFilters): AnalysisFilters {
-  return workspace === "kyushu" ? { ...filters, regions: ["kyushu-okinawa"] } : filters
+/** ワークスペース（データのスコープ）の条件。九州支店のワークスペースは、九州・沖縄の契約だけを持つ */
+export function workspaceFilters(workspace: string): AnalysisFilters {
+  return workspace === "kyushu" ? { ...defaultAnalysisFilters, regions: ["kyushu-okinawa"] } : defaultAnalysisFilters
+}
+
+/**
+ * ワークスペース（データのスコープ）の条件と、画面の条件の積集合。サーバーが行う（画面の絞り込みで外せない）。
+ * 画面の条件で上書きも、スコープの条件で上書きもしない。重ならない場合（九州支店で地域「関東」）は conflict を返し、
+ * 製品は取得せずに「このワークスペースでは対象がありません」と示す。ready の filters が、実際に集計に使う条件である
+ */
+export function withScope(workspace: string, filters: AnalysisFilters): ScopedFilters<AnalysisFilters> {
+  return scopeFilters(workspaceFilters(workspace), filters)
 }
 
 /**
@@ -263,7 +274,10 @@ export function churnedAccountList({
   filters: AnalysisFilters
   role: "manager" | "staff"
   reason?: string | null
-  /** hide：閲覧できない明細の件数を返さない（total と hidden を null にする） */
+  /**
+   * hide：閲覧できない明細の件数を返さない（total と hidden を null にする）。閲覧できない明細の有無にかかわらず、
+   * 応答の形を同じにする（閲覧できない明細がない場合だけ total を返すと、total の有無から存在がわかる）
+   */
   hiddenCountPolicy?: "show" | "hide"
 }) {
   // 集計の範囲の外を含む期間は、集計の値と同じ条件で数えられないため、明細も返さない
@@ -271,7 +285,7 @@ export function churnedAccountList({
   const all = churnedAccounts(range, filters).filter((r) => !reason || r.reason === reason)
   const visible = role === "manager" ? all : all.filter((r) => !r.restricted)
   const hidden = all.length - visible.length
-  const conceal = hiddenCountPolicy === "hide" && hidden > 0
+  const conceal = hiddenCountPolicy === "hide"
   return {
     rows: visible.map(({ restricted: _restricted, ...r }) => r),
     total: (conceal ? null : all.length) as number | null,
@@ -283,12 +297,20 @@ export function churnedAccountList({
 export type ChurnedListRow = Omit<ReturnType<typeof churnedAccounts>[number], "restricted">
 
 // ---------------------------------------------------------------- 企業の詳細
-/** 企業の詳細。閲覧の権限が限られた取引先は、staff には返さない（forbidden）。存在しない ID は null */
-export function accountDetail(id: string, role: "manager" | "staff", workspace = "hq") {
+/**
+ * 企業の詳細。閲覧の権限が限られた取引先は、staff には返さない。存在しない ID は null。
+ * forbiddenDetail（製品の情報公開の方針）：
+ * - forbidden：権限不足として示す（forbidden の例外）。企業が存在し、集計に含まれることが利用者にわかる
+ * - not-found：権限不足を不存在と同じに扱う（null）。対象の存在そのものが機密の場合（Permission States）
+ */
+export function accountDetail(id: string, role: "manager" | "staff", workspace = "hq", forbiddenDetail: "forbidden" | "not-found" = "forbidden") {
   const a = accountById.get(id)
   // ワークスペースの外の企業は、存在しないものとして扱う（別のスコープの情報を返さない）
   if (!a || (workspace === "kyushu" && a.region !== "kyushu-okinawa")) return null
-  if (role === "staff" && a.restricted) throw new AnalysisRequestError("この企業の詳細を表示する権限がありません", "forbidden")
+  if (role === "staff" && a.restricted) {
+    if (forbiddenDetail === "not-found") return null
+    throw new AnalysisRequestError("この企業の詳細を表示する権限がありません", "forbidden")
+  }
   const last = a.end ? addDays(fromDateString(a.end)!, -1) : ANALYSIS_TODAY
   // 最後の 12 か月の月末の月額（契約していない月は null。0 にしない）
   const history = Array.from({ length: 12 }, (_, i) => {

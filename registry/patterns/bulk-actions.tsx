@@ -74,7 +74,7 @@ function IntegrityNote({ integrity, advice, label }: { integrity: BulkIntegrity;
     )
   }
   if (integrity.invalid > 0) lines.push(`形式が正しくない結果を ${n(integrity.invalid)}受け取りました（件数に含めていません）`)
-  if (lines.length === 0) return advice ? <p data-slot="bulk-result-integrity">最新の状態を確認してから、必要な行だけをもう一度操作してください。</p> : null
+  if (lines.length === 0) return advice ? <p data-slot="bulk-result-integrity">「状態を確認」で確かめてから、必要な行だけをもう一度操作してください。</p> : null
   return (
     <div data-slot="bulk-result-integrity" className="flex flex-col gap-1">
       <ul className="flex list-disc flex-col gap-1 ps-5">
@@ -82,7 +82,7 @@ function IntegrityNote({ integrity, advice, label }: { integrity: BulkIntegrity;
           <li key={l}>{l}</li>
         ))}
       </ul>
-      {advice && <p>最新の状態を確認してから、必要な行だけをもう一度操作してください。</p>}
+      {advice && <p>「状態を確認」で確かめてから、必要な行だけをもう一度操作してください。</p>}
     </div>
   )
 }
@@ -157,7 +157,7 @@ function BulkResultAlert({
           <p>
             {requestError.message}
             {requestError.outcome === "unknown"
-              ? "。処理されたかを確認できないため、もう一度実行する前に最新の状態を確認してください。"
+              ? "。処理されたかを確認できないため、もう一度実行する前に「状態を確認」で確かめてください。"
               : "。処理は行われていません。選択はそのまま残しています。"}
           </p>
         ) : (
@@ -195,7 +195,7 @@ function BulkResultAlert({
         {unknown.length > 0 && (
           <p data-slot="bulk-result-unknown">
             {n(unknown.length)}は、処理されたかを確認できませんでした
-            {integrity.missing > 0 && `（うち ${n(integrity.missing)}は、結果が返されませんでした）`}。重複して実行しないよう、選択を解除しています。最新の状態を確認してから、必要な行だけをもう一度操作してください。
+            {integrity.missing > 0 && `（うち ${n(integrity.missing)}は、結果が返されませんでした）`}。重複して実行しないよう、選択を解除しています。「状態を確認」で確かめてから、必要な行だけをもう一度操作してください。
           </p>
         )}
       </AlertDescription>
@@ -213,7 +213,7 @@ function BulkResultAlert({
         )}
         {onCheckLatest && (unknown.length > 0 || requestError?.outcome === "unknown" || (integrity.reconciled && !integrity.complete)) && (
           <Button variant="secondary" size="sm" onClick={onCheckLatest}>
-            最新の状態を確認
+            状態を確認
           </Button>
         )}
         <Button variant="ghost" size="sm" onClick={onDismiss}>

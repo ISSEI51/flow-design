@@ -241,14 +241,28 @@ function AppShellMain({
     const main = mainRef.current
     if (!main) return
     if (options.current.scrollOnNavigate === "top") main.scrollTo({ top: 0, left: 0 })
+    // 移動の後、フォーカスを移す前に、利用者が移動先のページの要素にフォーカスした（入力欄を押した、など）場合は、
+    // フォーカスを移さない（遅れて動く処理が、操作中の要素からフォーカスを奪わない）。
+    // main の外へのフォーカス（モバイルのメニューを閉じたときの、メニューのボタンへの復帰など）は対象にしない
+    let moved = false
+    const onFocusIn = (event: FocusEvent) => {
+      if (event.target instanceof Node && event.target !== main && main.contains(event.target)) moved = true
+    }
+    document.addEventListener("focusin", onFocusIn)
     // 続けて移動した場合は、cleanup で前の移動の処理を取り消す
-    return afterMobileMenuClosed(() => {
+    const cancel = afterMobileMenuClosed(() => {
+      document.removeEventListener("focusin", onFocusIn)
+      if (moved) return
       const target = options.current.focusOnNavigate
       const el = focusTargetIn(main, target)
       el?.focus({ preventScroll: true })
       // h1 を探したが、なかったため main にフォーカスした：遅れて表示する見出しを focusHeading で移せるようにする
       pendingHeading.current = target === "heading" && el === main
     })
+    return () => {
+      document.removeEventListener("focusin", onFocusIn)
+      cancel()
+    }
   }, [pageKey, mainRef, pendingHeading])
 
   // フォーカスが main から離れたら、遅れて表示する見出しへの移動を取りやめる

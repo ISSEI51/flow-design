@@ -106,19 +106,53 @@
 復元する状態：
 
 - 検索語、フィルター、ソート、ページ番号とページサイズ（`useBrowseQuery` の `initialQuery`）
+- 表示形式（表示形式に固有の状態を含む）
+- ID で選んだ行の選択（全件の選択は復元しない。下の「選択の復元」）
 - 縦のスクロールの位置（`AppShellMain`）と、横のスクロールの位置（Table の領域）
 - 適切なフォーカス（詳細を開いた行の、フォーカスできる要素）
 
+記録を使ってよい条件（スコープ）：
+
+- 記録には、記録したときのスコープ（アカウント、ワークスペース、権限の版）を入れる。戻った時点のスコープと一致する場合だけ使う。
+- 履歴の項目のキー（`fdListKey` など）だけで判断しない。同じ履歴の項目のまま、ワークスペースを切り替えられる（`history.replaceState`）ため、キーが同じでも別のスコープの記録でありうる。
+- 一覧に渡す保持していたデータ（`useBrowseData` の `initialData`）にも、取得したときのスコープ（`initialData.scope`）を入れる。`useBrowseData` は、`scopeKey` と一致しない `initialData` を使わず、初回の読み込みにする（製品の判定に誤りがあっても、別のスコープの行を現在の行として表示しない）。
+- 同じ履歴の項目でスコープを切り替えたときは、その項目の記録を破棄してよい（検証画面は破棄する）。記録は切り替える前の一覧の状態であり、切り替えた後の状態ではない。
+- 権限を失った場合など、スコープの外の記録は、条件、位置、選択、データのいずれも復元しない。
+
+選択の復元：
+
+- ID で選んだ行（`selection.mode === "ids"`）だけを記録し、同じスコープで、同じ条件（検索語、フィルター）で一覧を作り直す場合だけ戻す。検証画面は、記録した条件で一覧を始めるため、条件は一致する。
+- 全件の選択（検索条件の対象）は記録しない。戻った時点の検索結果は、記録したときと異なる場合があり、復元すると対象が暗黙に広がる（または変わる）。
+- 戻した選択は、通常の選択と同じ規則に従う（条件やスコープを変えたら解除する。一括操作は実行の時点で対象を固定する）。存在しなくなった行の ID は、表示していない選択として件数に含まれる（「表示していない N件を含む」）。
+
 手順：
 
-1. 離れる直前に `captureListPosition({ scrollElement, root, rowId })` で位置を記録し、条件とともに製品が保存する。
-2. 戻ったときは、`AppShellMain` に `scrollOnNavigate={false}` と `focusOnNavigate={false}` を渡し、既定の「先頭へ戻す」と「h1 へフォーカス」を止める。
-3. `useListPositionRestore({ position, ready, root, scrollElement, fallbackFocus })` が、データの表示が終わった後（`ready`）に 1 回だけ、スクロールの位置とフォーカスを戻す。
+1. 離れる直前に `captureListPosition({ scrollElement, root, rowId })` で位置を記録し、条件、スコープ、保持するデータ（取得した時刻を含む）とともに製品が保存する。
+2. 戻ったときは、記録のスコープを確かめてから、`AppShellMain` に `scrollOnNavigate={false}` と `focusOnNavigate={false}` を渡し、既定の「先頭へ戻す」と「h1 へフォーカス」を止める。記録を使わない場合は止めない（先頭と h1 から始める）。
+3. `useListPositionRestore({ position, ready, scrollReady, targetKey, dataKey, root, scrollElement, fallbackFocus })` が、1 回だけ位置を戻す。
+   - `scrollReady`：保持していたデータ（記録した条件の行）を表示している間に、スクロールの位置だけを先に戻す。取得し直す間に、利用者が先頭の位置から操作を始めて、後から位置が飛ぶことを防ぐ。
+   - `ready`：取得し直した結果（行の削除などを反映した結果）が届いてから、フォーカスを戻す（削除された行にフォーカスしない）。
+   - `targetKey` と `dataKey`：記録したときの条件のキーと、表示しているデータの条件のキー。異なる場合は、前の条件の位置と行を当てはめない（何もフォーカスしていない場合だけ `fallbackFocus` へ移す）。
 4. 対象の行がなくなった場合は、同じ位置の行（なければ最後の行）、行がない場合は `fallbackFocus`（検索欄、Empty の操作など）にフォーカスを移す。フォーカスした要素が表示範囲の外にある場合だけ、近くまでスクロールする。
+
+復元を取りやめる（利用者の操作を優先する）：
+
+- 一覧を表示した後、復元の前に、利用者が操作した場合は、復元を取りやめる。操作は、`pointerdown`、`keydown`、`wheel`、`touchmove`、`focusin` で判断する（`watchUserInteraction`）。読み込みの間に検索欄へ入力を始めた場合に、フォーカスを行へ移したり、スクロールの位置を変えたりしない。
+- スクロールは `scroll` イベントでは判断しない。内容の高さの変化による位置の調整（プログラムによる変更）と区別できないため、スクロールを起こす利用者の操作（ホイール、タッチ、キー、スクロールバーの `pointerdown`）で判断する。
+- 先に戻したスクロールの位置（`scrollReady`）は、取りやめても元に戻さない。
+- 取りやめた場合も `onRestored` を呼ぶ（製品は記録を破棄してよい。後から作り直した一覧で、古い位置を戻さない）。
+- 同じ規則を、Data Analysis の位置の復元（`drill-down.tsx` の `useAnalysisPositionRestore`）にも適用する。この変更の時点では未適用（[data-browsing.md](data-browsing.md#横断の検品patterns-integration-reviewの対処) の引き継ぎ）。
+
+戻る操作と、一覧を新しく開く操作の区別：
+
+- ブラウザの戻る・進む、詳細の Breadcrumb（一覧から開いた場合は `history.back()`）は、その履歴の項目の記録を復元する。
+- Sidebar などから一覧を開く操作は、表示中が同じ一覧でも、新しい履歴の項目（新しいキー）で一覧を作り直す。前の条件、位置、選択を持ち越さず、URL と表示の条件を一致させる。前の履歴の項目の記録は上書きしない（戻ると、その項目の状態を復元する）。
+- 記録を使う URL の印（Forms & Workflows の検証画面の `restore=1`）だけでは記録を使わない。記録したときに一覧から開いた画面から移ったこと（履歴の項目の移動の元）と、スコープの一致を合わせて確かめる。ブックマーク、共有した URL、別の経路で開いた同じ URL で、前の記録を復元しない。
 
 ブラウザの戻る・進むに対応する構成（検証画面の例）：
 
-- 一覧の履歴の項目に、`history.replaceState` でキー（`fdListKey`）を付け、そのキーで一覧の記録を保存する。
+- 一覧の履歴の項目に、`history.replaceState` でキー（`fdListKey`）を付け、そのキーで一覧の記録を保存する。記録には、記録したときのワークスペースを入れ、URL のワークスペースと一致する場合だけ使う。
+- 一覧の画面は、履歴の項目のキーごとに作り直す（React の `key`）。同じ URL の履歴の項目の間の移動も扱うため、`hashchange` と `popstate` の両方で画面を切り替える。
 - 詳細を開くときは、記録を保存してから詳細へ移動し、詳細の履歴の項目に戻り先（`fdFromList`）を記録する。
 - 詳細の Breadcrumb の「顧客」は、一覧から開いた場合は `history.back()` で戻る（ブラウザの戻ると同じ）。直接開いた場合は一覧へ移動する。
 - 実際のルーターへの接続と、記録の永続化（セッションのストレージなど）は製品の責務である。
@@ -133,7 +167,7 @@
 | 一覧の位置 | `captureListPosition` の値（`ListPosition`）を製品が保存する |
 | 行に依存する操作の可否 | 一覧の `useBrowseData` の `canOperate`。再取得中と、同じ条件の再取得の失敗の間は、行の操作（Dropdown Menu）と選択を受け付けない（`DataTable` の `locked={!canOperate}`、行の中では `useDataTableStatus().locked`）。行の閲覧（詳細を開く）は受け付ける |
 
-一覧への復帰の時期（`ready`）には、`isCurrent`（現在の条件の結果を表示できる）を使う。保持していたデータで先に表示し、取得し直した結果（行の削除などを反映した結果）が届いてから復元する。操作の可否には `canOperate` を使う（[data-browsing.md](data-browsing.md#データの表示と操作の可否)）。
+一覧への復帰の時期（`ready`）には、`isCurrent`（現在の条件の結果を表示できる）を使う。保持していたデータで先に表示し（`scrollReady` でスクロールの位置だけを先に戻す）、取得し直した結果（行の削除などを反映した結果）が届いてからフォーカスを戻す。操作の可否には `canOperate` を使う（[data-browsing.md](data-browsing.md#データの表示と操作の可否)）。
 
 ## レスポンシブ
 
@@ -173,11 +207,15 @@ const neighbors = getRecordNeighbors({ ids: rows.map((r) => r.id), activeId: ope
 ```
 
 ```tsx
-// 一覧に戻ったとき
+// 一覧に戻ったとき（saved は、製品が同じスコープの場合だけ渡す記録）
 const { mainRef } = useAppShell()
+const data = useBrowseData({ query, fetcher, scopeKey: workspaceId, initialData: saved?.page /* { data, key, fetchedAt, scope } */ })
 useListPositionRestore({
   position: saved?.position ?? null,
   ready: data.isCurrent,
+  scrollReady: data.data !== undefined && data.dataKey === saved?.page?.key,
+  targetKey: saved?.page?.key ?? null,
+  dataKey: data.dataKey,
   root: listRef,
   scrollElement: mainRef,
   fallbackFocus: () => searchRef.current,
@@ -198,6 +236,9 @@ useListPositionRestore({
 | 詳細の再取得中に、前のレコードの情報を表示する | 別のレコードを現在のレコードと誤認する | `keepPreviousData: false` |
 | ページの外の前後がわからないのに、前後の移動を有効にする | 移動先が存在しない | 無効にする |
 | 一覧に戻ると先頭に戻り、条件が消える | 探し直す必要がある | 条件、位置、フォーカスを復元する |
+| 履歴の項目のキーだけで記録を使う | ワークスペースを切り替えた後に戻ると、別のワークスペースの行を表示する | 記録にスコープを入れ、一致する場合だけ使う（`initialData.scope`） |
+| 読み込みの後に、利用者の操作に関係なく位置とフォーカスを戻す | 入力中の欄からフォーカスを奪い、入力した文字が別の要素に入る | 復元の前の利用者の操作で取りやめる |
+| Sidebar から開いた一覧に、前の条件を残す | URL と表示の条件が一致せず、後の戻る操作の復元が壊れる | 新しい履歴の項目で作り直す |
 | 詳細の情報を Card や折りたたみで細かく区切る | 区切りが多く、読む順序がわかりにくい | Section Layout の余白と見出し |
 | 横スクロールの手がかりのために、スクロールバーを隠す | スクロールできることが伝わらない | 端の影とネイティブのスクロールバー |
 | すべての列を固定する | 残りの情報が見えない | 識別に必要な列だけを固定する |
@@ -206,5 +247,6 @@ useListPositionRestore({
 
 - 詳細の取得と、レコードが存在しない場合の扱い。
 - 別ページへのルーティング、履歴の項目ごとの一覧の記録の保存、ブラウザの戻る・進むとの接続。
+- 記録を使ってよいかの判断（同じアカウント、ワークスペース、権限の版か）。記録と `initialData` にスコープを入れる。
 - 編集の保存（API）と、保存の結果の一覧への反映。
 - 前後の移動で、ページをまたいで取得するかの判断。

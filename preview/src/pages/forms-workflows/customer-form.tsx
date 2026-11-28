@@ -215,6 +215,8 @@ export function CustomerForm({
   useUnsavedChanges({
     dirty: form.isDirty || form.status === "unknown",
     saving: form.submitting,
+    // 結果が不明の間は、確認の文を「保存されたかを確認できていません」にする（「保存されていません」と断定しない）
+    unknown: form.status === "unknown",
     label,
     revision: form.revision,
     canSave: form.canSubmit,
@@ -470,7 +472,7 @@ export function CustomerForm({
           {unknown && (
             <AlertAction>
               <Button size="sm" variant="secondary" loading={checking} onClick={checkSaved}>
-                {mode === "create" ? "登録されているか確認" : "保存されているか確認"}
+                {mode === "create" ? "登録されたかを確認" : "保存されたかを確認"}
               </Button>
             </AlertAction>
           )}
@@ -485,7 +487,8 @@ export function CustomerForm({
               id={noticeId}
               data-testid={`${idPrefix}-save-notice`}
               blockers={form.blockers}
-              hidden={form.submitting || form.composing}
+              // 結果が不明、保存中、変換中も、保存ボタンの aria-describedby の参照先に理由を置く（空にしない）
+              reason={unknown ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}
               unchanged={form.unchanged}
               detail
               onFocusField={(name) => focusFormControl(id(name))}
@@ -495,7 +498,6 @@ export function CustomerForm({
                 保存中に変えた内容は、まだ保存していません
               </p>
             )}
-            {unknown && <p className="text-ui text-muted-foreground">保存されたかを確かめてから、もう一度保存できます</p>}
           </>
         }
       >

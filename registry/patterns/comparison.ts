@@ -230,6 +230,9 @@ function describeComparison(result: ComparisonResult, options: ComparisonDisplay
     return { ...base, text: diffText(), detail: null }
   }
   if (show === "difference") return { ...base, text: diffText(), detail: signNote }
+  // 符号が変わった場合（黒字から赤字など）は、auto では実数差を主に示す。100 から −50 の増減率 −150.0% は、
+  // 値の大きさの変化として読みにくい。増減率が必要な場合は製品が show: "rate" を指定する
+  if (show === "auto" && signNote) return { ...base, text: diffText(), detail: signNote }
   const rate = rateText()
   if (rate === null) {
     // 基準値が 0 や負の場合は、増減率を示さず、実数差と理由を示す。

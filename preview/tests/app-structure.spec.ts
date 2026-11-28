@@ -583,6 +583,13 @@ test.describe("Page Layout", { tag: "@webkit" }, () => {
     expect(await css(container, "overflow-x")).toBe("auto")
     expect(await container.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
     expect(await noPageScroll(page)).toEqual({ horizontal: true, vertical: true })
+    // 横に続く列があることを、スクロールできる方向（右）の端の影で示す。右端に着いたら消え、左に示す（TableScrollArea）
+    const area = page.getByTestId("customers-table-scroll")
+    await expect(area).toHaveAttribute("data-scroll-end", "true")
+    await expect(area).not.toHaveAttribute("data-scroll-start")
+    await container.evaluate((el) => el.scrollTo({ left: el.scrollWidth }))
+    await expect(area).toHaveAttribute("data-scroll-start", "true")
+    await expect(area).not.toHaveAttribute("data-scroll-end")
   })
 })
 

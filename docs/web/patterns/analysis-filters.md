@@ -188,6 +188,8 @@ toInstantRange(同じ期間, "America/Los_Angeles")
 - URL への反映、保存した分析の条件は許容する。URL と保存の処理は製品の責務（`query` と `onQueryChange` で制御する）。
 - 個人情報や機密性の高い条件を、無条件に URL に入れない。
 - アカウントやワークスペースを変えたら、古い条件とデータを持ち越さない（`useBrowseData` の `scopeKey`、`useCrossFilter` の `resetKey`）。
+- ワークスペース（データのスコープ）の条件と画面の条件は、積集合として扱う（`scopeFilters(スコープの条件, 画面の条件)`）。スコープの条件で画面の条件を上書きしない。重ならない場合（九州支店のワークスペースで、復元した地域が「関東」）は取得せず、「このワークスペースでは対象がありません」と、条件を外す操作を示す。領域の注記や再取得中の条件の文は、積集合の結果（実際に集計に使った条件）から作る。
+- 復元する条件は、現在のスコープと認可に従う。画面で選べない組み合わせ（1 つだけを選ぶ画面に、URL で複数の値）を復元した場合は、画面に示す条件と集計の条件を同じにする（検証画面は最初の 1 つだけを使い、使わなかった値を `role="status"` の文で知らせ、URL からも除く）。
 
 ### モバイル
 
@@ -232,6 +234,7 @@ toInstantRange(同じ期間, "America/Los_Angeles")
 | 場合 | 扱い |
 | --- | --- |
 | URL などから復元した期間が不正 | 既定の期間に戻し、`notice`（「指定された期間が不正なため、既定の期間で表示しています」） |
+| URL などから復元した絞り込み（`initialQuery.filters`）の値 | `useAnalysisQuery` は検証しない（`filters` の型と値の意味は製品が決めるため）。未知の値、画面で選べない組み合わせ、現在のスコープと認可に合わない値は、製品が読み取るときに検証し、外した値を知らせてから渡す（検証画面の `queryFromParams` と `singleRegionQuery`）。サーバーも、受け取った条件を権限とスコープで確かめる |
 | `defaultQuery` が不正、制御された `query` が不正、集計単位が不正な文字 | `status: "invalid"`、`key: null`（取得しない。不正な条件で全件を取得しない） |
 | 利用できない集計単位を直接指定した | 描画の時点で初期値を使い、`notice` で知らせる |
 | URL などから復元した集計単位が使えない（期間に合わない、製品が提供しない） | 使える単位にし、`notice`（「指定された集計単位「時間別」は使えないため、「日別」で表示しています」） |
@@ -302,6 +305,7 @@ Registry の部品は、どの状態も保存しない（URL、ストレージ�
 - 分析の目的に合うプリセットの選択と、初期の期間。
 - タイムゾーン、週の始まり、会計年度の定義、「今日」の算出。
 - URL への同期、保存した分析の条件、権限。
+- 復元した絞り込みの値の検証（未知の値、選べない組み合わせ、スコープと認可）。`useAnalysisQuery` は `filters` を検証しない。
 - 集計の処理（半開区間で受け取る）。
 
 ## 実装例
@@ -320,15 +324,20 @@ const a = useAnalysisQuery<Filters>({
 
 <AnalysisRegion
   title="解約率の推移"
-  actions={<GranularitySelect value={a.query.granularity} onValueChange={a.setGranularity} options={a.granularities} />}
+  // 実際に使う集計単位（a.granularity）を示す。a.query.granularity は、期間に合わない場合に描画の時点で置き換えられる前の値
+  actions={<GranularitySelect value={a.granularity} onValueChange={a.setGranularity} options={a.granularities} />}
   conditions={a.notice && <p role="status">{a.notice}</p>}
   status={trend.status}
 >…</AnalysisRegion>
 
-// Cross-filtering と個別条件
-const cross = useCrossFilter({ resetKey: JSON.stringify(a.query.filters) })
+// ワークスペース（データのスコープ）の条件を先に加える（積集合。重ならない場合は取得しない）
+const ws = scopeFilters(workspaceFilters, a.query.filters) // 製品の責務：スコープの条件はサーバーでも加える
+const filters = ws.status === "ready" ? ws.filters : null
+
+// Cross-filtering と個別条件。resetKey には、スコープ（ワークスペース、権限）と、期間を含む全体条件（a.key）を含める
+const cross = useCrossFilter({ resetKey: JSON.stringify([scopeKey, a.key]) })
 const sel = cross.forRegion("by-term")
-const scoped = sel ? scopeFilters(a.query.filters, { plans: [sel.value] }) : { status: "ready", filters: a.query.filters, narrowed: [] }
+const scoped = !filters ? ws : sel ? scopeFilters(filters, { plans: [sel.value] }) : { status: "ready", filters, narrowed: [] }
 // conflict・invalid のときは取得しない（key を null にする）
 const scopedKey = a.key && scoped.status === "ready" ? JSON.stringify([a.key, scoped.filters]) : null
 ```

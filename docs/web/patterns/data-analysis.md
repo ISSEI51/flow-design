@@ -69,10 +69,35 @@ Period Comparison と Metric Overview は、増減の計算と表示を同じ `c
 | 新しいアラート | 閲覧の位置とフォーカスを動かさない |
 | Waterfall Chart | 新しく実装しない（使用の判断だけを資料に書く） |
 | 自動の変更 | 集計単位は期間に合わせて自動で変えてよい（知らせる）。比較の対象は分析の意味を変えるため、利用者の選択を維持し、使えなくなった場合は理由と変更の方法を示す |
-| 再取得中の表示 | 内容を薄くしない。200ms 後から「更新中」と表示中の結果の条件を示す。比較の見出しと比較期間も、表示中の結果の条件で示す |
+| 再取得中の表示 | 内容を薄くしない。200ms 後から「更新中」と表示中の結果の条件を示す。比較の見出しと比較期間も、表示中の結果の条件で示す。条件の文は省略せずに折り返し、領域の `aria-describedby` で関連付ける（Patterns Integration Review で変更） |
 | 今日のデータ | Registry は今日が確定しているとみなさない。分析の対象に今日を含み、集計済みの時刻（`asOf`）が今日の終わりより前か不明なら、比較を `fair: false` にする。製品は `asOf` を渡す |
 | 公平でない比較 | `fair: false` の比較は、増減の代わりに理由を示す（期間の合計の指標は期間の比較、時点の指標は時点の比較の `fair` で判断する） |
 | 集計単位 | 製品が提供する単位を `allowedGranularities` で選ぶ。復元した単位を使えない場合は知らせる |
+| 日数の異なる比較期間 | 暦でずらした比較期間の日数が分析の対象と異なる場合（月末に合わせた、月末をまたぐ）は `fair: false`（Patterns Integration Review で変更） |
+| スコープと画面の条件 | ワークスペースの条件と画面の条件は積集合。重ならない場合は取得せず、対象がないことを示す（Patterns Integration Review で追加） |
+
+## Patterns Integration Review での仕様の変更
+
+Patterns Integration Review の独立した検品（2026-11-28）の指摘への対処で、上の確定した仕様のうち次を変えた。
+
+| 変更 | 理由 | 影響 | 検討した別の方法 |
+| --- | --- | --- | --- |
+| `comparisonRange` の `calendar` で、月の全体どうしでない期間を暦でずらした比較期間の日数が、分析の対象と異なる場合に `fair: false`、`reason`（「比較期間と分析の対象の日数が異なります（分析の対象は 30 日間、比較期間は 28 日間）」）、`truncated`（短い場合）を返す。従来は `fair: true` だった | 2025/03/30〜03/31 の前月が 2025/02/28 の 1 日になり、検証画面が売上を「+101.9%」と示した。2 日分と 1 日分の売上の差を増減として示していた。period-comparison.md の「月をずらすだけで同じ経過日数になるとは判断しない」と矛盾していた | 該当する比較期間で、期間を集計する指標（売上、新規の契約、解約率）は増減の代わりに理由を示す。時点の指標（`point-in-time`）は対象外。月の全体どうし（31 日と 30 日）の扱いは変えない | 比較期間を同じ日数に延ばす（3 月の日を 2 月の比較期間に含めることになり、`elapsed-days` の上限の規則と矛盾する）。`adjusted` だけで示す（製品が `fair` だけを見て増減を示すと、同じ誤りが残る） |
+| `weekday` で、暦でずらした日数より 7 日を超えて前にずらす場合は `invalid`（`overlap`） | 85 日間の期間の前月が、重なりを避けて 91 日前（3 か月前）になり、「前月」の比較ではなくなっていた | 長い期間の前月・前四半期の同じ曜日の比較は選べなくなる（`ComparisonSelect` に `period` を渡すと無効になる）。31 日間の月の前月（35 日前）と前年同期（364 日前）は変わらない | 7 日ずらす処理を前年同期だけにする（前月の 31 日間の月で比較できなくなる） |
+| `elapsed-time` で、`asOf` が分析の対象の始まり以前（経過時間 0）の場合は `fair: false` | 長さ 0 の区間どうしを `fair: true` としていた | 増減の代わりに理由を示す | `invalid` にする（`ComparisonRange` の無効の理由の型に値を加えることになり、製品の分岐が増える） |
+| `alignBuckets` の `by: "elapsed"` は、区間の単位を `granularity` で判定する | 表示の名前（`fullLabel`）から単位を推測していた。製品が名前を変えると、月別の区間を日の差で対応付ける | 名前を変えない製品では結果は同じ | なし |
+| `describeComparison` の `show: "auto"` で、符号が変わった場合（プラスからマイナス）は実数差を主に示し、補足に「プラスからマイナスに転換」 | 100 から −50 を「−150.0%」と示していた。period-comparison.md の符号の転換の扱い（実数差を主に示す）と一致していなかった | 増減率を主に示していた箇所が実数差になる。`show: "rate"` を指定すれば従来どおり | 資料だけを直す（−150.0% は値の大きさの変化として読みにくい） |
+| `groupOther` の `includeSkippedInOther` で、欠損した分類がある場合は、まとめる値のある分類が 0〜1 件でも「その他」を作る | 「その他」を作らない場合に、欠損した分類の `key` が `members` から消え、明細へ進めなかった | 「その他」の値は値のある分類だけから求め、値のある分類がない場合は `null` | なし |
+| `AnalysisRegion` の `staleLabel` を 1 行に省略せず折り返し、表示している間だけ領域の `aria-describedby` で参照する。`title` 属性を付けない | 省略した全文を `title` でしか確かめられず、タッチの操作、キーボード、支援技術で確かめられなかった | 狭い画面で、再取得中に見出しの部分が 1〜2 行高くなる | 2 行で省略し、「条件を表示」の Popover を置く（操作が 1 つ増え、再取得の間に Popover を開いたまま内容が変わる場合の扱いが必要になる） |
+| Chart の `ChartContainer` は、描画する場所の幅か高さが 0 の間は `ResponsiveContainer` を描かない | `keepMounted` の Tabs と Accordion の非表示の内容の中で、Recharts が「width(0) and height(0)」の警告を出し、大きさ 0 で描いていた | サーバーでの描画と Hydration の最初の描画では、グラフを描かずに場所だけを出力する。もう一度隠すとグラフを外し、表示したときに描き直す | `initialDimension` を大きくする（非表示の間も誤った大きさで描く） |
+
+検証画面（製品側のコード）の変更：
+
+- ワークスペースの条件を、画面の条件で上書きしていた（`withScope`）。積集合（`scopeFilters`）にし、重ならない場合は取得せず「このワークスペースでは対象がありません」と、地域の条件を外す操作を示す。顧客維持の分析の地域の選択も、九州支店のワークスペースでは無効にする。
+- 地域を 1 つだけ選べる画面で、URL の複数の地域（`region=kanto,kinki`）を、表示は 1 つ目、集計はすべてで行っていた。1 つ目だけを使い、使わなかった地域を `role="status"` の文で知らせ、URL からも除く。
+- `staleLabel` を、取得の条件のキーの文字列から作っていた（九州支店のデータを「絞り込みなし」と示し、集計単位を示さなかった。MRR の推移の領域には `staleLabel` がなかった）。取得の結果に、実際に集計に使った条件（`ShownConditions`）を含め、その値から作る。
+- 一覧の件数を示さない設定で、閲覧できない明細がない場合だけ件数を返していた（応答の形と文の違いから、閲覧できない明細の有無がわかった）。閲覧できない明細の有無にかかわらず、同じ応答と文にする。
+- 権限のない企業の詳細の扱いを、検証用の操作で選べるようにした（「権限不足として示す」「存在しない場合と同じに示す」）。後者では、本当に存在しない場合と同じ表示にする。
 
 ## Registry の API の変更（初期実装 f5769d5 からの変更）
 
@@ -93,6 +118,9 @@ Period Comparison と Metric Overview は、増減の計算と表示を同じ `c
 | `analysis-period.ts`（確認のレビューの後） | `Bucket` に `granularity`、`unitStart`。`ResolvedPeriod` の無効の理由に `unknown-period`、`ComparisonRange` に `future`、`unknown-mode`、`no-business-days`。今日が未確定の判定を、集計済みの時刻と期間の終わりで行い、`context` がない場合は期間の `inProgress` で判断する |
 | `drill-down.tsx`（同） | `drillRangeFor` に `context`（現在の系列の時刻の範囲） |
 | `analysis-controls.tsx`（同） | `ComparisonSelect` に `basis`、`context`。比較の方式と、公平でない理由（`comparison-unfair`）を示す。不正なタイムゾーンの理由と変更の方法 |
+| `analysis-period.ts`（Patterns Integration Review） | API の形は変えていない。`comparisonRange` の結果の値（`fair`、`reason`、`truncated`、`note`）と `weekday` の `invalid` の条件、`alignBuckets` の単位の判定を変えた（上の「Patterns Integration Review での仕様の変更」） |
+| `comparison.ts`、`drill-down.tsx`、`analysis-query.ts`、`analysis-region.tsx`（同） | API の形は変えていない。`describeComparison` の符号の転換の表示、`groupOther` の「その他」の作成、`scopeFilters` の未知の条件の判定（継承した名前を既知としない）、`staleLabel` の折り返しと `aria-describedby`。`useAnalysisQuery` は `initialQuery.filters` を検証しないことを型の説明に書いた |
+| `components/ui/chart.tsx`（同） | API の形は変えていない。描画する場所の大きさを測れるまで `ResponsiveContainer` を描かない |
 | `drill-down.tsx` | `drillPeriodFor` は実際に集計した期間を返す。`drillBucketPeriod` を追加。`groupOther` の `aggregate` を必須にし、検証を追加（`combine` は廃止）。`AnalysisPosition` に `scrollLeft`、`section`（`sectionTitleId` は廃止）。`captureAnalysisPosition` に `root`。フォーカスの復元は実際に移ったことを確かめる |
 
 ## 使い方の流れ
@@ -145,13 +173,39 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 | Drill-down | `#/drill-down` | 階層と条件の引き継ぎ（衝突を含む）、比較期間の系列から進む、「その他」、表示の方法、比較 |
 | 営業管理の検証画面 | `#/analysis-app?page=business` | 5 種類を組み合わせた 3 つのダッシュボード。`page=business`（事業の状況）、`page=retention`（顧客維持の分析）→ `page=retention-accounts`（企業の一覧）→ `page=account`（企業の詳細）、`page=operations`（処理の監視）。下部の「検証用の操作」で、応答の時間、明細の権限、予測の有無、取得の失敗を切り替える |
 
-検証画面の URL の引数：`page`、`period`（相対期間の id）または `from`・`to`（固定の期間）、`cmp`（比較）、`g`（手動で選んだ集計単位）、`region`、`plan`、`term`（全体の絞り込み）、`dplan`、`dterm`（Drill-down で加えた条件）、`id`（企業）。
+検証画面の URL の引数：`page`、`period`（相対期間の id）または `from`・`to`（固定の期間）、`cmp`（比較）、`g`（手動で選んだ集計単位）、`region`、`plan`、`term`（全体の絞り込み）、`dplan`、`dterm`（Drill-down で加えた条件）、`id`（企業）。事業の状況と顧客維持の分析は、地域を 1 つだけ選べる。`region` に複数の値がある場合は 1 つ目だけを使い、知らせる（企業の一覧の画面は、複数の地域をそのまま示して集計する）。
 
 売上の日割り（月額 × 12 ÷ 365）、原価率、地域の固定費、目標の設定は、検証のための例の業務の規則であり、Registry の標準の計算ではない。この模擬データは 1 社 1 契約のため、解約した企業の数と解約した契約の数は一致する（複数の契約を持つ製品では区別する）。
 
 すべての数値は、架空の契約の記録（`preview/src/data/data-analysis/subscriptions.ts`、乱数の種から決まった手順で作る 986 社の契約）から集計する。指標、比較値、増減率、グラフ、明細を、それぞれ固定の値として持たない。画面には「架空のデータ」と示している。基準日は 2026 年 11 月 25 日、会計年度は 4 月始まり。模擬のサーバー（`analysis-server.ts`、`window.__fdAnalysisServer`）と運用の監視のデータ（`operations.ts`、`window.__fdOpsTicker`）も `preview/src/data/data-analysis/` にあり、Registry には含めない。
 
 検証画面は Data Analysis の検証のためのものであり、正式な Pages の実装ではない。App Structure の `StructureSidebar`、`ProductMark`、`structureNav`、`PlaceholderScreen` を読み込んで使う（複製も変更もしない）。
+
+## 集計値と権限
+
+集計値は、閲覧できない明細を含んで計算される場合がある。権限を次の 4 つに分けて扱う。1 つの権限で、ほかの権限を兼ねさせない。
+
+| 権限 | 内容 | 検証画面の例 |
+| --- | --- | --- |
+| 集計値を閲覧する権限 | 閲覧できない対象を含む集計値（全社の解約率、解約した企業の数、売上）を見る | 担当者も、主要な指標と内訳は全社の値を見る |
+| 明細を閲覧する権限 | 個々の対象（企業の名前、月額、解約の理由）を見る | 担当者には、閲覧の権限が限られた取引先の明細を返さない（サーバーで除く） |
+| 全件の件数を知る権限 | 一覧の全件の件数と、閲覧できない件数を知る | 「一覧では件数を示さない」設定では、一覧の応答に件数を含めない（閲覧できない明細の有無にかかわらず、同じ応答と文） |
+| Drill-down を実行する権限 | 集計値から内訳、明細、詳細へ進む | 権限のない企業の詳細は、`forbidden`（権限不足）か、存在しない場合と同じ表示（検証用の操作で選ぶ） |
+
+- Registry の部品は、これらの権限を判定せず、保護もしない。`useAnalysisQuery`、`scopeFilters`、`groupOther`、`AnalysisRegion` は、渡された値をそのまま示す。権限の判定と、応答に含める値の制限は、製品のバックエンドが行う。
+- UI で明細、件数、操作を非表示にすることは、情報の保護にならない。応答に含めた値は、開発者ツールや API から読める。閲覧できない値は、応答に含めない。
+- 集計値そのものを公開するかは、製品が判断する。公開した集計値から、閲覧できない情報が推測できる場合がある。
+  - 集計値と、閲覧できる明細の差（主要な指標の「解約した企業」の数と、一覧に表示できる企業の数の差から、閲覧できない企業の数がわかる）
+  - 複数の絞り込みの結果の差（地域 A と B の合計から地域 A を引くと、地域 B の値がわかる。絞り込みを 1 件ずつ変えて差を取る）
+  - 少数の集計単位（1 社だけの区分の売上は、その企業の売上そのもの）
+  - 応答の形、文、応答の時間の違い（件数を返す・返さない、権限不足と不存在の違い）
+- 製品が必要に応じて行う対策（Registry では実装しない。汎用のプライバシー保護の集計の仕組みも作らない）：
+  - 集計値の公開の範囲を、明細の権限とは別に定める（集計値を閲覧する権限を持たない利用者には、閲覧できる対象だけの集計値を返す）
+  - 少数の集計単位の値を示さない、または丸める（最小の件数の基準を製品が決める）
+  - 差を取れる絞り込みの組み合わせを制限する、または集計値に同じ基準を適用する
+  - 権限のない対象の存在が機密の場合は、権限不足を不存在と同じ応答と表示にする（[permission-states.md](permission-states.md) の「ページへのアクセス」）
+  - 一覧の件数を示さない場合は、閲覧できない明細の有無で、応答の形と文を変えない
+  - Drill-down の先（明細、詳細、業務画面）でも、バックエンドが権限と対象を確かめる（分析の画面から渡した条件を、権限の根拠にしない）
 
 ## 製品の責務（共通）
 
@@ -167,7 +221,7 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 | 対象 | 変更 | 互換性 |
 | --- | --- | --- |
-| Components（`registry/components/ui/`） | 変更なし | |
+| Components（`registry/components/ui/`） | 最初の実装では変更なし。Patterns Integration Review で `chart.tsx` を直した（大きさが 0 の間は `ResponsiveContainer` を描かない） | 引数と出力の形は変わらない。サーバーでの描画の出力にグラフの `svg` を含めなくなった（`data-slot="chart"` の要素は出力する） |
 | App Structure、Data Browsing（`registry/patterns/` の既存のファイル） | 変更なし。`useBrowseData`、`useDelayedFlag`、`LoadingReveal`、`DataRefreshIndicator`、`DataRegionError`、`Loadable`、`useFilterDraft`、`getRecordNeighbors`、Page Layout、Section Layout、App Shell をそのまま使う | |
 | `preview/playwright.config.ts` | `tsconfig: "./tsconfig.json"` を追加した。Node.js の単体の検品で、registry のファイルの `@/` の別名を解決するため | 既存の spec はすべて preview/ の下にあり、同じ tsconfig を使っていた。検品の結果は変わらない（下の検品の結果） |
 | `preview/src/catalog.ts` | 分類「Patterns：Data Analysis」と 6 ページを追加した | 既存のページの id と URL は変わらない |
@@ -178,19 +232,18 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 
 ### Forms & Workflows との統合
 
-最終調整の開始の時点（origin/main aa7e664）で、Forms & Workflows（`feat/forms-and-workflows-patterns`）は main に統合されていない。Forms & Workflows の Patterns を再実装していない。後続の Patterns の横断の検品で、次を確かめる。
+Forms & Workflows（PR #1）は main に統合済みである（ebb0f24）。Data Analysis は、その後の `origin/main` を取り込んで統合した（373aa68、PR #2）。Forms & Workflows の Patterns は再実装していない。分析の画面と業務画面（登録・編集の流れ）の接続は、Patterns Integration Review の横断の検品で扱う。2026-11-28 時点の状況は次のとおり（Data Analysis の指摘への対処の作業では、下の「未確認」の項目を確かめていない）。
 
 | 項目 | 状況 | 接続に必要なこと |
 | --- | --- | --- |
-| 分析から業務画面への移動 | 検証画面の `page=work` は、引き継いだ条件を示すだけ | Forms & Workflows の一覧・編集の画面の URL と、受け取る条件の形 |
-| 実際に適用していた条件の引き継ぎ | 期間（固定の日付）、プラン（Cross-filtering）、地域、契約期間、解約の理由を URL で渡す | 業務画面が条件を初期の絞り込みにだけ使い、権限と対象をバックエンドで確かめる |
+| 分析から業務画面への移動 | 検証画面の `page=work` は、引き継いだ条件を示すだけ。Forms & Workflows の画面には接続していない | Forms & Workflows の一覧・編集の画面の URL と、受け取る条件の形 |
+| 実際に適用していた条件の引き継ぎ | 期間（固定の日付）、プラン（Cross-filtering）、地域、契約期間、解約の理由を URL で渡す。地域は、ワークスペースの条件との積集合（実際に集計に使った条件）を渡す | 業務画面が条件を初期の絞り込みにだけ使い、権限と対象をバックエンドで確かめる |
 | 対象のレコードの確認、閲覧・編集の権限 | 未確認 | 業務画面の権限の確認と、対象がない・権限がない場合の表示 |
 | 未保存の変更 | 未確認 | Forms & Workflows の未保存の変更の確認（分析の画面へ戻る操作を含む） |
 | 編集の後の再取得 | 未確認 | 戻ったときに分析のデータを取得し直す（`useBrowseData` は戻ると取得し直す） |
-| 元の分析の画面への復帰、フォーカスとスクロール | 分析の画面どうし（Drill-down）では確かめている | 業務画面から戻るときの履歴の記録（`fdParentKey`）の受け渡し |
+| 元の分析の画面への復帰、フォーカスとスクロール | 分析の画面どうし（Drill-down）では確かめている。業務画面からの復帰は未確認 | 業務画面から戻るときの履歴の記録（`fdParentKey`）の受け渡し |
 
-
-- Forms & Workflows は、この作業の開始の時点（origin/main 1882f2a）で main に統合されていない。検証画面の業務画面への移動（`page=work`）は、引き継いだ条件を示すだけの画面にし、Forms & Workflows の Patterns を再実装していない。統合の後に、登録・編集の流れとの接続を確かめる。
+- 検証画面の業務画面への移動（`page=work`）は、引き継いだ条件を示すだけの画面である。登録・編集の流れとの接続は、上の表の「接続に必要なこと」を Patterns Integration Review で確かめる。
 - Data Browsing は、作業中に v0.1 確定候補（5dcd39a、aa7e664）が main に統合された。統合の候補で取り込み、検品した。`useBrowseData` の変更（`canOperate` の追加、取得しない間のスコープの変更、アンマウントの後の応答の破棄、`setData` の `guard`）は追加と修正だけで、Data Analysis の利用箇所（`status`、`data`、`isCurrent`、`reload`、`error`）の動作は変わらない。Data Analysis の画面には、データに依存する変更の操作（一括操作、削除）がないため、`canOperate` は使っていない。Data Browsing の部品は変更していない。
 - 共有のファイル（`catalog.ts`、`package.json`、`build.sh`、`README.md`）は、統合の時に双方の変更を残す。
 
@@ -228,7 +281,7 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 | 時間別の区間 | ローカル時刻の時と時差で区切る（壁時計の時で区切る）。15 分ごとにローカル時刻を調べる | 1 時間ずつ足すと、30 分の夏時間の後の区間が 30 分ずれる |
 | 区間の状態 | 集計済みの時刻がない場合、今日の時間別の区間は「不明」、今日を含む日以上の区間は「途中」 | 現在の時刻を知らない部品が、当日のデータを確定とみなさない |
 | 同経過期間の上限 | 比較先の単位（月、四半期、年度）の終わりで切り詰め、公平な比較としない | 3/1〜3/30 と 2 月の比較で、3 月の日を比較先に含めない |
-| 権限のない明細 | 模擬のサーバーが除き、件数だけを返す。企業の詳細は `forbidden` を返し、画面は再試行を置かない | 指示書の「権限のない明細をクライアント側へ渡して非表示にする方式に依存しない」 |
+| 権限のない明細 | 模擬のサーバーが除き、件数だけを返す。企業の詳細は `forbidden` を返し、画面は再試行を置かない。Patterns Integration Review で、存在しない場合と同じに示す方式（`forbiddenDetail: "not-found"`）を検証用の操作で選べるようにした（既定は `forbidden`） | 指示書の「権限のない明細をクライアント側へ渡して非表示にする方式に依存しない」。`forbidden` の文（「集計には含まれています」）は企業の存在を明かすため、存在が機密の製品は不存在と同じに扱う（Permission States） |
 | 検証画面 | App Structure と Data Browsing の検証画面を変更せず、別の画面 `analysis-app` として作った | 並行している作業との共有のファイルの変更を避けた |
 | Node.js の単体の検品 | `preview/playwright.config.ts` に `tsconfig` を指定した | registry のファイルの `@/` の別名を Node.js で解決するため |
 
@@ -251,6 +304,7 @@ Registry の部品は、どの状態も保存しない。保存と復元の値�
 | 検証画面（Analytical） | 指標・一覧・内訳の一致、一覧だけの条件、Cross-filtering（選択元の維持、適用範囲、解除、キーボード）、まとめて適用とキャンセルと Chip、集計単位の調整、Drill-down と復帰（条件、選択、スクロール、フォーカス）、階層と Breadcrumb、比較期間の系列から進む、Sheet の前後の移動と素早い切り替え、明細の権限、権限のない詳細と存在しない詳細、条件の衝突、業務画面への条件の引き継ぎ |
 | 検証画面（Operational） | リアルタイムの更新でフォーカスとスクロールを保つ、新しいアラートの保留、異常の文字の表示、対応済みの後のフォーカス、部分的な失敗と再試行、自動の更新の停止 |
 | モバイル、WebKit | 1 列への再配置と横スクロールなし、詳細の全画面の Sheet、WebKit での描画と Cross-filtering |
+| Patterns Integration Review の指摘 | `data-analysis-logic.spec.ts` の「Integration review」：日数の異なる暦の比較期間、同じ曜日の比較の上限、経過時間 0、経過の対応付けの単位、符号の転換の表示、「その他」の作成、未知の条件の判定、URL の複数の地域、表示中の結果の条件の文。「Mock data consistency」：ワークスペースと画面の条件の積集合、件数を示さない応答の形、権限のない詳細の扱い。`data-analysis.spec.ts` の「Integration review」：検証画面での日数の異なる比較期間、URL の複数の地域、ワークスペースの外の地域（事業の状況、顧客維持の分析、企業の一覧）、表示中の結果の条件の文（集計単位、ワークスペースの地域、推移の領域）、`staleLabel` の折り返しと `aria-describedby`、件数を示さない設定の文、権限のない詳細を不存在と同じに示す設定、Tabs と Accordion の中のグラフ（警告なし、表示したときの幅、キーボード、画面の幅の変更） |
 | SSR と Hydration | `ssr-data-analysis.spec.ts`：window と document なしの描画、決定的な出力、Hydration の不一致なし、Hydration の後の操作、`"use client"` の境界 |
 
 `data-analysis-logic.spec.ts`、`data-analysis.spec.ts`、`ssr-data-analysis.spec.ts` は `npm run test:components` と `npm run test:patterns` に含まれる。
@@ -393,13 +447,14 @@ caffeinate -i -s scripts/verify/full-pair.sh /tmp/verify-$(git rev-parse --short
 
 | 項目 | 状況 |
 | --- | --- |
-| Forms & Workflows との接続 | PR #1 の統合の後に、横断の検品で確かめる |
-| Permission States との接続 | 横断の検品で確かめる |
-| 集計値から推測できる非公開の情報 | 一覧の件数を隠しても、集計の指標との差からわかる。横断の検品で扱いを決める |
-| 再取得中の条件の文の全文をタッチの操作で確かめる UI | 現在は 1 行に省略し、`title` で全文を示すだけ。横断の検品で扱う |
+| Forms & Workflows との接続 | PR #1 は main に統合済み（ebb0f24）。接続は Patterns Integration Review で確かめる（上の「Forms & Workflows との統合」。2026-11-28 の Data Analysis の修正では未確認） |
+| Permission States との接続 | 集計値、明細、全件の件数、Drill-down の権限の区別を「集計値と権限」に書いた。権限のない詳細を不存在と同じに示す方式を検証画面で選べるようにした（Patterns Integration Review） |
+| 集計値から推測できる非公開の情報 | 扱いと製品の対策を「集計値と権限」に書いた。Registry では対策を実装しない（製品の責務） |
+| 再取得中の条件の文の全文をタッチの操作で確かめる UI | 省略せずに折り返し、領域の `aria-describedby` で関連付けた（Patterns Integration Review）。Playwright の Chromium（320px と Pixel 7 の再現）で確かめた。WebKit、実機、読み上げでは未確認 |
 | System States との連携、接続の回復の後の再取得 | 横断の検品で確かめる |
-| worktree の間で共有する検品の排他ロック | `full-pair.sh` は、ほかの worktree の Playwright のプロセスを見て待つだけ。開始の時刻が重なると同時に始まりうる |
-| SSR の検品の Vite のサーバーの HMR のポート 24678 の競合 | 「Port 24678 is already in use」が記録される。検品は成功している |
+| worktree の間で共有する検品の排他ロック | 115f7c2 で、git の共通のディレクトリの `flock` を全 worktree で共有するロック（`scripts/verify/lock.pl`）を加えた。Data Analysis の修正の作業では、その動作を確かめていない |
+| SSR の検品の Vite のサーバーの HMR のポート 24678 の競合 | 115f7c2 で、SSR の検品の Vite を `ws: false` で作るようにした。Data Analysis の修正の作業では、全件の検品で記録が消えたかを確かめていない |
+| 同じ worktree での並行の編集と検品 | 2026-11-28 の Data Analysis の修正の検品で、同じ worktree の別の作業のファイルの変更が Vite の HMR で検品中のページに反映され、1 件（`data-analysis.spec.ts` の Cross-filtering の検品、desktop）が、押す対象のボタンが DOM から外れて 30 秒の制限時間を超えた。同じ検品を単独で 6 回実行して 6 回成功した。検品中は、対象の worktree のファイルを編集しない |
 | Vite のキャッシュの分離 | 開発サーバーと一部の SSR の検品は、キャッシュの置き場所を分けている。worktree の間の分離は未確認 |
 | Node.js LTS での検証 | Node.js 26.10.0 だけで確かめている |
 | 背景の要素の位置に依存する検品 | プレビューの上部のページの一覧が増えるたびに、背景の要素の位置が変わる。`overlays.spec.ts` の Sheet の確認は直した。モバイルの `edit mode` の確認は、行を画面の中に入れていない（Sheet が画面全体を覆うため） |
@@ -450,7 +505,7 @@ caffeinate -i -s scripts/verify/full-pair.sh /tmp/verify-$(git rev-parse --short
 | 中：区間の長さを日数で比べ、夏時間の日の 23・25 時間を同じ長さとみなす | 時刻がある場合は実際の時間で比べる |
 | 中：今日の途中までの値と、比較期間の確定した値を、公平な比較として示す | 分析の対象に今日を含み、`asOf` が今日の終わりより前か不明な場合は `fair: false`。検証画面は、模擬のデータを 2026/11/25 の終わりまで集計済みとして `asOf` を渡す。集計済みの範囲と、区間の単位が続いている区間（「途中の区間」）を分けた |
 | 中：不正なタイムゾーンで、比較の理由が「集計済みの時刻が必要」になる | 理由 `invalid-time-zone` と、変更の方法を示す。`useAnalysisQuery` は不正なタイムゾーンを `invalid` にする |
-| 中：一覧で件数を隠す設定でも、指標と一覧の件数の差から件数がわかる | 一覧の件数だけを隠す設定であることを操作の名前と説明に書き、集計の指標の公開の範囲は製品が決めることを資料に書いた（模擬のサーバーでは扱わない） |
+| 中：一覧で件数を隠す設定でも、指標と一覧の件数の差から件数がわかる | 一覧の件数だけを隠す設定であることを操作の名前と説明に書き、集計の指標の公開の範囲は製品が決めることを資料に書いた（模擬のサーバーでは扱わない）。Patterns Integration Review で「集計値と権限」を加えた |
 | 中：StrictMode で effect が 2 回実行されると、復元した一覧のページが 1 ページ目に戻る | 前回の条件と比べて、条件が変わった場合だけ 1 ページ目に戻す。並び順、ページ、理由の絞り込みの復元の検品を追加した |
 | 中：同じ曜日の前年同期が、分析の対象と重なる場合がある | 重なる場合は、さらに 7 日ずらす |
 | 低：`ComparisonSelect` が、製品の比較の方式と文脈を使わずに選択肢の可否を判断する | `basis` と `context` を渡せるようにし、比較の方式の名前と、公平でない理由を示す |
@@ -462,7 +517,7 @@ caffeinate -i -s scripts/verify/full-pair.sh /tmp/verify-$(git rev-parse --short
 | 低：任意の比較期間が URL に残らない | `cfrom`、`cto` で残す。不正な値は使わない |
 | 低：320px で、表の続きがあることがわからない | 検証画面と資料のページの表を `TableScrollArea` で囲み、続きがある方向の端に影を示す |
 | 低：目標の Progress の読み上げ | `aria-valuetext` が、表示の範囲に収める前の実際の値の文（「月の上限 1.5% まで、あと 0.9pt」）であることを確かめた。変更していない |
-| 低：再取得中の条件の文が、狭い画面で省略される | 1 行に収め、省略した場合は `title` で全文を示す。タッチの操作では全文を確かめにくいため、未検証の事項に記録した |
+| 低：再取得中の条件の文が、狭い画面で省略される | 1 行に収め、省略した場合は `title` で全文を示す。タッチの操作では全文を確かめにくいため、未検証の事項に記録した。Patterns Integration Review で、省略せずに折り返す方式に変えた |
 | 検品の弱点：複数の月の位置合わせ、一覧の状態の復元、資料の例、固定の期待値が不足 | 上の検品を追加し、期待値を固定の値にした。period-comparison.md の位置合わせの説明を更新した |
 
 ### 確認のレビュー（上の指摘への対処の後）
@@ -473,7 +528,7 @@ caffeinate -i -s scripts/verify/full-pair.sh /tmp/verify-$(git rev-parse --short
 | --- | --- |
 | 高：顧客維持の分析が、比較の `fair: false` を無視して増減を示す（過去 12 か月と 31 日間の任意の比較期間で「+1,385.7%」）。見出しが表示中のデータの条件でない | 事業の状況と同じく、公平でない比較は理由を示し、見出しを取得の結果の比較の条件で示す。検品を追加した |
 | 中：「期間の比較」の表で、再取得中に新しい比較期間の見出しが前の値に付く | 取得の結果に比較の条件を含め、見出しと公平さをその条件で示す。表示中の結果の比較期間を `staleLabel` で示す。検品を追加した |
-| 中：`alignBuckets` の暦の位置のキーが、週の始まりが月曜以外の週、期の途中から始まる四半期と会計年度で重複し、RangeError になる | `Bucket` に `granularity` と `unitStart`（区間の単位の本来の開始日）を追加し、キーを単位の開始日の位置で求める（表示の名前から単位を推測しない）。検品を追加した |
+| 中：`alignBuckets` の暦の位置のキーが、週の始まりが月曜以外の週、期の途中から始まる四半期と会計年度で重複し、RangeError になる | `Bucket` に `granularity` と `unitStart`（区間の単位の本来の開始日）を追加し、キーを単位の開始日の位置で求める（表示の名前から単位を推測しない）。検品を追加した。経過（`by: "elapsed"`）の対応付けは、この時点でも表示の名前（`fullLabel`）から単位を推測していた。Patterns Integration Review で `granularity` による判定に直した |
 | 中：未知の相対期間の id で `resolvePeriod` が例外になる。未知の比較の種類を ready として扱う | `resolvePeriod` は `unknown-period`、`comparisonRange` は `unknown-mode` を返す。`useAnalysisQuery` は、復元した値は既定に戻して知らせ、制御された値は `invalid`（`key: null`）にする。検品を追加した |
 | 中：集計済みの時刻より後の日を含む期間（昨日の途中までの集計）と、`context` を省略した場合に、公平な比較とする | `asOf` とタイムゾーンがある場合は、対象の終わり（終了日の翌日の 0 時）が `asOf` より後なら `fair: false`。ない場合は、今日を含む期間（`context.today` がなければ期間の `inProgress`）を `fair: false` にする。資料のページの比較にも文脈を渡した。検品を追加した |
 | 低：今日より後の日を含む任意の比較期間を受け付ける | `context.today` がある場合は `future` にする |
@@ -490,7 +545,8 @@ caffeinate -i -s scripts/verify/full-pair.sh /tmp/verify-$(git rev-parse --short
 | VoiceOver、NVDA | 未検証。比較値の読み上げの文、`role="status"`、`role="alert"`、`aria-busy` を属性の検品だけで確かめている |
 | Next.js での導入 | 未検証。`"use client"` の境界は規則で確かめている |
 | 実際の API、分析用のデータベース | 模擬のサーバーだけで確かめている |
-| Forms & Workflows との接続 | main に統合された後に確かめる |
+| Forms & Workflows との接続 | main に統合済み（ebb0f24）。接続は Patterns Integration Review で確かめる（Data Analysis の修正の作業では未確認） |
+| 時間別の区間の夏時間をまたぐ比較の位置合わせ | 時間別の区間を夏時間の切り替えの日をまたいで比べる場合は、`alignBuckets` の `by: "calendar"`（ローカル時刻の時と、その日の何回目か）を使う。`by: "elapsed"` では切り替えの後の区間が 1 時間ずれて対応する。夏時間の終了日の 2 回目の 1 時は、対応する区間のない行になる（検品あり）。長さの異なる区間（週の途中から始まる最初の週）は、対応付けても `comparable: false` にする（検品あり）。製品の実際の集計の基盤との一致は未検証 |
 | 1970 年より前と、時差が 15 分の倍数でないタイムゾーン | 保証しない（現在の IANA のタイムゾーンは対象の中） |
-| 再取得中の条件の文（狭い画面） | 1 行に収めて省略し、`title` で全文を示す。タッチの操作で全文を確かめる方法は未検証 |
-| 集計の指標から推測できる件数 | 一覧の件数を隠しても、集計の指標との差からわかる。集計値の公開の範囲は製品の判断（模擬のサーバーでは扱わない） |
+| 再取得中の条件の文（狭い画面） | 省略せずに折り返し、領域の `aria-describedby` で関連付けた。Playwright の 320px と Pixel 7 で、文が切れず `title` に頼らないことを確かめた。実機と読み上げは未検証 |
+| 集計の指標から推測できる件数 | 一覧の件数を隠しても、集計の指標との差からわかる。扱いと製品の対策を「集計値と権限」に書いた。模擬のサーバーは集計値の公開の範囲を扱わない |

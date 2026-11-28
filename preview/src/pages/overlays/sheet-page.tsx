@@ -247,7 +247,7 @@ function CustomerList() {
                   キャンセル
                 </Button>
                 <Button type="submit" data-testid="sheet-save">
-                  変更を保存
+                  保存する
                 </Button>
               </SheetFooter>
             </form>
