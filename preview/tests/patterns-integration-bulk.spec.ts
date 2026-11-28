@@ -34,6 +34,8 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
     await expect.poll(async () => (await requests(page, "bulk")).map((r) => r.payload)).toEqual([["c01", "c02"]])
     await release(page, { kind: "bulk" })
     await expect(page.locator("[data-slot=toast]").filter({ hasText: "2件の顧客を停止にしました" })).toBeVisible()
+    // 進行状況の表示が消えた後も、フォーカスを <body> に落とさない（最初の行へ移す）
+    await expect(page.locator("[data-slot=data-table-row-trigger]").first()).toBeFocused()
     await expect(row(page, "株式会社アオバ商事")).toContainText("停止中")
     await expect(row(page, "株式会社イズミ製作所")).toContainText("停止中")
   })
@@ -58,6 +60,8 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
     await dialog.getByRole("button", { name: "3件を停止にする" }).click()
     const alert = result(page)
     await expect(alert).toHaveAttribute("data-outcome", "warning")
+    // 失敗を含む結果は、結果の表示へフォーカスを移す
+    await expect(page.getByTestId("bulk-result")).toBeFocused()
     await expect(alert).toContainText("3件のうち、1件の停止が完了しました")
     await expect(alert.locator("dl")).toHaveText(/完了1件.*失敗1件.*結果が不明1件/)
     await expect(alert.locator("[data-slot=bulk-result-failed]")).toContainText("株式会社イズミ製作所：ほかの処理と重なったため、変更できませんでした")
@@ -148,7 +152,7 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
   test("S16 an import whose response lacks some counts is not shown as success and is reconciled by 状態を確認", async ({ page }) => {
     await openApp(page, { route: "page=import" })
     await setConfig(page, { importMode: "incomplete" })
-    await page.getByTestId("import-file").setInputFiles({
+    await page.getByTestId("import-file").locator("input[type=file]").setInputFiles({
       name: "customers.csv",
       mimeType: "text/csv",
       buffer: Buffer.from("名前,メールアドレス,プラン\n株式会社ヤマブキ,yamabuki@example.com,light\n株式会社ヨモギ,yomogi-example.com,standard\n株式会社ラベンダー,lavender@example.com,light\n"),
@@ -167,7 +171,7 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
 
   test("S16 a complete partial response is shown as partial, not as success", async ({ page }) => {
     await openApp(page, { route: "page=import" })
-    await page.getByTestId("import-file").setInputFiles({
+    await page.getByTestId("import-file").locator("input[type=file]").setInputFiles({
       name: "customers.csv",
       mimeType: "text/csv",
       buffer: Buffer.from("名前,メールアドレス,プラン\n株式会社ヤマブキ,yamabuki@example.com,light\n株式会社ヨモギ,yomogi-example.com,standard\n"),

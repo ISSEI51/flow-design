@@ -209,4 +209,17 @@ test.describe("Patterns integration: browse and edit", () => {
     await expect(editForm(page).getByLabel("社内のメモ")).toHaveValue("失敗するメモ")
     expect(await requests(page, "save")).toHaveLength(1)
   })
+
+  test("S09 choosing 編集を続ける when opening a notification keeps it unread", async ({ page }) => {
+    await openApp(page, { route: "page=customer-edit&id=c02&from=detail" })
+    await makeDirty(page, "通知を開く前の入力")
+    await expect(page.getByTestId("notifications-trigger")).toHaveAccessibleName("お知らせ、未読 2 件")
+    await page.getByTestId("notifications-trigger").click()
+    await page.getByTestId("notifications-center").locator("[data-row-focus]").filter({ hasText: "株式会社アオバ商事の契約が更新されました" }).click()
+    await unsavedDialog(page).getByRole("button", { name: "編集を続ける" }).click()
+    await expect(unsavedDialog(page)).toBeHidden()
+    await expect(page).toHaveURL(/page=customer-edit/)
+    await expect(page.getByTestId("notifications-trigger")).toHaveAccessibleName("お知らせ、未読 2 件")
+    expect(await requests(page, "read")).toHaveLength(0)
+  })
 })

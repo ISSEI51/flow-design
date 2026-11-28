@@ -125,7 +125,7 @@ test.describe("Patterns integration: system states, settings and notifications",
     await expect(contractRow).toContainText("保存できたかを確認できませんでした。")
     await expect(contract).toHaveAttribute("aria-readonly", "true")
     await setConfig(page, { settingsMode: "success" })
-    await contractRow.getByRole("button", { name: "確認する" }).click()
+    await contractRow.getByRole("button", { name: "保存されたかを確認" }).click()
     await expect(contract).not.toBeChecked()
     await expect(contract).not.toHaveAttribute("aria-readonly", "true")
   })

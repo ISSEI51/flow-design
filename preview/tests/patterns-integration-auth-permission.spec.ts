@@ -76,6 +76,9 @@ test.describe("Patterns integration: authentication, authorization and scope", (
     await listReady(page)
     await expect(page.getByTestId("customers-export")).toHaveAttribute("aria-disabled", "true")
     await expect(page.getByTestId("customers-export")).toHaveAccessibleDescription("この操作には「顧客のエクスポート」の権限が必要です")
+    // 理由は支援技術だけでなく、見える文でも示す。取り込みの入口（編集の権限が必要）は置かない
+    await expect(page.getByTestId("list-restrictions")).toContainText("この操作には「顧客のエクスポート」の権限が必要です")
+    await expect(page.getByRole("link", { name: "CSV から取り込む" })).toHaveCount(0)
     await page.getByTestId("customers-export").click({ force: true })
     await expect(page.getByTestId("export-dialog")).toHaveCount(0)
 
