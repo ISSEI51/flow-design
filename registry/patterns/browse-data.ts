@@ -94,7 +94,9 @@ function useBrowseData<Q, T>({
           refreshFailed: false,
           fetchedAt: initial.fetchedAt ?? null,
           requestKey: initial.key,
-          requestReload: 0,
+          // 取得し直す場合（revalidateInitialData、または条件が異なる）は、最初の描画から再取得中として返す。
+          // 効果が要求を送るまでの 1 回の commit でも、保持していたデータに対して変更の操作（canOperate）を許可しない。
+          requestReload: revalidateInitialData || initial.key !== key ? -1 : 0,
         }
       : {
           data: undefined,

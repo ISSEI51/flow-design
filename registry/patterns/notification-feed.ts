@@ -447,7 +447,8 @@ function useNotificationFeed<T extends NotificationLike>({
       // 重複した ID は 1 つにする。確認中の通知は、取得し直して確定するまで操作しない
       const verifying = refs.current.verifyingIds
       const list = [...new Set(typeof ids === "string" ? [ids] : ids)].filter((id) => !verifying.has(id))
-      if (list.length === 0 || !refs.current.enabled) return
+      // 一覧が現在の条件の取得の結果でない間（取得中、取得の失敗、スコープの変更の直後）は送らない（canOperate と同じ条件）
+      if (list.length === 0 || !refs.current.enabled || !refs.current.data.isCurrent) return
       run("read", list, read, (signal) => refs.current.updateRead(list, read, { signal }), null, null)
     },
     [run]
