@@ -76,7 +76,7 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
     const dialog = await pauseSelected(page, ["株式会社アオバ商事", "株式会社ウミネコ運輸"])
     await dialog.getByRole("button", { name: "2件を停止にする" }).click()
     await expect(result(page)).toContainText("結果が不明1件")
-    await result(page).getByRole("button", { name: "最新の状態を確認" }).click()
+    await result(page).getByRole("button", { name: "状態を確認" }).click()
     await expect(page.getByTestId("bulk-checked")).toHaveText("状態を確認しました：1件は停止になっていました")
     // 照会の結果を一括操作の結果に反映した（結果が不明な行がなくなり、すべて完了した結果は一覧の上に残さない）
     await expect(result(page)).toHaveCount(0)
@@ -95,7 +95,7 @@ test.describe("Patterns integration: bulk actions, export and import", () => {
     await expect(result(page)).toContainText("結果が不明1件")
     // 照会の前には、結果が不明な行を再実行するボタンを示さない
     await expect(page.getByRole("button", { name: /再試行/ })).toHaveCount(0)
-    await result(page).getByRole("button", { name: "最新の状態を確認" }).click()
+    await result(page).getByRole("button", { name: "状態を確認" }).click()
     await expect(page.getByTestId("bulk-checked")).toContainText("株式会社ウミネコ運輸は変更されていませんでした")
     await expect(result(page)).toContainText(/失敗\s*1件/)
     await result(page).getByRole("button", { name: "失敗した 1件を再試行" }).click()

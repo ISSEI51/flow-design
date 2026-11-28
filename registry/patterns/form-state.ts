@@ -228,7 +228,7 @@ export type AutofillToken<V extends FormValues> = {
 
 type AsyncJob = { key: string; timer: number; generation: number; controller?: AbortController; deadline?: number }
 
-const UNKNOWN_MESSAGE = "保存されたかを確かめられていません。状態を確かめてから、必要な場合だけもう一度保存してください。"
+const UNKNOWN_MESSAGE = "保存されたかを確かめられていません。「保存されたかを確認」で確かめてから、必要な場合だけもう一度保存してください。"
 
 export function useFormState<V extends FormValues>({
   initialValues,

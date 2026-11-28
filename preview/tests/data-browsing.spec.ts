@@ -1131,7 +1131,7 @@ test.describe("v0.1: bulk result integrity and fixed targets", () => {
     await expect(integrity).toContainText("変更された可能性があります")
     // 結果が返らなかった行は、結果が不明な行の説明の中で 1 回だけ示す
     await expect(result.locator("[data-slot=bulk-result-unknown]")).toContainText("うち 1件は、結果が返されませんでした")
-    await expect(result.getByText("最新の状態を確認してから、必要な行だけをもう一度操作してください。")).toHaveCount(1)
+    await expect(result.getByText("「状態を確認」で確かめてから、必要な行だけをもう一度操作してください。")).toHaveCount(1)
     // 完了は 2 件（重複と対象外を数えない）、返らなかった 1 件は結果が不明
     await expect(result).toContainText("完了2件")
     await expect(result).toContainText("結果が不明1件")
@@ -1347,8 +1347,9 @@ test.describe("Integration review: list restore and scope", () => {
     await openApp(page)
     await selectStatus(page, "契約中")
     await expect(page).toHaveURL(/status=active/)
+    // URL は条件を適用した時点で変わる。件数は取得が終わってから変わるため、変わるのを待ってから読む
+    await expect(count(page)).not.toHaveText(`${fmt(customers.length)}件`)
     const filtered = (await count(page).textContent())!
-    expect(filtered).not.toBe(`${fmt(customers.length)}件`)
     await sidebarLink(page, "顧客")
     // 条件を持ち越さない新しい一覧（URL と表示の条件が一致する）
     await expect(page).not.toHaveURL(/status=/)

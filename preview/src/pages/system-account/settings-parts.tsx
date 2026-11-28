@@ -314,7 +314,7 @@ export function ActionStatus({ state, onVerify, testId }: { state: ActionState; 
       </p>
       {state.kind === "unknown" && onVerify && (
         <Button variant="outline" size="sm" onClick={onVerify}>
-          確認する
+          状態を確認
         </Button>
       )}
     </div>

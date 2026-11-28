@@ -1051,7 +1051,7 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await area(page).getByTestId("set-google").click()
     await expect(statusText(page, "set-google-status")).toHaveText("接続の解除できたかを確認できませんでした。")
     await expect(area(page).getByTestId("set-google")).toHaveCount(0)
-    await area(page).getByTestId("set-google-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-google-status").getByRole("button", { name: "状態を確認" }).click()
     await expect(statusText(page, "set-google-status")).toHaveText("接続していません（確認しました）")
     // パスワードの変更
     await server(page, (s) => (s.outcomeQueue.action = ["unknown"]))
@@ -1061,7 +1061,7 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await page.getByTestId("set-password-submit").click()
     await expect(page.getByTestId("set-password-dialog")).toBeHidden()
     await expect(statusText(page, "set-password-status")).toHaveText("パスワードを変更できたかを確認できませんでした。")
-    await area(page).getByTestId("set-password-status").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-password-status").getByRole("button", { name: "状態を確認" }).click()
     await expect(statusText(page, "set-password-status")).toHaveText("パスワードは変更されていました。")
     // アカウントの削除の予約
     await openCategory(page, "profile", "プロフィール")
@@ -1071,7 +1071,7 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await page.getByTestId("set-account-delete-confirm").click()
     await expect(statusText(page, "set-account-delete-result")).toHaveText("削除を予約できたかを確認できませんでした。")
     await expect(area(page).getByTestId("set-account-delete-open")).toHaveCount(0)
-    await area(page).getByTestId("set-account-delete-result").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-account-delete-result").getByRole("button", { name: "状態を確認" }).click()
     await expect(statusText(page, "set-account-delete-result")).toHaveText("削除は予約されています。")
     await expect(area(page).getByTestId("set-account-delete-status")).toHaveText("2026/12/26 に削除されます。それまでは取り消せます。")
     // ワークスペースの削除の予約
@@ -1081,7 +1081,7 @@ test.describe("Settings: search, reset, destructive actions", () => {
     await page.getByTestId("set-ws-delete-input").fill("本社営業部")
     await page.getByTestId("set-ws-delete-confirm").click()
     await expect(statusText(page, "set-ws-delete-result")).toHaveText("削除を予約できたかを確認できませんでした。")
-    await area(page).getByTestId("set-ws-delete-result").getByRole("button", { name: "確認する" }).click()
+    await area(page).getByTestId("set-ws-delete-result").getByRole("button", { name: "状態を確認" }).click()
     await expect(statusText(page, "set-ws-delete-result")).toHaveText("削除は予約されています。")
   })
 
