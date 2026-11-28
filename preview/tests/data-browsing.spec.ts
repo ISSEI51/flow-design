@@ -33,6 +33,8 @@ const heldCount = (page: Page, filter: HeldFilter = {}) =>
     filter
   )
 const release = (page: Page, filter: HeldFilter = {}) => page.evaluate((f) => window.__fdBrowseServer!.release(f), filter)
+// 保留した応答を、失敗として返す（要求の時点の failNext では、StrictMode の 2 回目の要求を失敗させられないため）
+const releaseFailed = (page: Page, filter: HeldFilter = {}) => page.evaluate((f) => window.__fdBrowseServer!.release(f, { fail: true }), filter)
 
 const list = (page: Page) => page.getByTestId("app-list")
 const rows = (page: Page) => list(page).locator("tbody tr[data-row-id]")
@@ -65,6 +67,20 @@ async function selectStatus(page: Page, label: string) {
 }
 
 const rowCheckbox = (page: Page, i: number) => rows(page).nth(i).getByRole("checkbox")
+
+// 「起きないこと」の確認に使う。固定の時間を待たず、イベントの処理と描画（React の Scheduler の MessageChannel のタスク、
+// 効果、次の 2 フレーム）が終わった後の状態を見る。
+async function settle(page: Page) {
+  for (let i = 0; i < 2; i++)
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const c = new MessageChannel()
+          c.port1.onmessage = () => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          c.port2.postMessage(null)
+        })
+    )
+}
 
 // ------------------------------------------------------------------ 資料のページ
 test.describe("Data Browsing pages", { tag: "@webkit" }, () => {
@@ -114,12 +130,15 @@ test.describe("Search & Filter", () => {
 
   test("IME: no search while composing; the committed text is searched", async ({ page, browserName }) => {
     test.skip(browserName !== "chromium", "CDP（Chromium のみ）で IME を再現するため")
+    // 変換中に検索の遅延（300ms）が過ぎても要求しないことを、時計を進めて確かめる（固定の時間を待たない）
+    await page.clock.install()
     await openApp(page)
     const before = (await requests(page, "list")).length
     await search(page).focus()
     const cdp = await page.context().newCDPSession(page)
     await cdp.send("Input.imeSetComposition", { text: "あおば", selectionStart: 3, selectionEnd: 3 })
-    await page.waitForTimeout(600)
+    await page.clock.runFor(600)
+    await settle(page)
     expect((await requests(page, "list")).length).toBe(before)
     await cdp.send("Input.insertText", { text: "青葉" })
     await expect.poll(async () => (await requests(page, "list")).map((r) => JSON.parse(r.key).search)).toContain("青葉")
@@ -753,6 +772,8 @@ test.describe("Data States", () => {
   })
 
   test("a load under 200ms never shows the skeleton", async ({ page }) => {
+    // 応答（100ms）と表示の開始（200ms）の順序を、時計を進めて確かめる（固定の時間を待たない）
+    await page.clock.install()
     await page.goto("/#/data-states")
     const demo = page.getByTestId("ds-states")
     await expect(demo.getByTestId("ds-state-name")).toContainText("取得成功")
@@ -764,8 +785,9 @@ test.describe("Data States", () => {
       }).observe(el, { attributes: true })
     })
     await demo.getByRole("radio", { name: "短い（100ms）" }).check()
+    await page.clock.runFor(300)
+    await settle(page)
     await expect(demo.getByTestId("ds-state-name")).toContainText("取得成功")
-    await page.waitForTimeout(300)
     expect(await page.evaluate(() => (window as unknown as { __revealed: boolean }).__revealed)).toBe(false)
   })
 
@@ -1262,5 +1284,207 @@ test.describe("v0.1: re-review follow-ups", () => {
     await expect(result.getByRole("button", { name: "最新の状態を確認" })).toHaveCount(0)
     await expect(result.getByRole("button", { name: "失敗した 2件を再試行" })).toBeVisible()
     await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toContainText("2件を選択中")
+  })
+})
+
+// ------------------------------------------------------------------ 横断の検品（Patterns Integration Review）の指摘の検品
+// Sidebar の項目を押す。モバイルは、Header のボタンで Sidebar（Sheet）を開いてから押す。
+async function sidebarLink(page: Page, name: string) {
+  if (page.viewportSize()!.width < 768) await page.locator("[data-slot=sidebar-trigger]").first().click()
+  await page.locator("[data-slot=sidebar]").getByRole("link", { name, exact: true }).click()
+}
+// 行の操作のメニューから、詳細ページを開く
+async function openDetailPage(page: Page, row: Locator) {
+  await row.getByRole("button", { name: /の操作$/ }).click()
+  await page.getByRole("menuitem", { name: "詳細ページを開く" }).click()
+  await expect(page.getByTestId("company-page")).toBeVisible()
+}
+
+test.describe("Integration review: list restore and scope", () => {
+  test("a record of another workspace is not restored: switch the workspace, leave, and go back", async ({ page }) => {
+    await openApp(page)
+    await openDetailPage(page, rows(page).nth(2))
+    await page.goBack()
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", "C-00001")
+    // 同じ履歴の項目のまま、ワークスペースを切り替える（履歴の項目のキーは変わらない）
+    await switchWorkspace(page, "九州支店")
+    await expect(rows(page).first()).toHaveAttribute("data-row-id", /^K-/)
+    await expect(page).toHaveURL(/ws=kyushu/)
+    await sidebarLink(page, "ホーム")
+    await expect(page).toHaveURL(/page=home/)
+    // 戻った後の一覧の取得を保留し、さらに失敗させる。保留の間も、失敗の後も、本社（HQ）の行と件数を表示しない
+    await hold(page, "list")
+    await page.goBack()
+    await expect(page).toHaveURL(/page=customers&ws=kyushu/)
+    await expect.poll(() => heldCount(page, { kind: "list", workspace: "kyushu" })).toBeGreaterThan(0)
+    await expect(list(page).locator("tbody tr[data-row-id^='C-']")).toHaveCount(0)
+    await expect(count(page)).toHaveText("読み込み中")
+    await hold(page, "list", false)
+    expect(await releaseFailed(page, { kind: "list" })).toBeGreaterThan(0)
+    await expect(list(page).getByText("顧客の一覧を取得できませんでした")).toBeVisible()
+    await expect(list(page).locator("tbody tr[data-row-id^='C-']")).toHaveCount(0)
+    await expect(count(page)).toHaveText("件数を取得できませんでした")
+  })
+
+  test("the record keeps the fetch time and the selection (IDs only) of the same workspace", async ({ page }) => {
+    await openApp(page)
+    await rowCheckbox(page, 1).click()
+    await rowCheckbox(page, 3).click()
+    await openDetailPage(page, rows(page).nth(2))
+    // 戻った後の同じ条件の再取得に失敗させる。記録した取得の時刻（HH:MM）を示し、「前回」としない
+    await hold(page, "list")
+    await page.goBack()
+    await expect.poll(() => heldCount(page, { kind: "list" })).toBeGreaterThan(0)
+    await hold(page, "list", false)
+    expect(await releaseFailed(page, { kind: "list" })).toBeGreaterThan(0)
+    await expect(page.getByTestId("app-list-refresh-error")).toContainText(/\d{2}:\d{2}の時点の内容を表示しています/)
+    await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toContainText("2件を選択中")
+    await expect(rowCheckbox(page, 1)).toHaveAttribute("aria-checked", "true")
+    await expect(rowCheckbox(page, 3)).toHaveAttribute("aria-checked", "true")
+  })
+
+  test("the sidebar opens the list fresh even when the list is shown; back restores each entry separately", async ({ page }) => {
+    await openApp(page)
+    await selectStatus(page, "契約中")
+    await expect(page).toHaveURL(/status=active/)
+    const filtered = (await count(page).textContent())!
+    expect(filtered).not.toBe(`${fmt(customers.length)}件`)
+    await sidebarLink(page, "顧客")
+    // 条件を持ち越さない新しい一覧（URL と表示の条件が一致する）
+    await expect(page).not.toHaveURL(/status=/)
+    await expect(count(page)).toHaveText(`${fmt(customers.length)}件`)
+    await expect(page.getByRole("heading", { level: 1 })).toBeFocused()
+    // 新しい一覧で 2 ページ目から詳細を開き、戻る：この一覧の位置を復元する（前の一覧の記録を上書きしない）
+    await pager(page).getByRole("button", { name: "次へ" }).click()
+    await expect(page).toHaveURL(/p=2/)
+    await expect(pager(page).locator("[aria-current=page]")).toHaveText("2")
+    const name = (await rows(page).nth(1).locator("[data-slot=data-table-row-trigger]").textContent())!.trim()
+    await openDetailPage(page, rows(page).nth(1))
+    await page.goBack()
+    await expect(pager(page).locator("[aria-current=page]")).toHaveText("2")
+    await expect(page).not.toHaveURL(/status=/)
+    await expect(page.getByRole("button", { name, exact: true })).toBeFocused()
+    // さらに戻る：最初の一覧（契約中の条件）
+    await page.goBack()
+    await expect(page).toHaveURL(/status=active/)
+    await expect(count(page)).toHaveText(filtered)
+  })
+
+  test("restoring never takes the focus or the scroll from a search box the user started using", async ({ page }) => {
+    await openApp(page)
+    await main(page).evaluate((el) => el.scrollTo({ top: 500 }))
+    await expect.poll(() => main(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(400)
+    const scrolled = await main(page).evaluate((el) => el.scrollTop)
+    await openDetailPage(page, rows(page).nth(10))
+    // 戻った後の取得し直しを保留する。保持していたデータを表示している間に、スクロールの位置だけを先に戻す
+    await hold(page, "list")
+    await page.goBack()
+    await expect(rows(page).first()).toBeVisible()
+    await expect.poll(() => heldCount(page, { kind: "list" })).toBeGreaterThan(0)
+    await expect.poll(() => main(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(scrolled - 80)
+    // 取得の途中で、利用者が検索欄を押す（スクロールの位置も変わる）。その後に同じ条件の結果が届いても、位置とフォーカスを戻さない
+    await search(page).click()
+    await expect(search(page)).toBeFocused()
+    const userScroll = await main(page).evaluate((el) => el.scrollTop)
+    await hold(page, "list", false)
+    expect(await release(page, { kind: "list" })).toBeGreaterThan(0)
+    await expect(list(page).locator("table")).not.toHaveAttribute("aria-busy", "true")
+    await settle(page)
+    await expect(search(page)).toBeFocused()
+    expect(await main(page).evaluate((el) => el.scrollTop)).toBe(userScroll)
+    await page.keyboard.type("Northwind")
+    await expect(search(page)).toHaveValue("Northwind")
+    await expect(search(page)).toBeFocused()
+  })
+})
+
+test.describe("Integration review: count row layout", { tag: "@webkit" }, () => {
+  test("selecting rows, selecting the page and a refresh failure do not change the row height or move the table", async ({ page, isMobile }) => {
+    test.skip(isMobile, "一括操作のバーを件数の行に置く幅で確かめる（モバイルは画面の下）")
+    for (const width of [1024, 1100, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 900 })
+      // 幅ごとに読み込み直す（前の幅の選択と失敗の表示を残さない）
+      await page.goto("about:blank")
+      await openApp(page)
+      const statusRow = page.getByTestId("app-list-status-row")
+      const table = list(page).locator("[data-slot=table-scroll-area]")
+      const base = { row: (await settledBox(statusRow)).height, top: (await settledBox(table)).y }
+      const same = async (label: string) => {
+        expect((await settledBox(statusRow)).height, `${label} at ${width}`).toBe(base.row)
+        expect((await settledBox(table)).y, `${label} at ${width}`).toBe(base.top)
+      }
+      await rowCheckbox(page, 0).click()
+      await expect(list(page).locator("[data-slot=data-table-selection-bar]")).toContainText("1件を選択中")
+      await same("one row selected")
+      await list(page).locator("thead").getByRole("checkbox").click()
+      await expect(list(page).getByRole("button", { name: /件をすべて選択$/ })).toBeVisible()
+      await same("page selected")
+      // 表示形式の切り替えは、データ領域の直上・右端のまま
+      const sw = await box(page.getByRole("radiogroup", { name: "表示形式" }))
+      const area = await box(table)
+      expect(area.y - (sw.y + sw.height)).toBeGreaterThanOrEqual(0)
+      expect(area.y - (sw.y + sw.height)).toBeLessThan(40)
+      expect(Math.abs(sw.x + sw.width - (area.x + area.width))).toBeLessThan(2)
+      // 同じ条件の再取得の失敗：警告を一覧の上に示す（その分は下がる）。件数の行の高さは変わらない
+      await list(page).locator("thead").getByRole("checkbox").click()
+      await rowCheckbox(page, 0).click()
+      await server(page, (s) => (s.failNext.list = true))
+      await page.getByTestId("browsing-refetch").click()
+      await expect(page.getByTestId("app-list-refresh-error")).toBeVisible()
+      await expect(list(page).locator("[data-slot=data-table-selection-disabled]")).toBeVisible()
+      expect((await settledBox(statusRow)).height, `refresh failure at ${width}`).toBe(base.row)
+    }
+  })
+})
+
+test.describe("Integration review: browse data", () => {
+  test("reload() is refreshing from the render that requested it (never ready with operations allowed)", async ({ page }) => {
+    await page.goto("/#/data-states")
+    const demo = page.getByTestId("ds-states")
+    await expect(demo.getByTestId("ds-state-name")).toContainText("取得成功")
+    await page.evaluate(() => (window.__fdBrowseCommits = []))
+    await demo.getByRole("button", { name: "再取得する" }).click()
+    await expect(demo.getByTestId("ds-state-name")).toContainText("再取得中")
+    await expect(demo.getByTestId("ds-state-name")).toContainText("取得成功")
+    const commits = await page.evaluate(() => window.__fdBrowseCommits!)
+    // 押した後の最初の commit から refreshing（操作を受け付けない）。最後に ready に戻る
+    expect(commits[0]).toEqual(expect.objectContaining({ status: "refreshing", canOperate: false }))
+    const firstReady = commits.findIndex((c) => c.status === "ready")
+    expect(firstReady).toBeGreaterThan(0)
+    expect(commits.slice(0, firstReady).every((c) => !c.canOperate)).toBe(true)
+    expect(commits.at(-1)).toEqual(expect.objectContaining({ status: "ready", canOperate: true }))
+  })
+
+  test("discardOnError: losing permission on a same-condition refresh discards the previous rows", async ({ page }) => {
+    await page.goto("/#/data-states")
+    const demo = page.getByTestId("ds-states")
+    await demo.getByRole("radio", { name: "再取得で権限を失う" }).check()
+    await expect(demo.getByTestId("ds-state-name")).toContainText("取得成功")
+    await expect(demo.locator("tbody tr[data-row-id]")).toHaveCount(6)
+    await demo.getByRole("button", { name: "再取得する" }).click()
+    await expect(demo.getByTestId("ds-state-name")).toContainText("取得失敗")
+    await expect(demo.getByText("この一覧を表示する権限がありません")).toBeVisible()
+    await expect(demo.locator("tbody tr[data-row-id]")).toHaveCount(0)
+    await expect(demo.getByTestId("ds-refresh-error")).toHaveCount(0)
+    // 比較：通常の通信の失敗では、前の内容を残す（refreshFailed）
+    await demo.getByRole("radio", { name: "再取得に失敗" }).check()
+    await expect(demo.getByTestId("ds-state-name")).toContainText("取得成功")
+    await demo.getByRole("button", { name: "再取得する" }).click()
+    await expect(demo.getByTestId("ds-refresh-error")).toBeVisible()
+    await expect(demo.locator("tbody tr[data-row-id]")).toHaveCount(6)
+  })
+
+  test("kanban and calendar show a same-condition refresh failure with the time of the shown data", async ({ page }) => {
+    await openApp(page)
+    for (const [name, id] of [["カンバン", "app-list-board"], ["カレンダー", "app-list-calendar"]] as const) {
+      await page.getByRole("radiogroup", { name: "表示形式" }).getByRole("radio", { name }).click()
+      const view = page.getByTestId(id)
+      await expect(view).not.toHaveAttribute("aria-busy", "true")
+      await server(page, (s) => (s.failNext.list = true))
+      await page.getByTestId("browsing-refetch").click()
+      await expect(page.getByTestId(`${id}-refresh-error`)).toContainText(/\d{2}:\d{2}の時点の内容を表示しています/)
+      await page.getByTestId(`${id}-refresh-error`).getByRole("button", { name: "再試行" }).click()
+      await expect(page.getByTestId(`${id}-refresh-error`)).toHaveCount(0)
+    }
   })
 })

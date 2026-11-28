@@ -203,7 +203,8 @@ v0.1 の最終調整で、次の仕様を正式に採用した。Pagination、Da
 | 対象 | 変更 |
 | --- | --- |
 | `bulk-selection.ts` | 追加：`reconcileBulkResults`、`isBulkFullySucceeded`、型 `BulkIntegrity`（`missing`、`duplicates`、`unexpected`、`unexpectedIds`、`invalid`、`confirmedCount`、`expectedCount`、`countChanged`、`unreported`、`overReported`、`reconciled`、`complete`）、`BulkRunResponse`。`BulkSummary` に `integrity`、`BulkTarget` に `selectionRevision` を追加した。`run` は結果の配列のほかに `{ items, confirmedCount }` を返せる。`start` は、現在と異なるスコープの対象と、0 件の ID の対象を実行しない |
-| `browse-data.ts` | `useBrowseData` の戻り値に `canOperate` を追加した。`setData(updater, { scopeKey, dataKey })` で、保存を始めたときのスコープと条件のデータにだけ反映できる |
+| `browse-data.ts` | `useBrowseData` の戻り値に `canOperate` を追加した。`setData(updater, { scopeKey, dataKey })` で、保存を始めたときのスコープと条件のデータにだけ反映できる。横断の検品：`initialData.scope`、`discardOnError` を追加した（下の「横断の検品の対処」） |
+| `list-detail.ts` | 横断の検品：`useListPositionRestore` に `scrollReady`、`targetKey`、`dataKey` を追加し、復元の前の利用者の操作で復元を取りやめる。`watchUserInteraction` を追加した |
 | `table-scroll-area.tsx` | `HorizontalScrollArea`（表ではない横に並ぶ内容のスクロールの領域）を追加した。`TableScrollArea` と測り方を共有する |
 
 プレビューの検証画面は、App Structure の `StructureSidebar`、`ProductMark`、`structureNav`、`PlaceholderScreen`、Overlays の `DiscardAlert`、Data Display の `FilterSelect`、`StatusText`、`customers` を読み込んで使う（複製も変更もしない）。
@@ -331,11 +332,48 @@ v0.1 の最終調整で、次の仕様を正式に採用した。Pagination、Da
 | 低：Calendar の省略した会社名を確かめられない | `title` を付け、押すと詳細に全体を表示する |
 | 低：Kanban の横のはみ出しに手がかりがない。「その他の条件」の `DateRangePicker` の入力欄の幅 | 変更していない。Kanban は `TableScrollArea` の対象外（表ではない）。`DateRangePicker` は Components の既存の表示。次のレビューで扱う |
 
+### 横断の検品（Patterns Integration Review）の対処
+
+独立した検品（Opus）の指摘と対処。指摘の再現は、検証画面（`#/browsing-app?page=customers`）で確かめた。
+
+| 指摘 | 原因 | 対処 |
+| --- | --- | --- |
+| 致命的：一覧 → 詳細ページ → 戻る → ワークスペースを九州支店に切り替え → Sidebar の「ホーム」→ 戻る、で URL は `ws=kyushu` のまま、本社の行（C-00001…、580件）を表示した。取得の保留中も、取得の失敗の後も表示し続けた | 一覧の記録を履歴の項目のキー（`fdListKey`）だけで引いていた。ワークスペースの切り替え（`replaceState`）はキーを変えない。`useBrowseData` は `initialData` を現在のスコープのデータとして扱っていた | 記録に `scope`（ワークスペース）を入れ、URL のワークスペースと一致する場合だけ使う。切り替えたら、その履歴の項目の記録を破棄する。`useBrowseData` の `initialData` に `scope` を追加し、`scopeKey` と一致しない場合は使わない（二重の防止）。検品を追加した |
+| 高：1024px と 1100px で行を選ぶ、1280px でページの全件を選ぶ・同じ条件の再取得に失敗すると、件数の行が折り返し、表が 48px 下がる。続けて押すと別の行に当たる | 件数の行が `flex-wrap` の 1 行で、一括操作のバーと表示形式の切り替えの合計の幅が行の幅を超えた | 件数の行を 2 つの列の grid にし、バーが入りきらない幅（行の容器の幅 70rem 未満。表示形式の切り替えがない場合は 50rem 未満）では、選択の前から 2 行にする（[bulk-actions.md](bulk-actions.md#操作のバー)）。文言と名前は省略しない。1024、1100、1280、1440px で、選択、ページの全件の選択、再取得の失敗の前後で行の高さと表の位置が変わらないことを確かめる検品を追加した（Chromium、WebKit） |
+| 高：読み込み中に検索欄へ入力すると、復元がフォーカスを行のボタンへ移し、スクロールの位置を 0 から 381 に変え、入力した文字が失われる | `useListPositionRestore` が、データの表示が終わった時点で、利用者の操作に関係なく位置とフォーカスを戻していた | 復元の前の利用者の操作（`pointerdown`、`keydown`、`wheel`、`touchmove`、`focusin`）で取りやめる。保持していたデータの表示中に、スクロールの位置だけを先に戻す（`scrollReady`）。表示しているデータの条件が記録と異なる場合は戻さない（`targetKey`、`dataKey`）。検品を追加した |
+| 中：一覧の表示中に Sidebar の「顧客」を押すと、URL は条件なし、表示は前の条件のまま（不一致）。その後の戻る操作の復元が壊れる | 同じ画面のまま URL だけが変わり、一覧の状態とキーを持ち越していた | 表示中が一覧でも、新しい履歴の項目（新しいキー）で一覧を作り直す。一覧の画面を履歴の項目のキーごとに作り直し、`AppShellMain` の `pageKey` にキーを含める（先頭と h1 から始める）。同じ URL の項目の間の移動のため、`popstate` でも画面を切り替える。検品を追加した |
+| 中：同じ条件の再取得の失敗で、403 でも前のデータを残す | 失敗の種類を区別する手段がなかった | `discardOnError?: (error) => boolean` を追加した（省略した場合は従来どおり）。`#/data-states` に「再取得で権限を失う」の例と検品を追加した |
+| 中：`DateRangePicker` を、幅が内容で決まる場所（`inline-flex`、`absolute`、grid の `auto` の列、`w-max` の Popover の中）に置くと幅が 0 になる | 外側の要素が Container Query の容器（`container-type: inline-size`）であり、内容の幅を自身の幅にしない（CSS の仕様） | 部品は変えず、資料に制約と対処（`className` で幅を指定する）を書いた（[date-picker.md](../components/date-picker.md)）。内側の要素を容器にしても、外側の幅は内容から決まらないため解決しない。外側に最小の幅（`contain-intrinsic-inline-size` など）を与える方法は、grid の `1fr` の列や flex の項目の最小の幅（`min-width: auto`）を変え、既存の配置で横にはみ出すおそれがあるため採らなかった |
+| 中：一括削除の確認が、表示中の選択に従って文と件数が変わるのに、確かめ直させない。Forms & Workflows の顧客の一覧では、全件の選択の `targetKey` に件数がない | 検証画面は Alert Dialog を直接使っていた | 検証画面も `ConfirmActionDialog`（`progress="external"`）にし、`targetKey` にスコープ、ID の一覧、全件の選択は条件、除外した ID、件数を入れる。実行の時点の対象のキーが確かめたキーと異なる場合、再取得中、選択がない、実行中の場合は実行しない。Forms & Workflows の顧客の一覧の `targetKey` に、スコープと件数を追加し、実行の時点でも照合する |
+| 低：戻った後の再取得の失敗で「前回の時点の内容」と示す | 記録に取得した時刻がなかった | 記録に `fetchedAt` を入れ、`initialData.fetchedAt` に渡す。検品を追加した |
+| 低から中：戻ったときに選択を復元しない（8.1 の復元の対象） | 記録の対象ではなかった | ID の選択だけを、同じスコープ、同じ条件の場合に復元する。全件の選択は復元しない（対象を広げない）。[list-and-detail.md](list-and-detail.md#一覧への復帰) に規則を書いた。検品を追加した |
+| 低：Forms & Workflows の顧客の一覧が、`restore=1` か履歴の印のどちらかで記録を使う | `restore=1` の URL だけで記録を使っていた | `restore=1` の場合は、記録したときに一覧から開いた画面から移ったこと（Router が記録する移動の元 `fdFormsFrom`）も確かめる。スコープ（ワークスペース）の一致は従来どおり確かめる |
+| 低：Kanban と Calendar が、同じ条件の再取得の失敗を示さない | 表だけが `refreshFailed` を示していた | 表と同じ文（取得した時刻）と再試行で示す。検証画面の「同じ条件で再取得する」を、表示中の表示形式にも適用する。検品を追加した |
+| 低：`loadingRowCount` が、少ない行が見込まれる場合もページサイズ。Data Table のプレビューのサーバー側の表は 8 行（表示件数 50） | 行数をページサイズで固定していた | 同じスコープと条件の総件数がわかっている場合は、そのページに表示する行数にする。わからない初回はページサイズ。Data Table のプレビューも同じ規則にした（初回は 50 行） |
+| 低：固定の待機（`waitForTimeout`）による「起きないこと」の確認と、ホバーの色の測定 | | `navigation.spec.ts` の 13 か所と `data-browsing.spec.ts` の 2 か所を、`page.clock` で時計を進める方法、イベントの処理と描画の完了（MessageChannel のタスクと 2 フレーム）を待って状態（`data-state`）を確かめる方法、色の変化の完了（`getAnimations()`）を待って測る方法に置き換えた。資料の撮影（スクリーンショット）と、Sheet の中の Tab の連続の確認（`navigation.spec.ts` の 50ms）の待機は残した |
+| 共有の hook：`reload()` の後、効果が走るまでの 1 回の commit で `status: "ready"`、`canOperate: true` を返す | reload の回数が要求の条件に含まれていなかった | 最後に送った要求の reload の回数を状態に持ち、描画の時点で現在の回数と比べる（`access.ts` と同じ考え方）。`#/data-states` に commit の記録と検品を追加した |
+| 共有の hook：`fetcherRef`、`queryRef`、`keepRef` を描画の中で書き換える | | `useLayoutEffect` で書き換える。描画の中の判定には引数の値を直接使う |
+| App Structure：モバイルの顧客の一覧で、表が横にスクロールできる手がかりがない | 表を `TableScrollArea` で囲んでいなかった | `TableScrollArea` で囲んだ。360px で、右の影と、右端での左の影を確かめる検品を追加した |
+
+仕様の変更の記録：
+
+| 変更 | 理由 | 影響 | 検討した代わりの方法 |
+| --- | --- | --- | --- |
+| 件数の行を、バーが入りきらない幅で選択の前から 2 行にする（v0.1 は `flex-wrap` の 1 行） | 選択の操作の直後に表が動くと、続けて押した位置が別の行になる | 行の容器の幅が 1120px（70rem）未満のとき（検証画面では、Sidebar を開いた状態で画面の幅が 1408px 未満、折りたたんだ状態で 1232px 未満）、件数の行が 48px 高くなる（表がその分下がる）。測定：1024、1100、1280px で 96px、1440px で 48px（Chromium）。モバイル（768px 未満）は変わらない | 表示形式の切り替えをアイコンだけにする：名前が見えなくなる（情報の省略）。バーの文言を短くする：同じく省略。切り替えを検索の行へ移す：データ領域の直上・右という配置の規則に反する。常に 2 行にする：広い画面で不要な余白になる |
+| 戻ったときに、ID の選択を復元する（v0.1 は復元しない） | 8.1 の復元の対象に選択が含まれる | 一覧に戻ると、詳細を開く前の選択が残る。全件の選択は従来どおり残らない | 選択を復元しない：8.1 を満たさない。全件の選択も復元する：戻った時点の検索結果に対象が広がるおそれがある |
+| 復元の前の利用者の操作で、位置とフォーカスの復元を取りやめる | 入力中の欄からフォーカスを奪わない（7.2） | 読み込み中に操作した場合は、記録した位置とフォーカスに戻らない（先に戻したスクロールの位置は残る） | 復元を続け、入力欄にフォーカスがある場合だけ移さない：スクロールの位置の飛びが残る |
+| Sidebar から開く一覧を、表示中でも新しい履歴の項目にする | 戻る操作と新しく開く操作を区別する（8.1） | 同じ URL の履歴の項目が増える（戻るで前の一覧に戻る） | `replaceState` で現在の項目を置き換える：前の一覧の条件と記録が失われる |
+
+引き継ぎ（この対処の範囲外のファイル）：
+
+- `registry/patterns/drill-down.tsx` の `useAnalysisPositionRestore` に、同じ取りやめの規則（`watchUserInteraction`）を適用する。この変更では未適用（別の担当のファイル）。
+- `docs/web/components/integration-review.md` の 262 行目（`loadingRowCount` の引き継ぎ）と、`preview/tests/data-display.spec.ts` の 885 行目付近の注記（「読み込み中の行が 50 行に変わる」）は、この変更で状況が変わった（プレビューの初回の読み込みは 50 行）。この変更では更新していない（範囲外のファイル）。
+
 ### 未検証の事項
 
 | 項目 | 状況 |
 | --- | --- |
-| 再取得の失敗の理由の文と表示形式の切り替え | 1280px の画面で、一括操作のバーに「再取得するまで操作できません」を示すと、表示形式の切り替えが次の行へ折り返し、表の位置が約 50px 下がる。失敗の後の 1 回の移動のため、変更していない。次のレビューで扱う |
+| 再取得の失敗の理由の文と表示形式の切り替え | 対処した（横断の検品）。表示形式の切り替えは折り返さず、件数の行の高さは変わらない。残る移動：ページの全件の選択と再取得の失敗が重なり、全幅でも入りきらない場合は、バーが列の中で折り返す（警告の挿入と同じ描画で起きる）。実機の Safari と、ブラウザの文字の大きさの設定を変えた場合の幅は確かめていない |
 | 実機の iOS Safari | 未検証。モバイルの一括操作のバーと Safe Area、ソフトウェアキーボードの表示中の編集の Sheet、Drawer を実機で確かめていない |
 | Android の実機 | 未検証。IME の変換中の入力（Components の `advanced.md` の制限を含む） |
 | VoiceOver、NVDA | 未検証。`aria-busy`、`role="status"`、`role="alert"`、`aria-live` の読み上げの回数を、Playwright の属性の検品だけで確かめている |

@@ -9,6 +9,7 @@ import { useNavigationGuard } from "@/patterns/unsaved-changes"
 // - ブラウザの戻る・進む：popstate の時点で URL はすでに変わっている。未保存の変更がある場合は、
 //   history.go(-delta) で元の項目に戻してから確認を開き、許可されたら history.go(delta) で改めて移動する。
 //   delta は、履歴の項目ごとに記録した位置（history.state.fdFormsIdx）の差から求める。
+// - アプリの中の移動では、移動の元の項目の位置（history.state.fdFormsFrom）も記録する。
 // - 元に戻すための popstate（ignore）と、許可された移動の popstate（bypass）では、確認を開かない（確認の繰り返しを防ぐ）。
 // - 画面の状態（route）は、確認が許可された後にだけ変える。AppShellMain の pageKey（フォーカスとスクロールの移動）は、
 //   実際に移動したときだけ変わる。
@@ -73,10 +74,13 @@ export function useFormsRouter() {
 
   const navigate = useCallback((href: string, { replace = false }: { replace?: boolean } = {}) => {
     guardRef.current.confirmNavigation(() => {
-      if (replace) window.history.replaceState({ fdFormsIdx: index.current }, "", href)
+      // fdFormsFrom：移動の元の履歴の項目の位置（置き換えの場合は、置き換えた項目の位置）。
+      // 一覧の記録を使ってよいか（記録したときに開いた画面から戻ったか）の判断に使う（forms-customers.tsx）。
+      const from = index.current
+      if (replace) window.history.replaceState({ fdFormsIdx: index.current, fdFormsFrom: from }, "", href)
       else {
         index.current += 1
-        window.history.pushState({ fdFormsIdx: index.current }, "", href)
+        window.history.pushState({ fdFormsIdx: index.current, fdFormsFrom: from }, "", href)
       }
       setRoute(readFormsRoute())
     })

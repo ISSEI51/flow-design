@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useTable } from "@tanstack/react-table"
 
 import { Button } from "@/components/ui/button"
@@ -18,7 +18,7 @@ import { companyColumns } from "./company-parts"
 import { AppLink, DemoControls, DemoFrame, Mock, Radio, Rules } from "./doc-parts"
 
 // ---------------------------------------------------------------- 状態の区別
-type Scenario = "normal" | "fast" | "slow" | "empty" | "no-results" | "error" | "forbidden" | "refresh-error"
+type Scenario = "normal" | "fast" | "slow" | "empty" | "no-results" | "error" | "forbidden" | "refresh-error" | "refresh-forbidden"
 
 const scenarios: [Scenario, string][] = [
   ["normal", "標準（600ms）"],
@@ -29,9 +29,17 @@ const scenarios: [Scenario, string][] = [
   ["error", "取得失敗"],
   ["forbidden", "権限がない"],
   ["refresh-error", "再取得に失敗"],
+  ["refresh-forbidden", "再取得で権限を失う"],
 ]
 
 class ForbiddenError extends Error {}
+
+declare global {
+  interface Window {
+    /** 検品用：状態の例が commit した状態の記録（reload() の直後の描画で ready を返していないかを確かめる） */
+    __fdBrowseCommits?: { status: string; canOperate: boolean; rows: number }[]
+  }
+}
 
 const columns = companyColumns({ selectable: false })
 const PAGE = 6
@@ -50,6 +58,8 @@ function StatesDemo() {
           else if (s === "forbidden") reject(new ForbiddenError("この一覧を表示する権限がありません"))
           // 再取得の失敗：最初の取得は成功し、2 回目以降は失敗する。
           else if (s === "refresh-error" && calls.current > 1) reject(new Error("サーバーに接続できませんでした"))
+          // 再取得の時点で権限を失った（403）：前の内容を表示し続けない（discardOnError）。
+          else if (s === "refresh-forbidden" && calls.current > 1) reject(new ForbiddenError("この一覧を表示する権限がありません"))
           else resolve(s === "empty" || s === "no-results" ? [] : customers.slice(0, PAGE))
         }, latency)
         signal.addEventListener("abort", () => {
@@ -58,8 +68,14 @@ function StatesDemo() {
         })
       })
     },
+    // 権限の喪失は、同じ条件の再取得の失敗でも、前の内容を残さない（通常の通信の失敗では残す）。
+    discardOnError: (error) => error instanceof ForbiddenError,
   })
   const rows = useMemo(() => data.data ?? [], [data.data])
+  // 検品用：commit した状態を記録する。
+  useLayoutEffect(() => {
+    ;(window.__fdBrowseCommits ??= []).push({ status: data.status, canOperate: data.canOperate, rows: data.data?.length ?? 0 })
+  })
   const table = useTable({
     ...dataTableDefaults,
     features: dataTableFeatures,

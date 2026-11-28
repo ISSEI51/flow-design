@@ -39,16 +39,28 @@ import { CompanyDetailPage } from "./company-detail"
 // - URL への同期：検索語以外の条件（フィルター、ソート、ページ、表示形式）。検索語は電話番号を含みうるため URL に入れない。
 //   条件の変更は履歴を増やさない（history.replaceState）。
 // - 一覧の位置の保存：履歴の項目ごとの記録（history.state の fdListKey）を、この画面のメモリに持つ。
-//   一覧 → 詳細ページ → 戻る（ブラウザの戻るか、Breadcrumb）で、条件、スクロールの位置、フォーカスを復元する。
+//   一覧 → 詳細ページ → 戻る（ブラウザの戻るか、Breadcrumb）で、条件、選択、スクロールの位置、フォーカスを復元する。
 //   再読み込みした場合は、URL の条件だけを復元する（検索語とスクロールの位置は戻らない）。
+// - 記録を使ってよいかの判断：記録したときのスコープ（ワークスペース）が、戻った履歴の項目の URL のワークスペースと
+//   一致する場合だけ使う。履歴の項目のキー（fdListKey）は、ワークスペースを切り替えても変わらないため、キーだけで判断しない。
+//   製品では、スコープにアカウントと権限の版も含める。
+// - Sidebar から一覧を開く操作は、表示中が一覧でも、新しい履歴の項目（新しい fdListKey）で一覧を作り直す（前の条件と位置を持ち越さない）。
 
 const APP = "#/browsing-app"
 
-type Route = { page: string; id: string | null; ws: string; params: URLSearchParams }
+type Route = {
+  page: string
+  id: string | null
+  ws: string
+  params: URLSearchParams
+  /** 一覧の履歴の項目のキー（history.state の fdListKey）。一覧の画面は、このキーごとに作り直す */
+  listKey: string | null
+}
 
 function readRoute(): Route {
   const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "")
-  return { page: params.get("page") ?? "customers", id: params.get("id"), ws: params.get("ws") ?? "hq", params }
+  const page = params.get("page") ?? "customers"
+  return { page, id: params.get("id"), ws: params.get("ws") ?? "hq", params, listKey: page === "customers" ? readListKey() : null }
 }
 
 const appHref = (page: string, extra?: Record<string, string>) => `${APP}?${new URLSearchParams({ page, ...extra }).toString()}`
@@ -98,32 +110,45 @@ function paramsFromQuery(q: BrowseQuery<CompanyFilters>, view: BrowseView, ws: s
 const snapshots = new Map<string, BrowserSnapshot>()
 let lastView: BrowseView | null = null
 let keySeq = 0
+const newListKey = () => `list-${++keySeq}-${Date.now()}`
 
 // 履歴の項目の記録のキー。描画中は読むだけにし、ない場合の書き込み（replaceState）は効果の中で行う。
 function readListKey() {
   return ((window.history.state ?? {}) as { fdListKey?: string }).fdListKey ?? null
 }
 
+// 一覧の履歴の項目にキーがない場合（初めて開いた、リンクで開いた）は、新しいキーを割り当てる（履歴への書き込みは効果の中で行う）。
+const withListKey = (route: Route): Route => (route.page === "customers" && !route.listKey ? { ...route, listKey: newListKey() } : route)
+
+/** 記録を使ってよいか：記録したときのスコープ（ワークスペース）が、現在のスコープと一致する場合だけ使う */
+function restorableSnapshot(listKey: string | null, ws: string) {
+  const s = listKey ? snapshots.get(listKey) : undefined
+  return s && s.scope === ws ? s : null
+}
+
 // ---------------------------------------------------------------- 一覧のページ
 function CustomersScreen({
   route,
+  listKey,
   title,
   reloadToken,
   onReload,
   onWorkspaceChange,
 }: {
   route: Route
+  /** この一覧の履歴の項目のキー。キーが変わると、親が一覧を作り直す（key） */
+  listKey: string
   title: string
   reloadToken: number
   onReload: () => void
   onWorkspaceChange: (ws: string) => void
 }) {
   const { mainRef } = useAppShell()
-  const [listKey] = useState(() => readListKey() ?? `list-${++keySeq}-${Date.now()}`)
   useEffect(() => {
     if (readListKey() !== listKey) window.history.replaceState({ ...(window.history.state ?? {}), fdListKey: listKey }, "")
   }, [listKey])
-  const restore = snapshots.get(listKey) ?? null
+  // 一覧を作るときの記録（CompanyBrowser は作ったときだけ読む）。別のワークスペースの記録は使わない。
+  const [restore] = useState(() => restorableSnapshot(listKey, route.ws))
   const [creating, setCreating] = useState(false)
   const [refetchToken, setRefetchToken] = useState(0)
   const view = resolveInitialView({
@@ -147,8 +172,9 @@ function CustomersScreen({
         </PageHeaderActions>
       </PageHeader>
       <CompanyBrowser
-        // 履歴の項目ごとに、一覧の状態を作り直す。ワークスペースの切り替えは、同じ一覧のままスコープだけを変える。
-        key={`${listKey}:${reloadToken}`}
+        // 「一覧を作り直す」で作り直す（履歴の項目ごとの作り直しは、親の key で行う）。
+        // ワークスペースの切り替えは、同じ一覧のままスコープだけを変える。
+        key={reloadToken}
         testId="app-list"
         workspace={route.ws}
         features={{ bulk: true, views: true, detailPage: true }}
@@ -378,24 +404,44 @@ function navFor(groups: NavGroup[]): NavGroup[] {
 }
 
 export function BrowsingApp() {
-  const [route, setRoute] = useState(readRoute)
+  const [route, setRoute] = useState(() => withListKey(readRoute()))
   const [reloadToken, setReloadToken] = useState(0)
   const [open, setOpen] = useState(true)
 
   useEffect(() => {
-    const onHash = () => setRoute(readRoute())
-    window.addEventListener("hashchange", onHash)
-    return () => window.removeEventListener("hashchange", onHash)
+    // URL のハッシュの変化（リンク、location.hash）と、履歴の移動（戻る・進む。URL が同じ項目の間の移動を含む）。
+    // 同じ移動で hashchange と popstate の両方が届くため、キーのない一覧の項目には、ここで（描画の前に）キーを書き込む。
+    const onNavigate = () => {
+      // この画面の外（プレビューの別のページ）への移動は、プレビューの一覧が扱う（一覧の URL に書き戻さない）。
+      if (!window.location.hash.startsWith(APP)) return
+      const r = readRoute()
+      if (r.page === "customers" && !r.listKey) window.history.replaceState({ ...(window.history.state ?? {}), fdListKey: newListKey() }, "")
+      setRoute(readRoute())
+    }
+    window.addEventListener("hashchange", onNavigate)
+    window.addEventListener("popstate", onNavigate)
+    return () => {
+      window.removeEventListener("hashchange", onNavigate)
+      window.removeEventListener("popstate", onNavigate)
+    }
   }, [])
 
   const navigateTo = useCallback((page: string) => {
+    if (page === "customers" && readRoute().page === "customers") {
+      // 表示中の一覧を Sidebar から開き直す：新しい履歴の項目（新しいキー）で、条件と位置を持ち越さずに一覧を作り直す。
+      // URL が同じ場合も履歴の項目を増やし、前の項目の記録（戻ったときの復元）を上書きしない。
+      window.history.pushState({ fdListKey: newListKey() }, "", appHref(page))
+      setRoute(readRoute())
+      return
+    }
     window.location.hash = appHref(page)
   }, [])
 
   const labels = structureLabels(false)
   const listState = (window.history.state ?? {}) as { fdListKey?: string; fdFromList?: string }
-  // 一覧に戻り、記録がある場合は、AppShellMain の「先頭へ戻す」「h1 へフォーカス」を止め、CompanyBrowser が復元する。
-  const restoring = route.page === "customers" && Boolean(listState.fdListKey && snapshots.has(listState.fdListKey))
+  // 一覧に戻り、使える記録（同じワークスペースの記録）がある場合は、AppShellMain の「先頭へ戻す」「h1 へフォーカス」を止め、
+  // CompanyBrowser が復元する。CompanyBrowser に渡す記録と同じ条件で判断する。
+  const restoring = route.page === "customers" && restorableSnapshot(route.listKey, route.ws) !== null
 
   const backHref = appHref("customers", route.ws !== "hq" ? { ws: route.ws } : {})
   const onBack = (e: MouseEvent) => {
@@ -410,17 +456,22 @@ export function BrowsingApp() {
   if (route.page === "customers") {
     body = (
       <CustomersScreen
+        // 履歴の項目ごとに、一覧を作り直す。
+        key={route.listKey ?? ""}
         route={route}
+        listKey={route.listKey ?? ""}
         title={labels.customers}
         reloadToken={reloadToken}
         onReload={() => setReloadToken((n) => n + 1)}
         onWorkspaceChange={(ws) => {
           // 同じ一覧のまま、ワークスペース（データのスコープ）だけを切り替える。表示中のデータ、選択、詳細の表示は持ち越さない。
+          // この履歴の項目の記録は、前のワークスペースの一覧の状態のため破棄する（戻ったときに、別のワークスペースの行を表示しない）。
+          if (route.listKey) snapshots.delete(route.listKey)
           const p = new URLSearchParams(window.location.hash.split("?")[1] ?? "")
           if (ws === "hq") p.delete("ws")
           else p.set("ws", ws)
           window.history.replaceState(window.history.state, "", `${APP}?${p.toString()}`)
-          setRoute(readRoute())
+          setRoute((prev) => ({ ...readRoute(), listKey: prev.listKey }))
         }}
       />
     )
@@ -453,7 +504,8 @@ export function BrowsingApp() {
           </span>
         </AppShellHeader>
         <AppShellMain
-          pageKey={`${route.page}:${route.id ?? ""}`}
+          // 一覧は履歴の項目ごとに別のページとして扱う（Sidebar から開き直した一覧も、先頭と h1 から始める）。
+          pageKey={`${route.page}:${route.id ?? ""}:${route.listKey ?? ""}`}
           scrollOnNavigate={restoring ? false : "top"}
           focusOnNavigate={restoring ? false : "heading"}
           data-testid="browsing-main"

@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/toast"
 import { PageColumns, PageLayout } from "@/patterns/page-layout"
+import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import {
   Section,
@@ -257,7 +258,9 @@ export function CustomersScreen({ href, go, title }: { href: Href; go: Go; title
         <p className="text-ui text-muted-foreground tabular-nums" aria-live="polite">
           {rows.length}件
         </p>
-        {/* 列が多い表は、表の領域の中だけで横にスクロールする。ページ全体は横にスクロールしない */}
+        {/* 列が多い表は、表の領域の中だけで横にスクロールする。ページ全体は横にスクロールしない。
+            横に続く列があることは、スクロールできる方向の端の影で示す（TableScrollArea。Data Browsing の List & Detail） */}
+        <TableScrollArea data-testid="customers-table-scroll">
         <Table data-testid="customers-table" containerClassName="min-w-0">
           <TableHeader>
             <TableRow>
@@ -294,6 +297,7 @@ export function CustomersScreen({ href, go, title }: { href: Href; go: Go; title
             ))}
           </TableBody>
         </Table>
+        </TableScrollArea>
       </div>
     </PageLayout>
   )

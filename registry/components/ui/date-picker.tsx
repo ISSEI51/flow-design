@@ -651,6 +651,9 @@ function DateRangePicker({
   // 開始日と終了日の入力欄の幅をそろえる。
   //   領域が 24rem 以上：開始日 〜 終了日 カレンダーのボタン を 1 行に並べる
   //   領域が 24rem 未満：開始日と終了日を同じ幅で縦に並べ、カレンダーのボタンを終了日の右に置く（「〜」は表示しない）
+  // 外側の要素は Container Query の容器のため、内容の幅を自身の幅にしない。幅が内容で決まる場所（inline-flex、
+  // 幅を指定しない absolute、grid の auto の列、w-max の要素）では幅が 0 になる。その場合は className で幅を指定する
+  // （docs/web/components/date-picker.md の「置く場所の制約」）。
   return (
     <div data-slot="date-range-picker" className={cn("@container/date-range w-full min-w-0", className)}>
     <div className="relative grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-x-2 gap-y-4 @sm/date-range:flex">
