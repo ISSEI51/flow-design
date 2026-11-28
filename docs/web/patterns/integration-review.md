@@ -3,7 +3,7 @@
 27 種類の Patterns（5 つのグループ）と 39 種類の Components を、組み合わせて使う状態で検品した記録。
 Pattern ごとの設計、実装、検品は各グループの資料にある。この資料は、Pattern をまたぐ問題、共通の状態管理の責務、横断の検品、検品の環境、Pages への引き継ぎを扱う。
 
-- 状態：Patterns v0.1 確定候補（Integration Review の実施中）
+- 状態：Patterns v0.1 確定候補（Integration Review 完了・最終レビュー待ち）
 - ブランチ：`fix/patterns-integration-v0.1`（`origin/main` の `1ae85eb` から作成）
 
 ## 1. 目的
@@ -402,7 +402,43 @@ Review の後の再レビュー：別のエージェントが、修正の差分�
 
 ## 14. 最終検品とスクリーンショット
 
-最終の検品の結果は、検品の後にこの章へ記録する。
+### 最終検品
+
+- 対象：`8899127`（`fix: finalize Flow Design patterns integration v0.1`）。最新の `origin/main`（`1ae85eb`。検品の直前の `git fetch` で確認）を含む。検品の後の差分は、この章と README の記録だけである（資料のみ）
+- 方法：`scripts/verify/full-pair.sh`（6 つの確認を 2 回続けて実行。同じコード、検品、設定、依存）。検品の専用の worktree で、作業ツリーに変更がない状態で実行した
+- 環境：macOS 26.6.2（Darwin 25.6.0、arm64、CPU 18）、Node.js 26.13.1（LTS「Lithium」。nodejs.org の公式の配布物を SHA-256 で確かめて使った）、npm 11.20.0、Vite 8.3.8、Playwright 1.65.1（Chromium 159.0.8154.6、WebKit 27.2）、3 ワーカー、ポート 5470
+- 排他ロック：17:45:44 に取得（待機 0 秒）、19:28:41 に解放。解放の前に、同じプロセスグループに残っていたプロセス（`caffeinate`）を終了した
+- 作業ツリー：2 回とも、開始と終了の HEAD は同じ（`8899127`）で、変更は 0 件
+- 判定（`verdict.json`）：pass
+
+| 確認 | 1 回目（17:46〜18:37） | 2 回目（18:37〜19:28） |
+| --- | --- | --- |
+| `npm run typecheck` | 成功（exit 0） | 成功（exit 0） |
+| `npm run preview:build` | 成功（exit 0。チャンクの大きさの警告は従来どおり） | 成功（exit 0） |
+| `npm run test:tokens` | 成功（failed 0） | 成功（failed 0） |
+| `npm run test:ssr` | 120 件成功、失敗 0、skip 0（30 秒） | 120 件成功、失敗 0、skip 0（29 秒） |
+| `npm run test:patterns` | 2960 件成功、失敗 0、skip 200、未実行 0（18.8 分） | 2960 件成功、失敗 0、skip 200、未実行 0（18.8 分） |
+| `npm run test:components` | 4511 件成功、失敗 0、skip 353、未実行 0（31.4 分） | 4511 件成功、失敗 0、skip 353、未実行 0（31.5 分） |
+
+- 製品の例外とコンソールのエラー（`unexplained`、`consoleProduct`）：2 回とも 0 件。記録だけのもの：Vite の HMR の WebSocket の接続のコンソールのエラー（`consoleEnvironment`。`ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`）、WebKit の座標が NaN のイベント（`environment`）は 0 件
+- Vite の HMR の更新、再読み込み、依存の再最適化：2 回とも 0 件
+- 環境の異常（V8 の異常終了、SIGABRT、接続の失敗、ポートの使用中）：2 回とも 0 件
+- skip は、`@webkit` の印のない検品の WebKit の project での除外と、モバイルの project で意味のない検品の除外（既存の方式）。この Review で追加した skip は、モバイルの project で条件が成り立たない 3 件だけである（件数の行に置く一括操作のバーの幅、ハードウェアキーボードの F6 と Tab、狭い画面で全幅に表示される Toast と左の Sheet）
+- `test:patterns` の 2960 件は `test:components` の 4511 件に含まれる（`test:components` はすべての spec を実行する）。この Review で追加した spec（`patterns-integration-*.spec.ts`）は両方に含まれる
+
+この前の同じ方法の実行（`243d60c` の `test:components` 1 回、4495 件成功、失敗 0）と、修正の途中の実行の失敗（検品の時間への依存 2 件、通知の検品の閉じる動きの途中の競合 1 件）は、13 章と各コミットに記録した。失敗の後に待機を延ばして成功させたものはない。
+
+### スクリーンショット
+
+Git の管理外に保存し、代表的なものを目視で確かめた。撮影したのは次の範囲（243 枚）。
+
+| 対象 | 端末 |
+| --- | --- |
+| 27 種類の Pattern の個別のプレビュー、各グループの統合の検証画面（App Structure、Data Browsing、Forms & Workflows、Data Analysis、System & Account）、横断の検証画面 | Chromium 1280×900、1440×900、320×700、Pixel 7。WebKit Desktop（1280×900）、iPhone 15 |
+| 横断の検証画面の状態：正常、再取得、検索の結果なし、取得の失敗、認可の再確認、閲覧だけの権限、Sheet、オフライン、部分的な障害 | Chromium 1280、320、Pixel 7。WebKit Desktop、iPhone 15 |
+| 保存中、保存の結果不明、未保存の変更の確認、一括操作の部分的な失敗、Overlay（Drawer と Toast）、通知センター | 横断の検証画面の検品と独立したレビュー（Review B）で撮影し、目視で確かめた |
+
+目視の結果：横方向のスクロール、要素の重なり、保護された情報の表示（認可の再確認中）はなかった。並び順の Select の表示（15 章）を見つけた。実機での目視は行っていない。
 
 ## 15. 未解決の事項と次の実施時期
 

@@ -187,14 +187,23 @@ Natural Motion
 
 ## このリポジトリについて
 
-思想、原則、デザイントークンを定め、コンポーネント（39 種、v0.1）を作った。Components の段階は、全体統合検品（[integration-review.md](docs/web/components/integration-review.md)）を終えて完了した。実機（iOS Safari、Android）とスクリーンリーダー（VoiceOver、NVDA）による検品は、まだ行っていない。
+思想、原則、デザイントークンを定め、コンポーネント（39 種、v0.1）と Patterns（27 種）を作った。Components の段階は、全体統合検品（[integration-review.md](docs/web/components/integration-review.md)）を終えて完了した。Patterns は、全体の統合の検品（[Patterns Integration Review](docs/web/patterns/integration-review.md)）を終え、最終のレビューを待っている。実機（iOS Safari、Android）とスクリーンリーダー（VoiceOver、NVDA）による検品は、まだ行っていない。
 
-| 段階 | 状態 |
-| --- | --- |
-| 思想、原則、デザイントークン v0.1 | 完了 |
-| Components v0.1（39 種） | 完了 |
-| Patterns（複数のコンポーネントを組み合わせた画面の型） | 進行中（App Structure：v0.1 確定、Data Browsing：v0.1 確定候補、Forms & Workflows：v0.1 確定候補（方針は承認済み）、Data Analysis：v0.1 確定候補（方針は承認済み）、System & Account：v0.1 確定候補（方針は承認済み）） |
-| Registry & Gallery、Agent Skills | 予定 |
+### ロードマップ
+
+| | 段階 | 状態 |
+| --- | --- | --- |
+| 1 | Philosophy（思想、原則） | 完了 |
+| 2 | Technology Stack | 完了 |
+| 3 | Design Tokens v0.1 | 完了 |
+| 4 | Components v0.1（39 種） | 完了 |
+| 5 | Patterns（27 種。複数のコンポーネントを組み合わせた画面の型） | v0.1 確定候補（Integration Review 完了・最終レビュー待ち） |
+| 6 | Pages（Reference Pages。Registry の第 4 層） | 設計済み・未実装（初期の 20 種類） |
+| 7 | Registry & Gallery | 予定 |
+| 8 | Agent Skills | 予定 |
+| 9 | Benchmarks | 予定 |
+
+Registry は、Design Tokens、Components、Patterns、Pages の 4 つの層で構成する。Pages は第 4 層で、Components と Patterns を組み合わせた業務の画面の参照の実装である。初期の 20 種類（Dashboard 2、Data Management 4、Analytics 3、Workflows 2、Settings 3、Authentication & Onboarding 4、Administration 2）は設計を終え、まだ実装していない。
 
 今後、AI エージェントが再現できるデザインシステムへ発展させることを目標にしている。
 
@@ -204,14 +213,14 @@ Components が個々の UI の部品であるのに対し、Patterns はユー�
 
 | グループ | 内容 | 状態 |
 | --- | --- | --- |
-| App Structure | App Shell、Navigation、Page Header、Page Layout、Section Layout（[app-structure.md](docs/web/patterns/app-structure.md)） | v0.1 確定 |
-| Data Browsing | Search & Filter、List & Detail、Bulk Actions、View Switching、Data States（[data-browsing.md](docs/web/patterns/data-browsing.md)） | v0.1 確定候補（最終レビュー前） |
-| Forms & Workflows | Form Layout、Create & Edit、Unsaved Changes、Confirmation、Multi-step Workflow、Import & Export（[forms-and-workflows.md](docs/web/patterns/forms-and-workflows.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） |
-| Data Analysis | Metric Overview、Dashboard Layout、Analysis Filters、Period Comparison、Drill-down（[data-analysis.md](docs/web/patterns/data-analysis.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） |
-| System & Account | Authentication、Settings、Onboarding、Permission States、System States、Notifications（[system-and-account.md](docs/web/patterns/system-and-account.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Patterns Integration Review の前） |
+| App Structure | App Shell、Navigation、Page Header、Page Layout、Section Layout（[app-structure.md](docs/web/patterns/app-structure.md)） | v0.1 確定（2026-11-26）。Integration Review で横断の修正を行った |
+| Data Browsing | Search & Filter、List & Detail、Bulk Actions、View Switching、Data States（[data-browsing.md](docs/web/patterns/data-browsing.md)） | v0.1 確定候補（main に統合済み。グループの最終レビューは行っていない。Integration Review 完了・最終レビュー待ち） |
+| Forms & Workflows | Form Layout、Create & Edit、Unsaved Changes、Confirmation、Multi-step Workflow、Import & Export（[forms-and-workflows.md](docs/web/patterns/forms-and-workflows.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Integration Review 完了・最終レビュー待ち） |
+| Data Analysis | Metric Overview、Dashboard Layout、Analysis Filters、Period Comparison、Drill-down（[data-analysis.md](docs/web/patterns/data-analysis.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Integration Review 完了・最終レビュー待ち） |
+| System & Account | Authentication、Settings、Onboarding、Permission States、System States、Notifications（[system-and-account.md](docs/web/patterns/system-and-account.md)） | v0.1 確定候補（設計と実装の方針は承認済み。Integration Review 完了・最終レビュー待ち） |
 
-Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md)、一覧の検索と閲覧の Patterns は [Data Browsing](docs/web/patterns/data-browsing.md)、登録・編集と手続きの Patterns は [Forms & Workflows](docs/web/patterns/forms-and-workflows.md)、分析とダッシュボードの Patterns は [Data Analysis](docs/web/patterns/data-analysis.md)、認証、設定、権限、障害、通知などの共通の体験の Patterns は [System & Account](docs/web/patterns/system-and-account.md) にまとめている。
+Web で実装するときの技術構成は [Web 技術スタック](docs/web/stack.md)、余白・文字・色などの値は [デザイントークン v0.1](docs/web/tokens.md)、コンポーネントは [コンポーネント](docs/web/components/README.md)、画面の構造の Patterns は [App Structure](docs/web/patterns/app-structure.md)、一覧の検索と閲覧の Patterns は [Data Browsing](docs/web/patterns/data-browsing.md)、登録・編集と手続きの Patterns は [Forms & Workflows](docs/web/patterns/forms-and-workflows.md)、分析とダッシュボードの Patterns は [Data Analysis](docs/web/patterns/data-analysis.md)、認証、設定、権限、障害、通知などの共通の体験の Patterns は [System & Account](docs/web/patterns/system-and-account.md) にまとめている。Pattern をまたぐ状態の管理、hook の選び方、横断の検品、Pages への引き継ぎは [Patterns Integration Review](docs/web/patterns/integration-review.md) にまとめている。
 
-図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py`（Advanced Components の図は `gen_advanced.py`、Data Display の図は `gen_data_display.py`、App Structure の図は `gen_app_structure.py`、Data Browsing の図は `gen_data_browsing.py`、Forms & Workflows の図は `gen_forms_workflows.py`、Data Analysis の図は `gen_data_analysis.py`、System & Account の図は `gen_system_account.py` と `sa_*.py`）で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
+図は [draw.io](https://www.drawio.com/) で作成している。正本は `docs/diagrams/*.drawio` で、そこから書き出したライト用とダーク用の SVG を掲載している。`.drawio` は `scripts/diagrams/gen.py`（Advanced Components の図は `gen_advanced.py`、Data Display の図は `gen_data_display.py`、App Structure の図は `gen_app_structure.py`、Data Browsing の図は `gen_data_browsing.py`、Forms & Workflows の図は `gen_forms_workflows.py`、Data Analysis の図は `gen_data_analysis.py`、System & Account の図は `gen_system_account.py` と `sa_*.py`、Patterns Integration Review の図は `gen_patterns_integration.py`）で生成し、`scripts/diagrams/build.sh` で SVG まで書き出せる。
 
 ライセンスは未定。
