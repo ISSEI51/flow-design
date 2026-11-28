@@ -27,7 +27,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useToast } from "@/components/ui/toast"
-import { decideAccess, restrictionText } from "@/patterns/access"
+import { decideAccess, restrictionText, unverifiedStatus } from "@/patterns/access"
 import { AccessState } from "@/patterns/access-state"
 import { AppShell, AppShellBody, AppShellHeader, AppShellMain } from "@/patterns/app-shell"
 import { useBrowseData } from "@/patterns/browse-data"
@@ -39,11 +39,13 @@ import { SidebarNav, SidebarNavItem, type NavGroup } from "@/patterns/sidebar-na
 import { UnsavedChangesProvider, useNavigationGuard } from "@/patterns/unsaved-changes"
 
 import { membershipOf, roles, users, workspacesOf, type OnboardingTaskId, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
+import { onboardingTaskDefinitions } from "../../data/system-account/onboarding-data"
 import { onboardingApi } from "../../data/system-account/onboarding-server"
 import { notificationsApi } from "../../data/system-account/notifications-server"
 import { scopeKeyOf } from "../../data/system-account/permission-data"
 import { permissionServer } from "../../data/system-account/permission-server"
 import { orgNameOf, settingsApi } from "../../data/system-account/settings-server"
+import { systemServer } from "../../data/system-account/system-server"
 import { ProductMark } from "../app-structure/structure-sidebar"
 import { accountHref, pagePermission, type AccountPage, type AccountRoute } from "./account-route"
 import { AccountVerifyPanel } from "./account-verify"
@@ -80,14 +82,26 @@ const notificationMutations = ["updateRead", "markAllRead", "remove", "saveSetti
 const settingsCategoryIds: SettingsCategoryId[] = ["profile", "display", "notifications", "security", "organization", "members"]
 const asCategory = (v: string | null): SettingsCategoryId | null => (settingsCategoryIds.includes(v as SettingsCategoryId) ? (v as SettingsCategoryId) : null)
 
-/** Checklist の作業を開く画面（製品のルーター）。開くだけで、作業を完了にはしない */
+/**
+ * Checklist の作業を開く画面（製品のルーター）。開くだけで、作業を完了にはしない。
+ * この検証画面には、支払い方法の登録の画面と、プロフィールの写真の設定がない。これらの作業は対象にしない（accountTasks）。
+ */
 const taskRoute: Partial<Record<OnboardingTaskId, Partial<AccountRoute>>> = {
   "first-customer": { page: "customers" },
   "import-customers": { page: "jobs" },
   "invite-members": { page: "members" },
-  "set-billing": { page: "settings", cat: "organization" },
-  "complete-profile": { page: "settings", cat: "profile" },
 }
+
+/** この検証画面の Checklist の作業。作業の画面（taskRoute）と、完了を判定する製品のデータがある作業だけ */
+const accountTasks = onboardingTaskDefinitions.filter((t) => t.id in taskRoute)
+
+/** 権限を確定できない間は、前の権限から Checklist の対象を導かない（ONB-1） */
+const checklistPendingText = {
+  loading: "権限を確認しています。",
+  error: "権限を確認できませんでした。確認できるまで、利用開始の準備を表示しません。",
+  refreshing: "最新の権限を確認しています。確認できるまで、利用開始の準備を表示しません。",
+  stale: "最新の権限を確認できませんでした。確認できるまで、利用開始の準備を表示しません。",
+} as const
 
 const navLabels: Record<AccountPage, string> = {
   home: "ホーム",
@@ -531,14 +545,18 @@ function exportBlockedText(access: PermissionAccess) {
 }
 
 function HomePage(props: PageBodyProps) {
-  const { userId, route, permissions, go } = props
+  const { userId, route, permissions, access, go } = props
   const ws = route.ws
   const membership = membershipOf(userId, ws)
   const viewer = useMemo(
     () => ({ userId, workspaceId: ws as string, permissions, joinedBy: membership?.joinedBy ?? ("invited" as const) }),
     [userId, ws, permissions, membership?.joinedBy]
   )
-  const state = useGettingStarted({ viewer, api: onboardingApi })
+  // 権限を確定できない間（取得中、再確認中、失敗）は、前の権限で対象の作業を導かない
+  const unresolved = access.status === "loading" || access.status === "error" ? access.status : unverifiedStatus(access)
+  const pending = unresolved ? checklistPendingText[unresolved] : null
+  const product = useChecklistResults(props, !pending)
+  const state = useGettingStarted({ viewer, api: onboardingApi, tasks: accountTasks, results: product.results, resultsError: product.error, pending })
   const hidden = state.checklist?.presentation === "hidden"
   return (
     <PageFrame
@@ -558,6 +576,41 @@ function HomePage(props: PageBodyProps) {
       </div>
     </PageFrame>
   )
+}
+
+/**
+ * Checklist の作業結果を、この製品のデータから導く（ONB-2）。Onboarding の模擬のサーバーの作業結果は使わない。
+ * - 最初の顧客：顧客の一覧（権限の模擬のサーバー）に 1 件以上ある
+ * - 既存の顧客の取り込み：処理の状況（System States の模擬のサーバー）に、1 件以上を取り込んだ取り込みがある
+ * - メンバーの招待：組織のメンバー（権限の模擬のサーバー）が 2 人以上いる
+ * 取得の権限がない作業は、作業の権限（customers.edit、members.manage）がなく Checklist の対象にならない。
+ * results が null の間は取得中（Checklist を導かない）。
+ */
+function useChecklistResults({ scope, revision, permissions, route }: PageBodyProps, enabled: boolean) {
+  const scopeKey = scopeKeyOf(scope)
+  const canView = permissions.includes("customers.view")
+  const overview = useBrowseData({
+    query: revision,
+    queryKey: `checklist:${revision}`,
+    scopeKey,
+    enabled: enabled && canView,
+    fetcher: (_, { signal }) => permissionServer.api.fetchOverview(scopeKey, "", { signal }),
+  })
+  const jobs = useBrowseData({
+    query: route.ws,
+    scopeKey,
+    enabled: enabled && canView,
+    fetcher: (ws, { signal }) => systemServer.listJobs(ws, signal),
+  })
+  if (!enabled) return { results: null, error: false }
+  if (!canView) return { results: { account: [], workspace: [] }, error: false }
+  if (overview.status === "error" || jobs.status === "error") return { results: null, error: true }
+  if (!overview.isCurrent || !jobs.isCurrent || !overview.data || !jobs.data) return { results: null, error: false }
+  const workspace: OnboardingTaskId[] = []
+  if (overview.data.customerCount > 0) workspace.push("first-customer")
+  if (jobs.data.some((j) => j.kind === "import" && (j.counts?.succeeded ?? 0) > 0)) workspace.push("import-customers")
+  if ((overview.data.members?.length ?? 0) > 1) workspace.push("invite-members")
+  return { results: { account: [], workspace }, error: false }
 }
 
 function CustomersPage(props: PageBodyProps) {

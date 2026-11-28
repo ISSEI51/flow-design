@@ -50,28 +50,39 @@ export const viewerScope = (v: OnboardingViewer) => `${v.userId}:${v.workspaceId
 // ---------------------------------------------------------------- Getting Started Checklist の接続
 
 /**
- * Checklist の状態をまとめる。
+ * Checklist の状態をまとめる（プレビューの製品側の hook。Registry の部品ではない）。
  * - results を渡した場合は、それを実際の作業結果として使う（統合の検証画面は、製品のデータから作って渡す）。
- *   渡さない場合は api.getResults で取得し、resultsVersion が変わるたびに取得し直す。
+ *   null は、製品のデータを取得している間（Checklist を導かない）。resultsError は、製品のデータを取得できなかった。
+ *   渡さない（undefined）場合は api.getResults で取得し、resultsVersion が変わるたびに取得し直す。
+ * - tasks：対象にする作業の定義。製品の画面にない作業（作業の画面へ移れない作業）を除く場合に渡す。既定はすべての作業。
+ * - pending：Checklist を導けない理由（権限の再確認中など）。渡している間は、前の権限から対象の作業を導かず、理由を示す。
  * - 表示の状態（折りたたみ、非表示）は api に保存する。保存に失敗した場合は、保存されている状態に戻す。
+ *   保存されたかが不明な場合は、保存されている状態を取得し直し、取得が終わるまで「確認しています」と示す。
  */
 export function useGettingStarted({
   viewer,
   api,
   results: externalResults,
+  resultsError = false,
   resultsVersion = 0,
+  tasks = onboardingTaskDefinitions,
+  pending = null,
 }: {
   viewer: OnboardingViewer
   api: OnboardingApi
-  results?: OnboardingTaskResults<OnboardingTaskId>
+  results?: OnboardingTaskResults<OnboardingTaskId> | null
+  resultsError?: boolean
   resultsVersion?: number
+  tasks?: typeof onboardingTaskDefinitions
+  pending?: string | null
 }) {
   const scope = viewerScope(viewer)
+  const external = externalResults !== undefined
   const fetched = useBrowseData({
     query: resultsVersion,
     queryKey: `${scope}|${resultsVersion}`,
     scopeKey: scope,
-    enabled: !externalResults,
+    enabled: !external,
     fetcher: (_, { signal }) => api.getResults(viewer.userId, viewer.workspaceId, { signal }),
   })
   const progress = useBrowseData({
@@ -83,26 +94,29 @@ export function useGettingStarted({
   // 保存中の表示の状態。保存を始めたときのスコープと世代（Ticket）と組で持ち、現在のスコープと世代のものだけを使う
   // （A → B → A の最初の A で始めた保存の値を、戻った A で使い続けない）
   const [override, setOverride] = useState<{ ticket: ScopeTicket; visibility: ChecklistVisibility } | null>(null)
-  const [notice, setNotice] = useState<{ scope: string; text: string } | null>(null)
+  // unknown：保存されたかが不明。since は取得し直す前の取得の時刻（それより後の取得が終わるまで「確認しています」と示す）
+  const [notice, setNotice] = useState<{ scope: string; kind: "failed" | "unknown"; since: number | null } | null>(null)
 
   // 再取得中は、同じスコープの前の結果を使う（useBrowseData は別のスコープのデータを返さない）。
-  const results = externalResults ?? (fetched.status === "error" ? undefined : fetched.data)
+  const results = external ? (resultsError ? undefined : externalResults ?? undefined) : fetched.status === "error" ? undefined : fetched.data
   const visibility = override && guard.isSameScope(override.ticket) ? override.visibility : progress.status === "error" ? undefined : progress.data?.visibility
   const checklist = useMemo(
     () =>
-      results && visibility
+      results && visibility && !pending
         ? deriveChecklist({
-            tasks: onboardingTaskDefinitions,
+            tasks,
             permissions: viewer.permissions,
             audience: viewer.joinedBy === "created" ? "creator" : "invited",
             results,
             visibility,
           })
         : null,
-    [results, visibility, viewer.permissions, viewer.joinedBy]
+    [results, visibility, pending, tasks, viewer.permissions, viewer.joinedBy]
   )
 
   const setVisibility = (next: ChecklistVisibility) => {
+    // Checklist を導けない間（権限の再確認中など）は、表示の状態を変えない
+    if (pending) return
     const ticket = guard.begin("visibility")
     // 前のスコープの描画の関数から呼ばれた場合（無効な Ticket）は、保存を始めない
     if (!guard.isCurrent(ticket)) return
@@ -123,26 +137,41 @@ export function useGettingStarted({
         guard.release(ticket)
         clear()
         if (!isConfirmedFailure(error)) {
-          // 保存されたかがわからない（確定した失敗ではない）。保存されている状態を取得し直して表示する。
+          // 保存されたかがわからない（確定した失敗ではない）。保存されている状態を取得し直す。
+          // 取得し直した結果が届くまでは、表示している状態を保存されている状態と示さない（確認中と示す）。
+          setNotice({ scope, kind: "unknown", since: progress.fetchedAt ?? null })
           progress.reload()
-          setNotice({ scope, text: "表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。" })
         } else {
-          setNotice({ scope, text: "表示の状態を保存できませんでした。もう一度お試しください。" })
+          setNotice({ scope, kind: "failed", since: null })
         }
       }
     )
   }
 
-  const error = (!externalResults && fetched.status === "error") || progress.status === "error"
+  const error = (external ? resultsError : fetched.status === "error") || progress.status === "error"
+  const current = notice?.scope === scope ? notice : null
+  // 保存されたかが不明な後の再取得が終わった（または失敗した）か
+  const rechecked = current?.kind === "unknown" && (progress.status === "error" || (progress.status === "ready" && progress.fetchedAt !== null && progress.fetchedAt !== current.since))
+  const noticeText = !current
+    ? ""
+    : current.kind === "failed"
+      ? "表示の状態を保存できませんでした。もう一度お試しください。"
+      : rechecked
+        ? progress.status === "error" || progress.refreshFailed
+          ? "表示の状態を保存できたかを確認できませんでした。保存されている状態も取得できませんでした。"
+          : "表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。"
+        : "表示の状態を保存できたかを確認しています。"
   return {
     scope,
     checklist,
-    loading: !checklist && !error,
-    error,
-    notice: notice?.scope === scope ? notice.text : "",
+    loading: !checklist && !error && !pending,
+    error: !pending && error,
+    /** Checklist を導けない理由（権限の再確認中など） */
+    pending,
+    notice: noticeText,
     setVisibility,
     retry: () => {
-      if (fetched.status === "error") fetched.reload()
+      if (!external && fetched.status === "error") fetched.reload()
       if (progress.status === "error") progress.reload()
     },
   }
@@ -173,6 +202,12 @@ export function GettingStartedConnected({
     <div className={cn("flex min-w-0 flex-col gap-3 empty:hidden", className)} data-testid="onb-checklist-region">
       {state.error && (
         <DataRegionError title="利用開始の準備を取得できませんでした" description="ほかの機能はそのまま使えます。" onRetry={state.retry} />
+      )}
+      {state.pending && (
+        // 前の権限で対象の作業を導かない（権限の再確認中など）。作業のボタンも示さない
+        <p className="text-ui text-muted-foreground" aria-busy="true" data-testid="onb-checklist-pending">
+          {state.pending}
+        </p>
       )}
       {checklist && (
         <GettingStartedChecklist

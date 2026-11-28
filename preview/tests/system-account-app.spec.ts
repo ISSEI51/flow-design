@@ -947,3 +947,54 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(h1(page)).toHaveText("メンバーと権限")
   })
 })
+
+test.describe("Account app: onboarding checklist (integration review)", () => {
+  test("ONB-2: checklist results come from the product data, not from the onboarding mock; tasks without a product screen are not listed", async ({ page }) => {
+    await signInAs(page, sato)
+    await expect(h1(page)).toHaveText("ホーム")
+    // 佐藤 花子は本社営業部の Checklist を非表示にしている。再表示する
+    await main(page).getByTestId("acct-checklist-show").click()
+    const list = main(page).getByTestId("onb-checklist")
+    await expect(list).toBeVisible()
+    // 顧客（権限の模擬のサーバー）とメンバー（3 人）は製品のデータにある。取り込みは処理の状況にまだない
+    await expect(list.locator("[data-task-id=first-customer]")).toHaveAttribute("data-done", "true")
+    await expect(list.locator("[data-task-id=invite-members]")).toHaveAttribute("data-done", "true")
+    await expect(list.locator("[data-task-id=import-customers]")).not.toHaveAttribute("data-done", "true")
+    // この検証画面には支払い方法の登録とプロフィールの写真の画面がないため、作業として示さない（移れない画面へ案内しない）
+    await expect(list.locator("[data-task-id=set-billing]")).toHaveCount(0)
+    await expect(list.locator("[data-task-id=complete-profile]")).toHaveCount(0)
+    // Onboarding の模擬のサーバーの作業結果は取得しない
+    const resultRequests = await page.evaluate(
+      () => (window as unknown as { __fdSaOnboardingServer: { requests: { kind: string }[] } }).__fdSaOnboardingServer.requests.filter((r) => r.kind === "results").length
+    )
+    expect(resultRequests).toBe(0)
+    // 取り込みの作業は、処理の状況の画面へ移る
+    await list.locator("[data-task-id=import-customers]").getByRole("button").click()
+    await expect(h1(page)).toHaveText("処理の状況")
+  })
+
+  test("ONB-1: while permissions are re-checked after a role change, the checklist is not derived from the previous permissions", async ({ page }) => {
+    await signInAs(page, sato)
+    await main(page).getByTestId("acct-checklist-show").click()
+    await expect(main(page).getByTestId("onb-checklist").locator("[data-task-id=invite-members]")).toBeVisible()
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.setRole("u-sato", "hq", "viewer")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    // 再確認の応答を保留している間：管理者の作業（招待）と作業のボタンを示さず、確認中と示す
+    await expect(main(page).getByTestId("onb-checklist-pending")).toHaveText(/最新の権限を確認しています/)
+    await expect(main(page).getByTestId("onb-checklist")).toHaveCount(0)
+    await expect(main(page).getByTestId("acct-checklist-show")).toHaveCount(0)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 閲覧者には対象の作業がない（0 件は完了と示さない）
+    await expect(main(page).getByTestId("onb-checklist-pending")).toHaveCount(0)
+    await expect(main(page).getByTestId("onb-checklist")).toHaveCount(0)
+    await expect(main(page)).not.toContainText("利用開始の準備が完了しました")
+  })
+})

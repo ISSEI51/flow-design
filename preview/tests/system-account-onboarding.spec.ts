@@ -367,6 +367,24 @@ test.describe("Onboarding: checklist", () => {
     expect((await snapshot(page)).visibility["u-sato:new"]).toBeUndefined()
   })
 
+  test("an unknown save of the display state says it is checking until the saved state has been fetched again", async ({ page }) => {
+    await open(page)
+    const demo = checklistDemo(page)
+    await server(page, (s) => {
+      s.outcomeNext["save-visibility"] = "unknown"
+      s.holdWhen = (r) => r.kind === "progress"
+    })
+    await checklistIn(demo).getByRole("button", { name: "非表示にする" }).click()
+    // 取得し直した結果が届くまでは、表示している状態を「保存されている状態」と示さない
+    await expect.poll(() => heldCount(page)).toBe(1)
+    await expect(demo.getByTestId("onb-checklist-notice")).toHaveText("表示の状態を保存できたかを確認しています。")
+    await server(page, (s) => {
+      s.holdWhen = null
+      return s.releaseHeld()
+    })
+    await expect(demo.getByTestId("onb-checklist-notice")).toHaveText("表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。")
+  })
+
   test("after all tasks are done: a short completion, closable, not shown again", async ({ page }) => {
     await open(page)
     const demo = checklistDemo(page)
