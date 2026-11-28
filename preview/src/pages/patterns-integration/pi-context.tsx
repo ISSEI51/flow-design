@@ -39,6 +39,8 @@ export type PiContextValue = {
   permit: (permission: Permission, component?: "analysis" | "export" | "notifications" | "customers") => Permit
   /** 操作の直前に、最新の権限（access.latest()）で確かめる */
   permitLatest: (permission: Permission) => boolean
+  /** 最新の権限（access.latest()）で、保護された内容を表示してよいか（応答や Toast を出す直前に確かめる） */
+  viewAllowedLatest: () => boolean
   /** 編集中のフォームが、セッションの期限切れのときに入力を渡すための登録先 */
   draftSource: MutableRefObject<null | (() => PiDraft | null)>
   /** 再認証の後に復元すると決めた入力。描画の中では読むだけにし（peek）、commit の後に使い終えたことを知らせる（consume） */
@@ -88,7 +90,7 @@ export function makePermit(access: AccessResult<Permission, never, PiGrants>, co
   }
 }
 
-export function contentAccessOf(access: AccessResult<Permission, never, PiGrants>): PiContextValue["viewAccess"] {
+export function contentAccessOf(access: Parameters<typeof resolveContentAccess<Permission, never>>[0]): PiContextValue["viewAccess"] {
   const content = resolveContentAccess(access, { view: ["view"], edit: ["edit"], sensitivity: "protected", whileUnverified: "hide" })
   return content.mode === "pending" ? "pending" : content.mode === "hidden" ? "denied" : "allowed"
 }

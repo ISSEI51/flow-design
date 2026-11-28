@@ -487,7 +487,7 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
           </div>
 
           {data.refreshFailed && (
-            <DataRegionError variant="warning" title="最新の一覧を取得できませんでした" description="前回取得した時点の一覧を表示しています。再取得するまで、変更の操作はできません。" onRetry={data.reload} />
+            <DataRegionError variant="warning" title="最新の一覧を取得できませんでした" description="前回取得した時点の一覧を表示しています。再試行するまで、変更の操作はできません。" onRetry={data.reload} />
           )}
           <TableScrollArea>
             <DataTable

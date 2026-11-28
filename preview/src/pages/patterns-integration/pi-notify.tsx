@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 
 import { Sheet, SheetBody, SheetContent } from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
@@ -75,6 +75,10 @@ export function NotificationsSheet({ feed, open, onOpenChange }: { feed: Notific
   const headingId = useId()
   const popupRef = useRef<HTMLDivElement>(null)
   const guard = useScopeGuard(scope)
+  const feedRef = useRef(feed)
+  useLayoutEffect(() => {
+    feedRef.current = feed
+  })
   const [notice, setNotice] = useState<string | null>(null)
   const w = ws === "hq" ? null : ws
 
@@ -96,7 +100,9 @@ export function NotificationsSheet({ feed, open, onOpenChange }: { feed: Notific
     const snapshot = guard.capture()
     nav.navigate(piHref("customer", { ws: w, id: item.customerId }), {
       onNavigated: () => {
-        if (!item.read && guard.isCurrent(snapshot)) feed.setRead(item.id, true)
+        // 移動の後の最新の一覧の状態で確かめる（取得中や取得の失敗の間は既読にしない）
+        const latest = feedRef.current
+        if (!item.read && guard.isCurrent(snapshot) && latest.canOperate) latest.setRead(item.id, true)
       },
     })
   }

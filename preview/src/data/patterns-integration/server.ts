@@ -309,9 +309,13 @@ export async function saveCustomer(ws: string, id: string, values: CustomerValue
     if (!target) return
     Object.assign(target, values, { version: target.version + 1 })
   }
+  const requestUser = sessionUser()
   await receive("save", ws, id, values)
+  // 要求を受け付けたときのセッションで処理する。セッションが変わった（期限切れ、別の利用者でのログイン）場合は処理しない
+  if (currentToken() !== token)
+    return { status: "failed", formError: "ログインし直したため、この保存は行っていません。もう一度保存してください。" }
   if (!target) return { status: "failed", formError: "顧客が削除されたため、保存できませんでした。" }
-  if (mode === "forbidden" || !can(sessionUser(), ws, "edit"))
+  if (mode === "forbidden" || !can(requestUser, ws, "edit"))
     return { status: "failed", formError: "この顧客を編集する権限がありません。管理者に権限を確認してください。" }
   if (mode === "failed") return { status: "failed", formError: "サーバーで問題が起きたため、保存できませんでした。もう一度保存してください。" }
   if (mode === "invalid") return { status: "invalid", fieldErrors: { email: "このメールアドレスは別の顧客が使っています" } }
