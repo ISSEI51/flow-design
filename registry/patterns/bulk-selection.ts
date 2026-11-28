@@ -601,6 +601,44 @@ function useBulkAction<Q = unknown, P = unknown>({
     )
   }, [summary, start])
 
+  /**
+   * 結果が不明な行を、製品が照会した結果（現在の認可で、サーバーの状態を確かめた結果）で解く。
+   * succeeded は完了に、failed は確定した失敗に移す（retryFailed の対象になる。retryable: false は除く）。
+   * 照会しても確かめられなかった行は渡さない（結果が不明のまま残す）。結果が不明な行を再実行するために使わない。
+   * from：照会を始めたときに capture() で取った Snapshot。スコープか世代が異なる場合（照会の間にワークスペースが変わった、
+   * A → B → A の最初の A の照会）は反映しない。戻り値は反映した行の数。
+   */
+  const resolveUnknown = React.useCallback(
+    (results: readonly { id: string; outcome: "succeeded" | "failed"; message?: string; retryable?: boolean }[], { from }: { from?: ScopeSnapshot } = {}) => {
+      if (!guard.isCurrent(from ?? guard.capture())) return 0
+      const current = summaryState && summaryState.scope === scopeNow.current ? summaryState.value : null
+      if (!current) return 0
+      const byId = new Map(results.map((r) => [r.id, r]))
+      const resolved = current.unknown.filter((i) => byId.has(i.id))
+      if (resolved.length === 0) return 0
+      const toItem = (i: BulkItemResult): BulkItemResult => {
+        const r = byId.get(i.id)!
+        return { id: i.id, outcome: r.outcome, ...(r.message !== undefined && { message: r.message }), ...(r.retryable !== undefined && { retryable: r.retryable }) }
+      }
+      const moved = resolved.map(toItem)
+      setSummary((prev) =>
+        prev && prev.value === current
+          ? {
+              scope: prev.scope,
+              value: {
+                ...current,
+                succeeded: [...current.succeeded, ...moved.filter((i) => i.outcome === "succeeded")],
+                failed: [...current.failed, ...moved.filter((i) => i.outcome === "failed")],
+                unknown: current.unknown.filter((i) => !byId.has(i.id)),
+              },
+            }
+          : prev
+      )
+      return resolved.length
+    },
+    [guard, summaryState]
+  )
+
   return {
     /** 実行中の操作と対象 */
     running,
@@ -613,6 +651,8 @@ function useBulkAction<Q = unknown, P = unknown>({
     capture: guard.capture,
     retryFailed,
     /** 結果の表示を閉じる */
+    /** 結果が不明な行を、照会の結果で解く（上の resolveUnknown） */
+    resolveUnknown,
     dismiss: () => setSummary(null),
     /** 実行の待機の中止を要求する（signal を中止する）。サーバーでの処理の取り消しは保証しない。処理済みの行の扱いは製品の run が返す */
     cancel: () => controller.current?.abort(),

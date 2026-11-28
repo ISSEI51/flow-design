@@ -167,6 +167,7 @@
 - `useBrowseQuery` は、条件を変えるたびに新しいオブジェクトを作るため、`snapshot()` が持つ `query` は、その後の条件の変更で変わらない。
 - 製品が独自の値（書き換えるオブジェクト）を使う場合は、`start` に渡す前に、製品がスナップショットを作る（`structuredClone` など）。
 - 再試行（`retryFailed`）は、最初の実行の `summary.payload` と、最初の対象の `scope`、`selectionRevision` を使う。
+- 結果が不明な行は、製品が現在の認可でサーバーの状態を照会し、その結果を `resolveUnknown(results, { from })` で反映する（Patterns Integration Review で追加）。`succeeded` は完了、`failed` は確定した失敗に移し、`retryFailed` の対象にする。確かめられなかった行は渡さず、不明のまま残す。`from` は照会を始めたときの `capture()` で、照会の間にスコープが変わった場合（A → B → A を含む）は反映しない。結果が不明な行を、照会せずに再実行しない。追加の理由：照会の結果を表す状態と、処理されていなかった行の再試行を、製品ごとに別に作る必要があった（横断の検証画面の S13）。
 
 - `queryKey` には、ページ番号を含めない（ページを移動しても全件の選択を解除しない）。検索語とフィルターから作る。
 - 要求そのものが失敗した場合は、製品が `BulkRequestError(message, "failed" | "unknown")` を投げる。ID で選んだ対象は、その結果を行ごとに割り当てる。全件の選択では、対象の ID がわからないため、`requestError` として扱う。

@@ -87,6 +87,56 @@ test.describe("shared hooks: uncommitted renders and stale closures", { tag: "@w
     await expect.poll(async () => (await calls(page)).length).toBe(1)
   })
 
+  test("bulk action: unknown rows are resolved only from a lookup started in the current scope", async ({ page }) => {
+    await open(page, "bulk")
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      void (window as any).__h.hook("bulk").start("delete", { kind: "ids", ids: ["r1", "r2", "r3"], scope: "A" }, null)
+    })
+    await expect.poll(async () => (await calls(page)).length).toBe(1)
+    const [first] = await calls(page)
+    await h(page, "resolve", first.id, [
+      { id: "r1", outcome: "unknown" },
+      { id: "r2", outcome: "unknown" },
+      { id: "r3", outcome: "unknown" },
+    ])
+    await settle(page)
+    type Summary = { succeeded: { id: string }[]; failed: { id: string }[]; unknown: { id: string }[] }
+    const summary = () =>
+      page.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const s = (window as any).__h.hook("bulk").summary as Summary
+        return { succeeded: s.succeeded.map((i) => i.id), failed: s.failed.map((i) => i.id), unknown: s.unknown.map((i) => i.id) }
+      })
+    expect(await summary()).toEqual({ succeeded: [], failed: [], unknown: ["r1", "r2", "r3"] })
+    // 照会を始めたときの Snapshot。照会の結果は、行ごとに完了と確定した失敗へ移す。確かめられなかった行は不明のまま
+    const resolved = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const b = (window as any).__h.hook("bulk")
+      const from = b.capture()
+      return b.resolveUnknown([{ id: "r1", outcome: "succeeded" }, { id: "r2", outcome: "failed", message: "処理されていませんでした" }], { from })
+    })
+    expect(resolved).toBe(2)
+    await settle(page)
+    expect(await summary()).toEqual({ succeeded: ["r1"], failed: ["r2"], unknown: ["r3"] })
+    // 照会の間にスコープが変わった（A → B → A）場合は、最初の A で取った Snapshot の照会の結果を反映しない
+    const old = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any
+      w.__oldFrom = w.__h.hook("bulk").capture()
+      return true
+    })
+    expect(old).toBe(true)
+    await setScope(page, "B")
+    await setScope(page, "A")
+    const stale = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any
+      return w.__h.hook("bulk").resolveUnknown([{ id: "r3", outcome: "succeeded" }], { from: w.__oldFrom })
+    })
+    expect(stale).toBe(0)
+  })
+
   test("notification feed: a read update from the shown scope uses that scope's updateRead while a transition is held", async ({ page }) => {
     await open(page, "feed")
     await expect.poll(async () => (await dom<{ items: string[] }>(page, "feed")).items).toEqual(["A-n1"])
