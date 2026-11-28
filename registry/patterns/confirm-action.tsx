@@ -324,7 +324,9 @@ function useUndoableAction({ windowMs = 10_000, scopeKey }: { windowMs?: number;
     guardRef.current = guard
   })
 
-  React.useEffect(() => {
+  // スコープの変更の commit の時点で、前のスコープの「元に戻す」の通知を閉じる（passive effect まで待つと、
+  // 新しいスコープの最初の描画の後に、前のスコープの通知が 1 回の描画の間残る）
+  React.useLayoutEffect(() => {
     if (scopeRef.current === scopeKey) return
     scopeRef.current = scopeKey
     // 前のスコープの「元に戻す」の通知を閉じる
