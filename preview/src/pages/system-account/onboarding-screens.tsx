@@ -960,7 +960,7 @@ function ImportScreen({ viewer, api, onChanged, onDone, Title }: { viewer: Onboa
         <ActionButton
           actions={actions}
           actionKey="import"
-          data-testid="onb-import-run"
+          testId="onb-import-run"
           onRun={() =>
             actions.run("import", (ctx) => api.importCustomers(viewer.workspaceId, ctx), {
               success: (n) => `${n} 件を取り込みました。`,
