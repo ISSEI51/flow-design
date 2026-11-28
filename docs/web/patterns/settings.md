@@ -212,7 +212,8 @@
 
 - 4 つの層は `resolveDeliveryChannel`（`setting-resolve.ts`）で求める。必須の通知は組織のポリシーより優先する。`delivers` は、製品が配信を試み、かつ端末の許可があること（配信の可否）である。
 - 配信されたことと、既読になったことを混同しない。メールやプッシュ通知で届いても、通知は既読にならない（既読は Notifications の通知の状態が持つ）。設定の画面に「メールやプッシュ通知で届いても、通知は既読になりません。既読になるのは、アプリ内で通知を開いたときです。」を示す。
-- 結果が不明な項目は、自動で取得し直して表示する（取得は副作用のない要求。保存は送り直さない）。結果が不明だったことの文は、次の変更まで残す。
+- 保存の状態の文と確認の方法は、個人の設定と同じにする（SET-6）。文は `useInstantSettings` の文（`statusOf(key).message`）の前に項目の名前を付ける（「新しい機能のお知らせ：アプリ内の設定は、保存できなかったため、元の設定に戻しました。」）。結果が不明な項目と競合の項目は、自動では取得し直さず、項目の下の「確認する」（`aria-label`「{項目}を確認する」）で利用者がサーバーの値を取得する（`verify(key)`。保存は送り直さない）。確認するまで、その項目は変更できない（`canChange`）。権限不足（`forbidden`、`cause: "forbidden"` の結果の不明を含む）は、確定した失敗の文ではなく権限の文（warning）で示し、`onPermissionDenied` で製品が最新の権限を取り直す（統合の検証画面は `access.reload`）。
+- タイムゾーンの正本は個人の設定（表示の設定の `timezone`）だけにする（SET-4）。通知を控える時間の判定と表示は、そのタイムゾーンを使う。プレビューでは、通知の模擬のサーバー（`notifications-server.ts`）が通知の設定を返すときに、Settings の模擬のサーバーの `display.timezone` を読む（通知の設定に複製を持たない）。以前は、通知の設定が別に `Asia/Tokyo` を持ち、個人の設定でアメリカ（ロサンゼルス）に変えても、通知を控える時間は `Asia/Tokyo` で示していた。
 - 統合の検証画面では、Settings の「通知を止める時間帯」（`settings-server.ts` の表示の設定）と、通知の設定の「通知を控える時間」（`notifications-server.ts`）が、同じ意味の設定を別の保存先に持っていた。`SettingsArea` に `notifications` を渡した場合は、Settings の「通知を止める時間帯」を置かず、通知の設定の方だけを示す（「統合時に確認する事項」）。
 
 ### 設定の検索
@@ -436,7 +437,7 @@ const form = useSettingsForm({
 | 変更なしの保存 | 明示的な保存のフォームで送らない（`requireChanges`） | Forms & Workflows の `requireChanges` と同じ規則 |
 | 戻す先が未確認の失敗 | 前の要求の結果が不明か競合の項目の確定した失敗は、戻さずに結果の不明（`reason: "unconfirmed"`）として示す。分類は `cause` に残す | 戻す先（最後に確認できた値）が、サーバーの現在の値と一致するとは限らない。「元の設定に戻しました」と示すと、サーバーの値と異なる値を確定したものとして示す。別の状態を増やさず、確認の操作（「確認する」）が既にある結果の不明にした |
 | 版の照合の直列化 | `versions` を渡した場合だけ、項目ごとに直列にする | 版の照合で並行に送ると、利用者自身の連続した変更が競合になる。版の照合を使わない場合は、従来どおり並行に送り、最新の応答だけを反映する（互換） |
-| 通知の設定の結果が不明 | 自動で取得し直し、結果が不明だった文を次の変更まで残す | Notifications の初期実装の挙動（取得し直す）を保った。保存は送り直さない |
+| 通知の設定の結果が不明 | 自動では取得し直さず、「確認する」で取得する（Patterns Integration Review の 2 回目で変更。SET-6） | 変更の理由：11.3「通知設定も同じ方針に従う」。個人の設定は「確認する」を待ち、通知の設定は自動で取得し直していたため、同じ「保存できたかを確認できませんでした」でも操作が異なっていた。影響：通知の設定で結果が不明な場合、利用者が「確認する」を押すまで、その項目は変更できず、サーバーの値は表示されない（検品の `save failure restores the switch…` と `settings: failure and unknown results are announced…` の期待値を変えた）。代替案：個人の設定も自動で取得し直す（取得の失敗が続いた場合の表示と、利用者の操作と無関係に表示が変わる点を、Settings の確定した仕様で避けていたため採らない） |
 
 ## 統合時に確認する事項
 
@@ -455,8 +456,9 @@ const form = useSettingsForm({
 | 版と競合（Forms & Workflows） | F&W には版の番号、`If-Match`、409 の扱いがない（同時の編集は `invalid` の一部）。Settings の `conflict` と版の照合を、F&W の明示的な保存にも使うかを判断する |
 | Authentication | パスワードの変更の Dialog とアカウントの削除の再認証は、`Input type="password"` の最小限の例。Password Input と再認証の手順に置き換える |
 | Permission States | メンバーのロールの変更は扱っていない（一覧と招待だけ）。変更できない理由の表示（`settingAccess`）と、Restricted Action の表示を合わせる |
-| 通知の設定の保存の方針（SET-6） | 未実施。`NotificationSettingsMatrix` の即時保存は、`verify`、`messages`、`onPermissionDenied` を Settings の画面と同じ方針で渡していない（Patterns Integration Review の監査の指摘。担当の時間の都合で残した） |
-| タイムゾーンの正本（SET-4） | 未実施。タイムゾーンの選択肢と表示の値の正本を 1 つにする指摘（監査）。担当の時間の都合で残した |
+| 通知の設定の保存の方針（SET-6） | 実施（Patterns Integration Review の 2 回目）。「確認する」、`useInstantSettings` の文、権限不足の `onPermissionDenied` を個人の設定と同じにした（「通知の設定」の節） |
+| タイムゾーンの正本（SET-4） | 実施（Patterns Integration Review の 2 回目）。正本は個人の設定の `timezone`（「通知の設定」の節）。検品：`system-account-app.spec.ts` の `SET-4` |
+| 通知を止める時間帯の正本 | 未実施。Settings の「通知を止める時間帯」（`settings-server.ts` の `quietEnabled`、`quietStart`、`quietEnd`）と通知の設定の「通知を控える時間」（`notifications-server.ts` の `quietHours`）は、別の保存先のまま。統合の検証画面は Settings の方を置かない（`notifications` を渡す）ため、画面に 2 つは並ばない。保存先を 1 つにするには、両方の模擬のサーバーの保存と版を結ぶ必要があり、SET-4 の範囲を超えるため残した |
 | Notifications | 「通知」のカテゴリの `notifications` に、通知の種類 × 受け取り方の部品（`NotificationSettingsMatrix`）を差し込む。部品は `settings-notifications.tsx` に移し、`notification-screens.tsx` から再び export している。通知を止める時間帯は、Settings（`settings-server.ts`）と Notifications（`notifications-server.ts`）の 2 つの保存先があるため、製品では 1 つの保存先にする |
 | System States | 保存の結果が不明な場合の表示（「確認する」）と、オフラインからの復帰の確認の表示を合わせる。Patterns Integration Review の時点：統合の検証画面では、接続を確認できない間は保存を送らない（`useConnectedApi`）。回復の後の取得し直しは、入力中のフォームを作り直すため行っていない |
 | Switch（Components） | [switch.md](../components/switch.md) の「保存中は disabled」の記述と、この資料の判断（連続した変更を受け付ける）を合わせる |

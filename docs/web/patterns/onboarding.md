@@ -30,7 +30,7 @@
 | 要素 | 部品 | 内容 |
 | --- | --- | --- |
 | 初回の画面の決定 | `resolveFirstScreen`（`onboarding.ts`） | `product`、`accept-invitation`、`create-workspace`、`required-setup` のどれかを返す。歓迎の画面は返さない |
-| 組織の作成 | プレビューの `CreateOrganizationSetup`（既存の `Field`、`Input`、`RadioGroup`、`Textarea`、`Button`、`Alert`） | 最小限の手順の画面。Multi-step Workflow の統合後に置き換える（「統合時に確認する事項」） |
+| 組織の作成 | プレビューの `CreateOrganizationSetup`（Multi-step Workflow の `useStepFlow`、`Stepper`、Create & Edit の `useFormState`、`handleSubmit`、Unsaved Changes の `useUnsavedChanges`、`DiscardChangesAlert`） | Patterns Integration Review で、独自の手順の表示から置き換えた（「統合時に確認する事項」） |
 | Getting Started Checklist | `deriveChecklist`（`onboarding.ts`）、`GettingStartedChecklist`（`getting-started.tsx`） | 完了した件数、進捗、作業の画面への移動、折りたたみ、非表示、すべて完了の表示 |
 | 必須の条件 | `deriveRequirements`（`onboarding.ts`。`deriveChecklist` の `requirements` と同じ値） | Checklist の表示の対象とは別に、すべての作業の定義と作業結果から、必須の作業の完了を判定する |
 | 初回利用の Empty State | 既存の `Empty`、`getBrowseViewState`（Data Browsing） | 何ができるか、最初に何をするか、どこから操作するか |
@@ -81,10 +81,13 @@
 
 ### 組織の作成
 
-- 手順ごとに「手順 2 / 3・任意」のように、位置と必須・任意を文字で示す。必須の項目は組織名だけにする。
+- 位置は簡易の `Stepper`（`layout="compact"`、`currentLabel="hidden"`）の「ステップ 2 / 3」で示し、手順の名前は直後の見出し（「メンバーを招待」）で示す（同じ名前を続けて示さない。支援技術には、Stepper の番号の後に「（現在のステップ：メンバーを招待（任意））」を伝える）。必須と任意は、見出しの直後の文（「必須の手順です。」「任意の手順です。スキップしても、あとで設定できます。」）と、手順の一覧の名前（「メンバーを招待（任意）」）で示す。必須の項目は組織名だけにする。
+- 「次へ」は、現在の手順の必須の項目と検証が完了するまで押せない（Focusable Disabled。`aria-describedby` で「あと 1 項目を入力すると次へ進めます」などの理由を示す）。1 行の入力欄の Enter で次へを求めた場合は、その手順の項目のエラーを示し、最初の問題の項目へフォーカスを移す。メールアドレスの形式の誤りは、入力欄からフォーカスを外すと示す。
+- 完了した手順へは、簡易の Stepper の「すべての手順」から直接戻れる。
 - 任意の手順は「スキップ」で飛ばせる。入力がないまま「次へ」を押した場合もスキップとして扱う。スキップした作業（メンバーの招待）は、Checklist に作業として残る。
 - 「戻る」で前の手順に戻っても、入力は残る。
-- 途中の入力は、手順を移るたびに製品が保存する（プレビューでは模擬のサーバー）。画面を閉じた、再読み込みした、別の端末で開いた場合は、続きの手順から再開し、「前回の入力の続きから再開しています」と示す。最初から入力し直すこともできる。
+- 途中の入力は、手順を移るたびに製品が保存する（プレビューでは模擬のサーバー）。画面を閉じた、再読み込みした、別の端末で開いた場合は、続きの手順から再開し、「前回の入力の続きから再開しています」と示す。最初から入力し直すこともできる（保存した途中の入力も削除するため、`DiscardChangesAlert` で確かめる。作成の結果が不明な間、作成中、確認中、途中の入力の保存中は押せない。新しい作成の要求の ID で、同じ組織を二重に作成しないため）。
+- 前回の手順の保存の後に入力した内容（手順を移る前の入力）と、結果が不明な作成は、Unsaved Changes（`useUnsavedChanges`）で守る。プレビューの「画面を閉じる（中断）」は `confirmNavigation` で確かめ、再読み込みとタブを閉じる操作は `beforeunload` で確かめる。途中の入力の保存中に閉じた場合は、保存が終わるまで待つ。作成の要求の実行中は確認の対象にしない（作成の要求の ID で二重に作成されず、閉じた後の応答は反映しない。作成されなかった場合は保存した途中の入力から再開できる）。
 - 分岐で不要になった手順（「自分だけで使う」を選んだ場合の招待）は、手順の数から除き、入力していた内容を送信しない。
 - 手順を移ったら、その手順の見出しにフォーカスを移す。
 - 作成の要求は二重に送らない（実行中は受け付けない。要求の ID を付け、同じ ID は 1 回だけ処理する）。
@@ -203,7 +206,7 @@
 - 画面に示す実行中の状態（ボタンの Loading）と、保存中の表示の状態（Checklist の表示・非表示）も、処理を始めたときの Ticket と組で持ち、`isSameScope(ticket)` が `true` のものだけを使う。処理が終わったら、スコープにかかわらず、その Ticket の記録を外す。v0.1 の最終調整までは `scopeKey` の文字列と組で持っていたため、A → B → A の最初の A で始めた操作が、戻った A で「実行中」のまま残った（その応答は最初の A の世代のため反映せず、記録を消す処理にも届かなかった）。
 - 前のスコープの描画の関数から呼ばれた場合（`useScopeGuard` の無効な Ticket）は、要求を送らない（プレビューの `useActions` と表示の状態の保存）。
 - 保存の要求（表示の状態、閉じた案内、途中の入力、作成）は、画面を閉じても中止しない（中止しても、サーバーで処理されることがあるため）。結果は、開始したときのスコープの最新の要求にだけ反映し、アンマウントの後は反映しない。
-- 表示の状態の保存に失敗した場合は、保存されている状態に戻して知らせる。結果が不明な場合は、保存されている状態を取得し直す。
+- 表示の状態の保存に失敗した場合は、保存されている状態に戻して知らせる。結果が不明な場合は、保存されている状態を取得し直す。取得し直した結果が届くまでは「表示の状態を保存できたかを確認しています。」と示し、届いた後に「表示の状態を保存できたかを確認できませんでした。保存されている状態を表示しています。」と示す（取得も失敗した場合は、保存されている状態も取得できなかったと示す）。以前は、取得の応答の前から「保存されている状態を表示しています」と示していた（ONB-4）。
 - 作業の変更の操作の結果が不明な場合は、操作ごとに「確認が必要」（要求の ID）を持ち、確認が終わるまで同じ操作を実行しない（プレビューの `useActions`）。確認が必要な状態も、開始したときのスコープの中だけで持つ。
 
 ### deriveChecklist の値
@@ -314,8 +317,8 @@ const restricted = trialEnded && !checklist.requirementsMet
 
 | 部品（プレビュー） | 内容 |
 | --- | --- |
-| `CreateOrganizationSetup` | 組織の作成（必須と任意、スキップ、戻る、中断と再開、分岐、失敗と結果の不明） |
-| `useGettingStarted`、`GettingStartedConnected` | Checklist の接続（実際の作業結果、表示の状態の保存、非表示の後の必須の作業の Alert） |
+| `CreateOrganizationSetup` | 組織の作成（必須と任意、スキップ、戻る、中断と再開、分岐、失敗と結果の不明）。Multi-step Workflow と Unsaved Changes の部品で作る |
+| `useGettingStarted`、`GettingStartedConnected` | Checklist の接続（実際の作業結果、表示の状態の保存、非表示の後の必須の作業の Alert）。プレビューの製品側の hook で、Registry の部品ではない（模擬の API と作業の定義に依存するため）。Registry の部品は `deriveChecklist`（`onboarding.ts`）と `GettingStartedChecklist`（`getting-started.tsx`） |
 | `FirstUseEmptyState` | 初回利用の Empty State（未登録、検索結果 0件、取得失敗） |
 | `useDismissedHelp`、`CustomersSearchHelp` | Contextual Help の例（閉じた状態の取得と保存） |
 | `InvitedMemberStart` | 招待されたメンバーの利用開始 |
@@ -353,23 +356,33 @@ const restricted = trialEnded && !checklist.requirementsMet
 
 ## 統合時に確認する事項
 
-この節を書いた時点（v0.1）では、Forms & Workflows は未統合だった（`origin/feat/forms-and-workflows-patterns`、確認した版は 40df108）。その後 main に統合され、このブランチに取り込んだ（system-and-account.md の `b5ea769`）。Patterns Integration Review（2026-11-28）の時点の状況：顧客の登録の Sheet の破棄の確認は `DiscardChangesAlert` に置き換えた。組織の作成（`CreateOrganizationSetup`）の Multi-step Workflow への置き換えは行っていない（`step-flow.ts`、`stepper.tsx`、`form-state.ts` を別の担当が並行して変更しており、API の確定を待つため。下の手順は、置き換えの手順として残す）。組織の作成の手順の位置の表示は「手順 n / m・必須」「任意」のまま、必須の手順と任意の手順を区別して示している。
+この節を書いた時点（v0.1）では、Forms & Workflows は未統合だった（`origin/feat/forms-and-workflows-patterns`、確認した版は 40df108）。その後 main に統合され、このブランチに取り込んだ（system-and-account.md の `b5ea769`）。Patterns Integration Review（2026-11-28）で、顧客の登録の Sheet の破棄の確認を `DiscardChangesAlert` に、組織の作成（`CreateOrganizationSetup`）を Multi-step Workflow の部品に置き換えた。
 
-- **Multi-step Workflow（`registry/patterns/step-flow.ts` の `useStepFlow`、`stepper.tsx` の `Stepper`）**：組織の作成（`CreateOrganizationSetup`）を次のように置き換える。
-  - 手順の並びと移動：`setupStepsOf` と `SetupDraft.step`、`moveTo`、`back` を、`useStepFlow({ steps, isComplete, initial })` の `next`、`back`、`goTo` に置き換える。`steps` には現在の条件で必要な手順だけを渡す（「自分だけで使う」では招待の手順を除く）。表示中の手順が不要になった場合の移動先は、現在の `steps.includes(draft.step) ? draft.step : "data"` を廃止し、`useStepFlow` の規則（同じ位置、手前に未完了があればそこへ）に合わせる。
-  - 位置の表示：`onb-setup-position` の「手順 2 / 3・任意」を `Stepper` に置き換える。`StepDefinition` は `id` と `label` だけで、必須と任意の区別を持たないため、「任意」の示し方（`label` に含めるか、手順の見出しの近くに残すか）を統合時に決める。
-  - スキップ：`useStepFlow` にはスキップの概念がない。任意の手順のスキップ（`SetupDraft.skipped`、入力がないまま「次へ」を押した場合もスキップ）は、Onboarding 側で `isComplete` を `true` とし、スキップした手順の値を送信から除く形で残す。スキップした作業が Checklist に残ることは変えない。
-  - 入力の値と送信の対象：`values` と `parseInvites` による招待の除外を、`useFormState` と項目の `active`（分岐で不要になった項目を送信と検証から除き、値は残す）に置き換える。
-  - 途中の入力と再開：`SetupDraft` の `step` を `flow.snapshot()`（`current`、`reached`、`completed`）に置き換え、再開は `flow.restore(snapshot)` と `form.reset(values)` で行う。再開の時点の権限と選択肢で、到達していた手順を確かめ直す（`form.reveal`）。
-  - 最終の送信：`create` を `handleSubmit` に置き換え、確定した失敗は `FormSaveError`（`failed`）で返す。作成の要求の ID（`SetupDraft.requestId`）、結果が不明な場合の「作成されたかを確認する」（`findCreated`）、二重の実行の防止は保つ。
-  - 置き換えの後も保つもの：手順の見出しへのフォーカス（`useStepFlow` の `headingRef`）、作成の後に成功の画面を挟まないこと、アンマウントと利用者の変更の後の応答を反映しないこと（`useScopeGuard`）。
-- **Create & Edit、Unsaved Changes（`unsaved-changes.tsx` の `useUnsavedChanges`、`DiscardChangesAlert`）**：顧客の登録の Sheet の `unsavedChanges` とプレビューの `DiscardAlert` を置き換える（Patterns Integration Review で `DiscardChangesAlert` に置き換えた。`useUnsavedChanges` への登録は未実施）。組織の作成の「画面を閉じる」も、手順の中の保存していない入力がある場合は Unsaved Changes で確かめる（現在は手順の境界でだけ保存し、閉じると現在の手順の入力は失われる）。
+- **Multi-step Workflow（`useStepFlow`、`Stepper`）、Create & Edit（`useFormState`、`handleSubmit`）、Unsaved Changes（`useUnsavedChanges`、`DiscardChangesAlert`）**：組織の作成を次のように置き換えた（Patterns Integration Review の 2 回目、`fix/pi-system2`）。
+  - 手順の並びと移動：`setupStepsOf` は `StepDefinition` の配列を返し、`useStepFlow({ steps, isComplete, initial })` に渡す。独自の `moveTo` と、表示中の手順が不要になった場合の `steps.includes(draft.step) ? draft.step : "data"` は廃止し、`useStepFlow` の規則に合わせた。`isComplete` は、手順の項目が `form.blockers` に含まれないこと。
+  - 入力の値と送信の対象：`useFormState` の 1 つのフォームで、組織名、使い方、招待、データの始め方と `skipInvite`（任意の招待の手順をスキップした）を持つ。招待の項目は `active: usage === "team" && !skipInvite` で、自分だけで使う場合とスキップした場合に検証と送信から除く（値は残す）。スキップと、入力がないままの「次へ」は `skipInvite` を変えた後の描画で進む。スキップした後に招待を入力し直すと、送信の対象に戻す。
+  - 位置の表示：「手順 n / m・必須」を、簡易の `Stepper`（`currentLabel="hidden"`）と、見出しの直後の必須・任意の文に置き換えた（上の「組織の作成」）。`StepDefinition` に必須の区別がないため、任意の手順の `label` に「（任意）」を含めた。
+  - 途中の入力と再開：模擬のサーバーの `SetupDraft`（`step`、`values`、`skipped`、`requestId`）は変えていない。手順を移った後に、その時点の値を保存し、保存できた値を `form.markSaved` で基準値にする。再開では、下書きの `step` から `initial`（`current`、`reached`、手前の手順を `completed`）を作る。フォームは利用者と作成の要求の ID ごとに作り直す（`key`。新しいスコープは `initialValues` から始める）。
+  - 最終の送信：`handleSubmit` で二重の実行を防ぐ。確定した失敗（`MockRequestError`）は `failed`、それ以外の例外は `unknown`。`unknown` の間は `handleSubmit` が送信しない。「作成されたかを確認する」（`findCreated`）の結果を `form.resolveUnknown` で反映する。作成の後の移動は `onSuccess`（世代が変わっていない場合だけ呼ばれる）で行い、閉じた後の応答では移動しない。
+  - 保ったもの：手順の見出しへのフォーカス（`flow.headingRef`。最初から入力し直した後も見出しへ移す）、作成の要求の ID、作成の後に成功の画面を挟まないこと、必須の手順と任意の手順の区別、簡易の表示で手順の名前と見出しを重ねないこと。
+  - 確定した仕様の変更（v0.1 の確定候補からの変更）：
+    | 変更 | 理由 | 影響 | 検討した代替案 |
+    | --- | --- | --- | --- |
+    | 「次へ」を押してからエラーを示す動作を、完了するまで「次へ」を押せない動作（Focusable Disabled と理由の文、Enter でのエラーの表示）に変えた | Multi-step Workflow の確定した規則（「未完了の次へを押させてからエラーを示す」はアンチパターン）に合わせる | 組織名が空の間とメールアドレスの形式が誤っている間は、「次へ」を押せない。検品の `required vs optional, validation…` の期待値を変えた | 独自の検証を残す（Forms & Workflows と操作が異なるため採らない） |
+    | 位置の表示を「手順 n / m・必須」から「ステップ n / m」（Stepper）と必須・任意の文に変えた | 正式な Stepper の文言に合わせ、完了した手順への直接の移動（「すべての手順」）を加える | 検品の `onb-setup-position` を `onb-setup-stepper` と `onb-setup-requirement` に変えた | Stepper の横に「必須」の文字を加える API を足す（Registry の API を増やす利益が小さいため採らない） |
+    | 「最初から入力し直す」を確認の後にし、作成の結果が不明な間は押せないようにした | 以前は確認なしで保存した途中の入力を削除し、結果が不明な状態を解いて新しい要求の ID を作っていた。サーバーで作成されていた場合に、同じ組織を二重に作成できた | 最初から入力し直す前に `DiscardChangesAlert` が開く | 押せる状態のまま、新しい要求の ID を作らない（入力し直した内容を前の要求の ID で送ると、前の結果が返るため採らない） |
+    | 「画面を閉じる」で、前回の手順の保存の後の入力を確かめるようにした | 以前は確認なしに閉じ、現在の手順の入力が失われていた | 入力した直後に閉じると「変更を破棄しますか？」が開く | 閉じる前に下書きを自動で保存する（保存の失敗と結果の不明の扱いが増えるため、この例では採らない） |
+- **Create & Edit、Unsaved Changes**：顧客の登録の Sheet は `DiscardChangesAlert` を使う（`useUnsavedChanges` への登録は未実施。Sheet を閉じる操作の確認だけ）。
 - **Import & Export（`import-review.tsx` の `ImportResultSummary`、`importOutcome`）**：「既存の顧客を取り込む」の画面は、模擬の CSV を取り込むだけの例である。統合後は Import & Export の画面へ移るようにし、完了は取り込みの結果（成功した件数が 1 件以上）で判定する。
 - **即時の保存（`save-modes.ts` の `useInstantSave`）**：Checklist の表示の状態の保存（`useGettingStarted` の `setVisibility`）は、即時の保存と同じ性質（保存中、失敗、結果が不明、確認）を持つ。統合後に `useInstantSave` と比べ、共通化に価値がある場合だけ置き換える。世代の管理（`useScopeGuard`）と責務が重なる箇所も、統合後に比べる。
 - **Authentication**：`resolveFirstScreen` の前後の遷移（認証の後の戻り先、多要素認証の設定の画面）を [authentication.md](authentication.md) と合わせる。
 - **Settings**：初期値（表示言語、タイムゾーン、組織の標準）と、利用開始の後に変える画面を [settings.md](settings.md) と合わせる。
-- **Permission States**：権限のない作業を表示しない判定（作業の `permission`）と、権限が変わった直後の描画を [permission-states.md](permission-states.md) と合わせる。権限の再確認中（`refreshing`、`stale`）に Checklist の対象を前の権限で導かないこと。
-- **統合の検証画面**：`OnboardingViewer`（利用者、組織、ロールの権限、`joinedBy`）を現在の利用者から作り、`useGettingStarted` の `results` に製品のデータから作った作業結果を渡す。必須の条件による利用の制限を示す場合は `requirementsMet` を使う。
+- **Permission States**：権限のない作業を表示しない判定（作業の `permission`）と、権限が変わった直後の描画を [permission-states.md](permission-states.md) と合わせる。権限の再確認中（`refreshing`、`stale`）に Checklist の対象を前の権限で導かない（統合の検証画面は `useGettingStarted` の `pending` で接続した。下の「統合の検証画面」）。
+- **統合の検証画面（`#/account-app`）**：Patterns Integration Review の 2 回目で、次のように接続した。
+  - 作業結果は、製品のデータから作って `useGettingStarted` の `results` に渡す（ONB-2）。最初の顧客は顧客の一覧（権限の模擬のサーバーの `fetchOverview` の件数）、既存の顧客の取り込みは処理の状況（System States の模擬のサーバーの `listJobs` に、1 件以上を取り込んだ取り込みがある）、メンバーの招待は組織のメンバー（`fetchOverview` の `members` が 2 人以上）から判定する。Onboarding の模擬のサーバーの作業結果（`getResults`）は使わない。製品のデータを取得している間は `results: null`（Checklist を導かない）、取得の失敗は `resultsError`。
+  - 作業の画面と、完了を判定する製品のデータがない作業は、対象にしない（`tasks`）。支払い方法の登録とプロフィールの写真の設定は、この検証画面に画面がない。以前は「支払い方法を登録する」が支払いの設定のない組織の設定へ、「プロフィールの写真を設定する」が写真の設定のないプロフィールへ移っていた。支払い方法の必須の作業と `requirementsMet` の表示は、`#/onboarding` の例で確かめる（この検証画面では、必須の条件による利用の制限を示さない）。
+  - 権限の取得中、再確認中、確認の失敗の間は、前の権限から対象の作業を導かず、Checklist の代わりに理由（「最新の権限を確認しています。確認できるまで、利用開始の準備を表示しません。」）を示す（`pending`。ONB-1）。作業のボタンと「はじめにやることを表示」も示さない。確認が終わると、新しい権限で導き直す（閲覧者には対象の作業がなく、Checklist を表示しない。0 件を完了と示さない）。
+  - 作成した直後の組織（`new`）は、`MinimalShell` の中の `OnboardingProduct` だけで表示する（ONB-3。プレビューの制約）。`model.ts` の組織と所属（本社営業部、西日本営業部）に新しい組織を加えると、権限、設定、通知、System States の模擬のサーバーのすべてに組織を加える必要があり、変更の範囲が大きいため、App Shell の中の製品の画面には接続していない。
 
 ## 検品
 
@@ -378,7 +391,8 @@ const restricted = trialEnded && !checklist.requirementsMet
 | 対象 | 検品 |
 | --- | --- |
 | 製品画面への直接移動 | `resolveFirstScreen` の 4 つの結果（歓迎の画面がない）。組織の作成と招待の承諾の後に、成功の画面を挟まずに利用画面を表示する |
-| 必須設定と任意設定 | 手順の位置と「必須」「任意」の表示、組織名の検証、メールアドレスの形式の検証 |
+| 必須設定と任意設定 | 簡易の Stepper の「ステップ n / m」と支援技術向けの現在のステップの名前（見える文字に手順の名前を重ねない）、見出しの直後の必須・任意の文、組織名が空の間は「次へ」が Focusable Disabled で理由を示すこと、Enter でエラーを示し入力欄へフォーカスを移すこと、メールアドレスの形式の検証、Stepper の一覧から完了した手順へ戻ること |
+| 組織の作成の Unsaved Changes | 手順の保存の後の入力があると、閉じる前に確かめる（編集を続ける、変更を破棄）。最初から入力し直す前に確かめ、保存した途中の入力を削除する |
 | スキップ | スキップした招待を送信しない。Checklist に作業として残る |
 | ウィザードの戻る操作、入力内容の保持 | 戻っても入力が残る。見出しにフォーカスが移る |
 | 中断と再開 | 閉じると「中断」、開き直すと保存した手順から再開する（模擬のサーバーに保存） |
@@ -396,7 +410,8 @@ const restricted = trialEnded && !checklist.requirementsMet
 | 古い画面からの操作の開始 | 登録の Sheet を開いたまま利用者を A → B → A と切り替えると、Sheet は閉じ、戻った A で開き直さない。登録の要求を送らない。開き直すと入力は空 |
 | A → B → A の間の実行中の操作 | 「サンプルを削除」の要求を保留したまま利用者を A → B → A と切り替えると、戻った A でボタンが Loading のまま残らない。最初の A の応答を解放しても Loading にならず、結果の文を示さない。もう一度操作でき、2 回目の要求で削除される |
 | 全件完了後の表示 | すべて完了の表示と読み上げ、閉じた後に再マウントしても表示しない |
-| 表示の状態の保存の失敗 | 保存されている状態に戻し、知らせる |
+| 表示の状態の保存の失敗 | 保存されている状態に戻し、知らせる。結果が不明な場合は、取得し直した結果が届くまで「確認しています」と示す（取得の応答を保留して確かめる） |
+| 統合の検証画面の Checklist | `system-account-app.spec.ts` の `ONB-1`、`ONB-2`：作業結果が製品のデータから導かれ、Onboarding の模擬のサーバーの作業結果を取得しないこと、画面のない作業を示さないこと、権限の再確認中に前の権限で対象の作業を導かないこと |
 | 初回 Empty State、検索結果 0件との区別 | 何ができるか・どこから操作するかの文、Page Header と重複しない、検索結果 0件と取得失敗の表示 |
 | Contextual Help の非表示 | 閉じる、フォーカスが検索欄に移る、再マウントの後も（閉じた案内の取得が終わった後も）表示しない、Empty State と同時に表示しない |
 | Contextual Help の表示の状態のスコープ | 閉じた案内は、同じ利用者の別の組織でも表示しない。同じ組織の別の利用者には表示する |

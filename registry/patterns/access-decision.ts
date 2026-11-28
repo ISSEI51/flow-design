@@ -54,8 +54,13 @@ type AccessSnapshot<P extends string = string, F extends string = string, G exte
 
 /** 利用を制限する理由。原因ごとに別の状態として持つ */
 type Restriction<P extends string = string, F extends string = string> =
-  /** 権限が確定していない（取得中、取得の失敗、再確認中、再確認の失敗） */
-  | { kind: "unresolved"; status: "loading" | "error" | "refreshing" | "stale" }
+  /**
+   * 権限が確定していない（取得中、取得の失敗、再確認中、再確認の失敗）。
+   * missing は、再確認中と再確認の失敗（refreshing、stale）で、前の権限に含まれていなかった権限。新しい権限では許可される
+   * 可能性があるため、確認が終わるまで「権限がない」（authorization）とは示さない。画面での扱い（presentAction）は、
+   * 前の権限での扱いを保つ（表示していなかった管理の機能を、確認中に表示し始めない）
+   */
+  | { kind: "unresolved"; status: "loading" | "error" | "refreshing" | "stale"; missing?: P[] }
   /** 契約プランで利用できない機能。ロールの権限とは別。missing は、あわせて不足している権限（ない場合は空） */
   | { kind: "entitlement"; feature: F; missing: P[] }
   /** 必要な権限がない（認可） */
@@ -116,6 +121,8 @@ function unverifiedStatus(snapshot: AccessSnapshot<string, string>): "refreshing
 /**
  * 操作を許可するかと、許可しない理由を決める。
  * 判断の順序：権限の未確定 → 契約プラン → 認可 → （再確認中・再確認の失敗）→ 前提の設定 → サービスの障害 → 接続 → 処理中。
+ * 再確認中と再確認の失敗では、前の権限に含まれていない権限が必要な操作も、認可（authorization）ではなく
+ * unresolved（missing に前の権限に含まれていなかった権限）として返す（新しい権限で許可される場合に「権限がない」と示さない）。
  * 契約プランを認可より先に判断する（権限を申請しても、契約プランで利用できなければ解決しないため）。
  * 一時的な理由（障害、接続、処理中）を構造的な理由（契約プラン、認可、前提の設定）より後にする
  * （オフラインと示した後、接続が戻っても権限がないために使えない、という誤解を避けるため）。
@@ -128,9 +135,9 @@ function decideAccess<P extends string, F extends string>(snapshot: AccessSnapsh
   if (requirement.feature !== undefined && !grants.features.includes(requirement.feature)) {
     return deny({ kind: "entitlement", feature: requirement.feature, missing })
   }
-  if (missing.length > 0) return deny({ kind: "authorization", missing })
   // 前の権限では許可される場合も、最新の認可を確認するまで操作を許可しない（verified が false の ready を含む）。
   const unverified = unverifiedStatus(snapshot)
+  if (missing.length > 0) return deny(unverified ? { kind: "unresolved", status: unverified, missing } : { kind: "authorization", missing })
   if (unverified) return deny({ kind: "unresolved", status: unverified })
   if (requirement.unmetPrerequisite) return deny({ kind: "prerequisite", prerequisite: requirement.unmetPrerequisite })
   if (requirement.service === "unavailable") return deny({ kind: "service" })
@@ -167,7 +174,8 @@ type ActionAudience = {
  * - 許可される：enabled
  * - 権限の取得中・取得の失敗：業務の操作（task、public）は無効にして理由を示す。管理の機能と存在を知らせない機能は、
  *   確定するまで表示しない（表示した後に消すと、存在を知らせることになり、表示も揺れるため）
- * - 再確認中・再確認の失敗：前の権限で許可されていた操作のため、無効にする（表示は保つ）
+ * - 再確認中・再確認の失敗：前の権限で許可されていた操作のため、無効にする（表示は保つ）。前の権限に含まれていなかった
+ *   権限が必要な操作（missing がある）は、前の権限での扱い（認可と同じ規則）を保つ（確認中に表示を変えない）
  * - 契約プラン：存在を知らせない機能は表示しない。権限がある利用者には、管理の機能も無効にして理由を示す（その利用者の業務に関係するため）。
  *   権限もない場合は、認可と同じに扱う。ただし申請できる場合も、管理の機能は表示しない（申請しても契約プランで利用できないため）。
  *   理由の文（restrictionText）は、契約プランの案内を含めない
@@ -180,7 +188,10 @@ function presentAction<P extends string, F extends string>(decision: AccessDecis
   const confidential = audience.disclosure === "confidential"
   switch (reason.kind) {
     case "unresolved":
-      if (reason.status === "refreshing" || reason.status === "stale") return { mode: "disabled", reason }
+      if (reason.status === "refreshing" || reason.status === "stale") {
+        if (reason.missing?.length && (confidential || (audience.relevance === "admin" && !audience.requestable))) return { mode: "hidden", reason }
+        return { mode: "disabled", reason }
+      }
       return audience.relevance === "task" && !confidential ? { mode: "disabled", reason } : { mode: "hidden", reason }
     case "entitlement":
       if (confidential) return { mode: "hidden", reason }

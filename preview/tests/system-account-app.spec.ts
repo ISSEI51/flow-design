@@ -887,6 +887,117 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
   })
 
+  test("SET-4: the time zone has one source: after changing it in the personal settings, quiet hours use the new time zone", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=display")
+    await page.getByTestId("set-timezone").click()
+    await page.getByRole("option", { name: "アメリカ（ロサンゼルス）", exact: true }).click()
+    await expect(page.getByTestId("set-timezone-status").getByRole("status")).toHaveText("保存しました")
+    await go(page, "page=settings&ws=hq&cat=notifications")
+    await expect(page.getByTestId("ntf-settings")).toBeVisible()
+    await page.getByTestId("ntf-quiet").click()
+    await expect(page.getByTestId("ntf-quiet-summary")).toContainText("（America/Los_Angeles）")
+    await expect(page.getByTestId("ntf-quiet-summary")).not.toContainText("Asia/Tokyo")
+  })
+
+  test("NTF-3: after the unsaved-changes dialog closes, the permission is decided again before moving from a notification", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=profile")
+    await page.getByTestId("set-profile-title").fill("未保存の役職")
+    await trigger(page).click()
+    await page.getByTestId("ntf-center").getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    await expect(unsavedDialog(page)).toBeVisible()
+    // 確認の Dialog を開いている間に、権限の変更の知らせが届き、再確認を始める（応答は保留）
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.setRole("u-sato", "hq", "viewer")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await unsavedDialog(page).getByRole("button", { name: "変更を破棄" }).click()
+    // Dialog を閉じた時点の権限（確認中）で判断し直し、移動しない
+    await settle(page)
+    await expect(page).toHaveURL(/page=settings/)
+    await expect(page).not.toHaveURL(/page=customer&/)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 確認できた後は、通知から開ける（閲覧者も顧客を閲覧できる）
+    await trigger(page).click()
+    const item = page.getByTestId("ntf-center").locator("[data-notification-id=n-101]")
+    await expect(item).not.toHaveAttribute("data-read")
+    await page.getByTestId("ntf-center").getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
+  })
+
+  test("PERM-5: a notification delivered while permissions are re-checked is held, not inserted with the previous permission scope", async ({ page }) => {
+    await signInAs(page, sato)
+    // 最初の一覧の取得が終わってから始める（取得中に届けると、その通知は一覧の応答に含まれる）
+    await trigger(page).click()
+    await expect(page.getByTestId("ntf-center").locator("[data-notification-id=n-101]")).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(page.getByTestId("ntf-center")).toHaveCount(0)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      // 権限の一覧が実際に変わる変更（管理者 → メンバー）。確認の後に scopeVersion が変わる
+      s.simulate.setRole("u-sato", "hq", "member")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaNotificationsServer: { push: (w: string, p: object) => void } }).__fdSaNotificationsServer
+      s.push("hq", { title: "再確認中に届いたお知らせ", type: "mention" })
+    })
+    await settle(page)
+    await trigger(page).click()
+    const center = page.getByTestId("ntf-center")
+    await expect(center.locator("[data-notification-id=n-101]")).toBeVisible()
+    await expect(center.getByRole("button", { name: /新着.*件を表示/ })).toBeVisible()
+    await expect(center).not.toContainText("再確認中に届いたお知らせ")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 権限が変わった：新しいスコープで取得し直す（サーバーに保存された通知は、新しいスコープの取得で表示される）
+    await expect(center).toContainText("再確認中に届いたお知らせ")
+  })
+
+  test("PERM-6: while permissions are re-checked, a page the previous role could not open is not shown as forbidden", async ({ page }) => {
+    await signInAs(page, "misaki.tanaka@example.com")
+    await go(page, "page=members&ws=hq")
+    await expect(h1(page)).toHaveText("このページを表示する権限がありません")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.setRole("u-tanaka", "hq", "admin")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    // 新しいロールでは開ける可能性がある。確認中は「権限がありません」と示さず、内容も描画しない
+    await expect(h1(page)).toHaveText("メンバーと権限")
+    await expect(main(page)).toContainText("最新の権限を確認しています")
+    await expect(main(page)).not.toContainText("権限がありません")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    await expect(main(page)).not.toContainText("最新の権限を確認しています")
+    await expect(h1(page)).toHaveText("メンバーと権限")
+  })
+
+  test("PERM-4: an export that cannot start because of the connection or the service says which one", async ({ page }) => {
+    await signInAs(page, "ichiro.suzuki@example.com")
+    await go(page, "page=jobs&ws=hq")
+    await expect(main(page).getByRole("button", { name: "顧客を書き出す" })).toBeEnabled()
+    await openVerify(page)
+    await page.getByTestId("acct-verify").getByRole("radio", { name: "切断した" }).check()
+    await expect(main(page)).toContainText("オフラインのため、書き出しを開始できません。", { timeout: 8000 })
+    await expect(main(page)).not.toContainText("接続とサービスの状態を確かめるまで")
+  })
+
   test("SYS-3: while offline, instant settings saves and mark-all-read are not sent; the reason is not 'unknown'", async ({ page }) => {
     await signInAs(page, sato)
     await go(page, "page=settings&ws=hq&cat=display")
@@ -945,5 +1056,56 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await signIn(page, "ichiro.suzuki@example.com", { lockedEmail: true })
     await expect(page).toHaveURL(/page=members&ws=hq/)
     await expect(h1(page)).toHaveText("メンバーと権限")
+  })
+})
+
+test.describe("Account app: onboarding checklist (integration review)", () => {
+  test("ONB-2: checklist results come from the product data, not from the onboarding mock; tasks without a product screen are not listed", async ({ page }) => {
+    await signInAs(page, sato)
+    await expect(h1(page)).toHaveText("ホーム")
+    // 佐藤 花子は本社営業部の Checklist を非表示にしている。再表示する
+    await main(page).getByTestId("acct-checklist-show").click()
+    const list = main(page).getByTestId("onb-checklist")
+    await expect(list).toBeVisible()
+    // 顧客（権限の模擬のサーバー）とメンバー（3 人）は製品のデータにある。取り込みは処理の状況にまだない
+    await expect(list.locator("[data-task-id=first-customer]")).toHaveAttribute("data-done", "true")
+    await expect(list.locator("[data-task-id=invite-members]")).toHaveAttribute("data-done", "true")
+    await expect(list.locator("[data-task-id=import-customers]")).not.toHaveAttribute("data-done", "true")
+    // この検証画面には支払い方法の登録とプロフィールの写真の画面がないため、作業として示さない（移れない画面へ案内しない）
+    await expect(list.locator("[data-task-id=set-billing]")).toHaveCount(0)
+    await expect(list.locator("[data-task-id=complete-profile]")).toHaveCount(0)
+    // Onboarding の模擬のサーバーの作業結果は取得しない
+    const resultRequests = await page.evaluate(
+      () => (window as unknown as { __fdSaOnboardingServer: { requests: { kind: string }[] } }).__fdSaOnboardingServer.requests.filter((r) => r.kind === "results").length
+    )
+    expect(resultRequests).toBe(0)
+    // 取り込みの作業は、処理の状況の画面へ移る
+    await list.locator("[data-task-id=import-customers]").getByRole("button").click()
+    await expect(h1(page)).toHaveText("処理の状況")
+  })
+
+  test("ONB-1: while permissions are re-checked after a role change, the checklist is not derived from the previous permissions", async ({ page }) => {
+    await signInAs(page, sato)
+    await main(page).getByTestId("acct-checklist-show").click()
+    await expect(main(page).getByTestId("onb-checklist").locator("[data-task-id=invite-members]")).toBeVisible()
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.setRole("u-sato", "hq", "viewer")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    // 再確認の応答を保留している間：管理者の作業（招待）と作業のボタンを示さず、確認中と示す
+    await expect(main(page).getByTestId("onb-checklist-pending")).toHaveText(/最新の権限を確認しています/)
+    await expect(main(page).getByTestId("onb-checklist")).toHaveCount(0)
+    await expect(main(page).getByTestId("acct-checklist-show")).toHaveCount(0)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 閲覧者には対象の作業がない（0 件は完了と示さない）
+    await expect(main(page).getByTestId("onb-checklist-pending")).toHaveCount(0)
+    await expect(main(page).getByTestId("onb-checklist")).toHaveCount(0)
+    await expect(main(page)).not.toContainText("利用開始の準備が完了しました")
   })
 })

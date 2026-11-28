@@ -27,7 +27,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useToast } from "@/components/ui/toast"
-import { decideAccess, restrictionText } from "@/patterns/access"
+import { decideAccess, restrictionText, unverifiedStatus } from "@/patterns/access"
 import { AccessState } from "@/patterns/access-state"
 import { AppShell, AppShellBody, AppShellHeader, AppShellMain } from "@/patterns/app-shell"
 import { useBrowseData } from "@/patterns/browse-data"
@@ -39,11 +39,13 @@ import { SidebarNav, SidebarNavItem, type NavGroup } from "@/patterns/sidebar-na
 import { UnsavedChangesProvider, useNavigationGuard } from "@/patterns/unsaved-changes"
 
 import { membershipOf, roles, users, workspacesOf, type OnboardingTaskId, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
+import { onboardingTaskDefinitions } from "../../data/system-account/onboarding-data"
 import { onboardingApi } from "../../data/system-account/onboarding-server"
 import { notificationsApi } from "../../data/system-account/notifications-server"
 import { scopeKeyOf } from "../../data/system-account/permission-data"
 import { permissionServer } from "../../data/system-account/permission-server"
 import { orgNameOf, settingsApi } from "../../data/system-account/settings-server"
+import { systemServer } from "../../data/system-account/system-server"
 import { ProductMark } from "../app-structure/structure-sidebar"
 import { accountHref, pagePermission, type AccountPage, type AccountRoute } from "./account-route"
 import { AccountVerifyPanel } from "./account-verify"
@@ -52,7 +54,7 @@ import { GettingStartedConnected, useGettingStarted } from "./onboarding-screens
 import { contactText, CustomerEditor, RestrictedOperations, RoleManagement, usePermissionAccess, type OperationConditions, type PermissionAccess } from "./permission-screens"
 import { describeUnsavedSettings, useOrgSettingsVersion } from "./settings-parts"
 import { SettingsArea, type SettingsCategoryId } from "./settings-screens"
-import { BackgroundJobsPanel, StatusPageExample, SystemBannerArea, useConnectedApi, type SystemMonitor } from "./system-screens"
+import { BackgroundJobsPanel, mutationReason, StatusPageExample, SystemBannerArea, useConnectedApi, type SystemMonitor } from "./system-screens"
 
 // System & Account の統合の検証画面のうち、ログインした後の製品の画面（製品側のコード）。正式な Pages の実装ではない。
 //
@@ -80,14 +82,26 @@ const notificationMutations = ["updateRead", "markAllRead", "remove", "saveSetti
 const settingsCategoryIds: SettingsCategoryId[] = ["profile", "display", "notifications", "security", "organization", "members"]
 const asCategory = (v: string | null): SettingsCategoryId | null => (settingsCategoryIds.includes(v as SettingsCategoryId) ? (v as SettingsCategoryId) : null)
 
-/** Checklist の作業を開く画面（製品のルーター）。開くだけで、作業を完了にはしない */
+/**
+ * Checklist の作業を開く画面（製品のルーター）。開くだけで、作業を完了にはしない。
+ * この検証画面には、支払い方法の登録の画面と、プロフィールの写真の設定がない。これらの作業は対象にしない（accountTasks）。
+ */
 const taskRoute: Partial<Record<OnboardingTaskId, Partial<AccountRoute>>> = {
   "first-customer": { page: "customers" },
   "import-customers": { page: "jobs" },
   "invite-members": { page: "members" },
-  "set-billing": { page: "settings", cat: "organization" },
-  "complete-profile": { page: "settings", cat: "profile" },
 }
+
+/** この検証画面の Checklist の作業。作業の画面（taskRoute）と、完了を判定する製品のデータがある作業だけ */
+const accountTasks = onboardingTaskDefinitions.filter((t) => t.id in taskRoute)
+
+/** 権限を確定できない間は、前の権限から Checklist の対象を導かない（ONB-1） */
+const checklistPendingText = {
+  loading: "権限を確認しています。",
+  error: "権限を確認できませんでした。確認できるまで、利用開始の準備を表示しません。",
+  refreshing: "最新の権限を確認しています。確認できるまで、利用開始の準備を表示しません。",
+  stale: "最新の権限を確認できませんでした。確認できるまで、利用開始の準備を表示しません。",
+} as const
 
 const navLabels: Record<AccountPage, string> = {
   home: "ホーム",
@@ -145,6 +159,8 @@ function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, 
   const grants = access.grants && access.grants.scope === scopeKeyOf(scope) ? access.grants : null
   const permissions: readonly Permission[] = useMemo(() => grants?.permissions ?? [], [grants])
   const permissionKey = [...permissions].sort().join(",")
+  // 最新の権限を確認していない（取得中、再確認中、失敗）
+  const permissionUnverified = access.status !== "ready" || unverifiedStatus(access) !== null
 
   // ワークスペースや権限が変わったら、表示中の Toast を閉じる（前のスコープの「元に戻す」などを押させない）
   const { toasts, dismiss } = useToast()
@@ -158,16 +174,29 @@ function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, 
   const guard = useNavigationGuard()
   const { confirmNavigation } = guard
   const requestNavigate = useCallback(
-    (next: Partial<AccountRoute> | "sign-out", options: { beforeConfirm?: () => void; returnFocus?: () => void } = {}) =>
-      new Promise<boolean>((resolve) => {
+    (
+      next: Partial<AccountRoute> | "sign-out",
+      options: {
+        beforeConfirm?: () => void
+        returnFocus?: () => void
+        /** 移動の直前（未保存の変更の確認を閉じた後を含む）に、移動してよいかを判断し直す。false なら移動しない */
+        recheck?: () => boolean
+      } = {}
+    ) =>
+      new Promise<"navigated" | "cancelled" | "blocked">((resolve) => {
         const proceed = () => {
+          // 確認の Dialog を開いている間に権限が変わることがあるため、Dialog を閉じた時点で判断し直す（NTF-3）
+          if (options.recheck && !options.recheck()) {
+            resolve("blocked")
+            return
+          }
           if (next === "sign-out") onSignOut()
           else onRouteChange(next)
-          resolve(true)
+          resolve("navigated")
         }
         const proceeded = confirmNavigation(proceed, {
           onCancel: () => {
-            resolve(false)
+            resolve("cancelled")
             // Alert Dialog がフォーカスを戻し終わった後に移す
             if (options.returnFocus) window.setTimeout(options.returnFocus, 0)
           },
@@ -202,7 +231,9 @@ function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, 
     userId,
     workspaceId: ws,
     scopeVersion: permissionKey,
-    holdIncoming: centerOpen || route.page === "notifications",
+    // 権限の再確認中は、新着を一覧に加えない（前の権限のスコープの購読から届いた通知を、確認が終わる前に表示しない。PERM-5）。
+    // 確認の結果、権限が変われば scopeVersion が変わり、保留した新着ごと取得し直す。変わらなければ「新着を表示」で表示できる
+    holdIncoming: centerOpen || route.page === "notifications" || permissionUnverified,
     subscriberLabel: "account-app",
   })
   useEffect(() => setCenterOpen(false), [ws])
@@ -228,24 +259,30 @@ function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, 
     const needed = pagePermission[next.page as AccountPage]
     // クリックした時点ではなく、確認の応答の後の最新の権限で判断する（再確認中は許可しない）。
     // access.latest() は commit した時点の値で照合する。変更の知らせを受けた処理の中で reload() を呼んだ後は、確認済みの権限を返さない
-    const decision = needed ? decideAccess(access.latest(), { permissions: [needed] }) : null
-    if (decision && !decision.allowed) {
+    const decide = () => (needed ? decideAccess(access.latest(), { permissions: [needed] }) : null)
+    const blockedResult = (decision: NonNullable<ReturnType<typeof decide>>) =>
       // 権限を確認している間（再確認中、確認の失敗）は、権限がないとは示さず、通知を既読にしない（NTF-1）
-      if (decision.reason.kind === "unresolved") {
-        return { status: "unavailable", reason: "unresolved", message: `${restrictionText(decision.reason)}。確認できてから、もう一度開いてください。` }
-      }
-      return { status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" }
-    }
-    const ok = await requestNavigate(
+      !decision.allowed && decision.reason.kind === "unresolved"
+        ? ({ status: "unavailable", reason: "unresolved", message: `${restrictionText(decision.reason)}。確認できてから、もう一度開いてください。` } as const)
+        : ({ status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" } as const)
+    const decision = decide()
+    if (decision && !decision.allowed) return blockedResult(decision)
+    const result = await requestNavigate(
       { ws: workspaceId as WorkspaceId, ...next },
       {
         // 確認の Dialog の前に通知センターを閉じる（モバイルの通知センターはモーダルの Sheet で、外の Dialog を操作できなくなるため）
         beforeConfirm: () => setCenterOpen(false),
         // 取りやめた場合は、通知センターを開くボタンへフォーカスを戻す（押した通知は閉じた通知センターの中にあり、戻せない）
         returnFocus: () => document.querySelector<HTMLElement>("[data-testid=ntf-trigger]")?.focus(),
+        // 未保存の変更の確認を閉じた後の移動も、その時点の最新の権限で判断し直す（NTF-3）
+        recheck: () => decide()?.allowed !== false,
       }
     )
-    return ok ? { status: "navigated" } : { status: "cancelled" }
+    if (result === "blocked") {
+      const latest = decide()
+      return latest && !latest.allowed ? blockedResult(latest) : { status: "cancelled" }
+    }
+    return result === "navigated" ? { status: "navigated" } : { status: "cancelled" }
   }
 
   const page = (pagePermissionKnown(route.page) ? route.page : null) as AccountPage | null
@@ -276,7 +313,15 @@ function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, 
     )
   } else if (decision && !decision.allowed && decision.reason.kind === "unresolved" && decision.reason.status === "loading") {
     body = <PageFrame title={navLabels[page]} busy="権限を確認しています" />
-  } else if (decision && !decision.allowed && decision.reason.kind === "unresolved" && decision.reason.status === "error") {
+  } else if (decision && !decision.allowed && decision.reason.kind === "unresolved" && decision.reason.status === "refreshing" && decision.reason.missing?.length) {
+    // 前の権限では開けなかったページ。新しい権限で開ける可能性があるため「権限がない」とは示さず、確認が終わるまで内容を描画しない（PERM-6）
+    body = <PageFrame title={navLabels[page]} busy="最新の権限を確認しています" />
+  } else if (
+    decision &&
+    !decision.allowed &&
+    decision.reason.kind === "unresolved" &&
+    (decision.reason.status === "error" || (decision.reason.status === "stale" && decision.reason.missing?.length))
+  ) {
     body = (
       <PageFrame title={navLabels[page]}>
         <DataRegionError title="権限を確認できませんでした" description="表示できる内容を確かめられないため、表示していません。" onRetry={access.reload} />
@@ -477,7 +522,8 @@ function PageBody(props: PageBodyProps) {
           <BackgroundJobsPanel
             monitor={monitor}
             workspace={ws}
-            unavailableReason={!canExport ? exportBlockedText(access) : !mutation.allowed ? "接続とサービスの状態を確かめるまで、開始できません。" : undefined}
+            // 接続とサービスの状態は、理由ごとの文にする（オフライン、接続の確認中、障害、メンテナンスを 1 つの文にしない。PERM-4）
+            unavailableReason={!canExport ? exportBlockedText(access) : !mutation.allowed ? mutationReason(mutation.reason, "書き出しを開始") : undefined}
             canStart={canStart}
           />
         </PageFrame>
@@ -531,14 +577,18 @@ function exportBlockedText(access: PermissionAccess) {
 }
 
 function HomePage(props: PageBodyProps) {
-  const { userId, route, permissions, go } = props
+  const { userId, route, permissions, access, go } = props
   const ws = route.ws
   const membership = membershipOf(userId, ws)
   const viewer = useMemo(
     () => ({ userId, workspaceId: ws as string, permissions, joinedBy: membership?.joinedBy ?? ("invited" as const) }),
     [userId, ws, permissions, membership?.joinedBy]
   )
-  const state = useGettingStarted({ viewer, api: onboardingApi })
+  // 権限を確定できない間（取得中、再確認中、失敗）は、前の権限で対象の作業を導かない
+  const unresolved = access.status === "loading" || access.status === "error" ? access.status : unverifiedStatus(access)
+  const pending = unresolved ? checklistPendingText[unresolved] : null
+  const product = useChecklistResults(props, !pending)
+  const state = useGettingStarted({ viewer, api: onboardingApi, tasks: accountTasks, results: product.results, resultsError: product.error, pending })
   const hidden = state.checklist?.presentation === "hidden"
   return (
     <PageFrame
@@ -558,6 +608,41 @@ function HomePage(props: PageBodyProps) {
       </div>
     </PageFrame>
   )
+}
+
+/**
+ * Checklist の作業結果を、この製品のデータから導く（ONB-2）。Onboarding の模擬のサーバーの作業結果は使わない。
+ * - 最初の顧客：顧客の一覧（権限の模擬のサーバー）に 1 件以上ある
+ * - 既存の顧客の取り込み：処理の状況（System States の模擬のサーバー）に、1 件以上を取り込んだ取り込みがある
+ * - メンバーの招待：組織のメンバー（権限の模擬のサーバー）が 2 人以上いる
+ * 取得の権限がない作業は、作業の権限（customers.edit、members.manage）がなく Checklist の対象にならない。
+ * results が null の間は取得中（Checklist を導かない）。
+ */
+function useChecklistResults({ scope, revision, permissions, route }: PageBodyProps, enabled: boolean) {
+  const scopeKey = scopeKeyOf(scope)
+  const canView = permissions.includes("customers.view")
+  const overview = useBrowseData({
+    query: revision,
+    queryKey: `checklist:${revision}`,
+    scopeKey,
+    enabled: enabled && canView,
+    fetcher: (_, { signal }) => permissionServer.api.fetchOverview(scopeKey, "", { signal }),
+  })
+  const jobs = useBrowseData({
+    query: route.ws,
+    scopeKey,
+    enabled: enabled && canView,
+    fetcher: (ws, { signal }) => systemServer.listJobs(ws, signal),
+  })
+  if (!enabled) return { results: null, error: false }
+  if (!canView) return { results: { account: [], workspace: [] }, error: false }
+  if (overview.status === "error" || jobs.status === "error") return { results: null, error: true }
+  if (!overview.isCurrent || !jobs.isCurrent || !overview.data || !jobs.data) return { results: null, error: false }
+  const workspace: OnboardingTaskId[] = []
+  if (overview.data.customerCount > 0) workspace.push("first-customer")
+  if (jobs.data.some((j) => j.kind === "import" && (j.counts?.succeeded ?? 0) > 0)) workspace.push("import-customers")
+  if ((overview.data.members?.length ?? 0) > 1) workspace.push("invite-members")
+  return { results: { account: [], workspace }, error: false }
 }
 
 function CustomersPage(props: PageBodyProps) {
@@ -659,6 +744,8 @@ function SettingsPage({ userId, route, permissions, access, monitor, notificatio
             // 模擬：実際の Notification.requestPermission() は呼ばない
             onRequestBrowserPermission={() => setBrowserPermission("granted")}
             headingLevel={3}
+            // 保存が権限不足で拒否された：最新の権限を取り直す（個人の設定と同じ）
+            onPermissionDenied={access.reload}
           />
         }
       />

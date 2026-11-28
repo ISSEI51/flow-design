@@ -442,10 +442,13 @@ test.describe("permission change while in use", () => {
     await expect(demo(page, "live").getByTestId("perm-live-notice")).toHaveText("権限が変更されました。表示している操作を更新しました。")
     await expect(demo(page, "live").getByTestId("perm-live-notice")).toHaveAttribute("role", "status")
     await demo(page, "live").getByRole("button", { name: "鈴木 一郎さんをメンバーに戻す" }).click()
-    // 前の権限（閲覧者）でも許可されない操作は、再確認の間も、その理由（認可）を示す（表示を揺らさない）
+    // 前の権限（閲覧者）で許可されない操作も、再確認の間は「権限がない」と示さない（新しい権限で許可される可能性がある。PERM-6）。
+    // 画面での扱い（無効にして示す）は変えない（表示を揺らさない）
     await waitHeld(page, "access")
     await expect(demo(page, "live").getByTestId("perm-ops")).toHaveAttribute("data-status", "refreshing")
-    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "authorization")
+    await expect(op(page, "live", "edit")).toHaveAttribute("data-restriction", "unresolved")
+    await expect(op(page, "live", "edit")).toHaveAttribute("data-mode", "disabled")
+    await expect(op(page, "live", "edit").locator("[data-slot=restriction-reason]")).toHaveText("最新の権限を確認しています")
     await release(page, "access")
     await expect(op(page, "live", "edit")).toHaveAttribute("data-mode", "enabled")
     expect(await page.evaluate(() => (window as unknown as { __permMarker?: number }).__permMarker)).toBe(1)

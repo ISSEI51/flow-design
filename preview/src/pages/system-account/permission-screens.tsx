@@ -228,19 +228,23 @@ export function Resolution({
   revision: number
   onResolvePrerequisite?: (id: string) => void
 }): ReactNode {
+  const authorizationResolution = (missing: Permission[]) => {
+    const requestable = missing.every((p) => requestablePermissions.includes(p))
+    if (requestable && missing.length === 1) return <PermissionRequest scope={scope} permission={missing[0]} api={api} revision={revision} access={access} />
+    return <p className="text-ui text-muted-foreground">{contactText(scope, "必要な場合は、")}</p>
+  }
   switch (reason.kind) {
     case "unresolved":
+      // 前の権限に含まれていなかった権限（missing）の再確認中は、前と同じ解決の方法を示す（表示を揺らさない）。
+      // 申請は、最新の権限を確認するまで始めない（PermissionRequest が判断する）。確認の失敗では、再確認の操作も置く
+      if (reason.missing?.length && reason.status === "refreshing") return authorizationResolution(reason.missing)
       return reason.status === "error" || reason.status === "stale" ? (
         <Button variant="outline" size="sm" onClick={access.reload}>
           権限を再確認
         </Button>
       ) : null
-    case "authorization": {
-      const requestable = reason.missing.every((p) => requestablePermissions.includes(p))
-      if (requestable && reason.missing.length === 1)
-        return <PermissionRequest scope={scope} permission={reason.missing[0]} api={api} revision={revision} access={access} />
-      return <p className="text-ui text-muted-foreground">{contactText(scope, "必要な場合は、")}</p>
-    }
+    case "authorization":
+      return authorizationResolution(reason.missing)
     case "entitlement":
       // 権限もない利用者には、契約プランの案内を示さない（契約プランを変えても解決せず、機能の存在を知らせることになるため）。
       if (reason.missing.length > 0) return <p className="text-ui text-muted-foreground">{contactText(scope, "必要な場合は、")}</p>

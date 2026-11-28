@@ -1642,6 +1642,18 @@ test.describe("toast focus: buttons keep focus, editable elements take it", { ta
     await toast.getByTestId("toast-input").click()
     await page.keyboard.type("abc")
     await expect(toast.getByTestId("toast-input")).toHaveValue("abc")
+    // Toast の本体の select-none（user-select: none）の下でも、複数行の入力欄と contenteditable に入力でき、
+    // 押した位置にキャレットが置かれる（Chromium と WebKit。docs/web/components/toast.md の「入力できる要素と user-select」）
+    await toast.getByTestId("toast-textarea").click()
+    await page.keyboard.type("def")
+    await expect(toast.getByTestId("toast-textarea")).toHaveValue("def")
+    const editable = toast.getByTestId("toast-editable")
+    const box = (await editable.boundingBox())!
+    await base.click()
+    await editable.click({ position: { x: 9, y: box.height / 2 } })
+    await expect(editable).toBeFocused()
+    await page.keyboard.type("Q")
+    await expect(editable).toHaveText("Q編集できる")
   })
 
   test("with a modal open: toast buttons keep focus in the modal; editable elements in the toast take focus out of the modal", async ({ page }) => {

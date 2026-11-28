@@ -705,6 +705,9 @@ function SessionDemo() {
   const [log, setLog] = useState("")
   // 利用者とワークスペースが変わったら、前のスコープの保存と更新の結果を反映しない
   const guard = useScopeGuard(`${userId}:${workspaceId}`)
+  // セッションの境界。再認証と自動の更新でセッションが変わったら、前のセッションで始めた保存の失敗を、
+  // 現在のセッションの期限切れとして扱わない（セッションの ID の文字列を closure から比べない。AUTH-8）
+  const sessionGuard = useScopeGuard(sessionId ?? undefined)
   // 再認証の後の確認（利用者が変わってもスコープを変えない。最後の確認だけを反映する）
   const verifyGuard = useScopeGuard("session-verify")
   const verifyArgs = useRef<VerifyArgs | null>(null)
@@ -763,6 +766,7 @@ function SessionDemo() {
     }
     const text = draft
     const ticket = guard.begin("save")
+    const sessionTicket = sessionGuard.begin("save")
     setSaveState("saving")
     setMessage("")
     authApi
@@ -777,7 +781,9 @@ function SessionDemo() {
         },
         (e) => {
           if (isAbortError(e) || !guard.isLatest(ticket)) return
-          const sessionGone = !authApi.isSessionValid(sessionId)
+          // 保存を始めたセッションが現在のセッションで、そのセッションが切れた場合だけ、セッション切れとして扱う。
+          // 応答を待つ間に再認証した場合（新しいセッション）は、保存の失敗として示すだけにする
+          const sessionGone = sessionGuard.isSameScope(sessionTicket) && !authApi.isSessionValid(sessionId)
           if (e instanceof MockUnknownError) {
             // 応答が届かなかった：保存されたかどうかわからない。再認証の後に、再送信せずに確かめる
             setUnconfirmed(text)
@@ -796,6 +802,7 @@ function SessionDemo() {
       .finally(() => {
         saving.current = false
         guard.release(ticket)
+        sessionGuard.release(sessionTicket)
       })
   }
 

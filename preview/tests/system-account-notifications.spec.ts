@@ -686,19 +686,27 @@ test.describe("Notification settings", () => {
     await expect(permission).toContainText("ブラウザの許可とは別に保存されます")
   })
 
-  test("save failure restores the switch and shows the error; unknown result re-fetches", async ({ page }) => {
+  test("save failure restores the switch and shows the error; an unknown result is confirmed with 確認する, as in the personal settings", async ({ page }) => {
     await openPage(page)
     await settings(page).getByText("失敗", { exact: true }).click()
     const sw = settings(page).getByRole("switch", { name: "新しい機能のお知らせ：アプリ内" })
     await sw.click()
-    await expect(settings(page).getByTestId("ntf-setting-error")).toContainText("新しい機能のお知らせ：アプリ内の設定を保存できませんでした")
+    await expect(settings(page).getByTestId("ntf-setting-error")).toContainText("新しい機能のお知らせ：アプリ内の設定は、保存できなかったため、元の設定に戻しました。")
     await expect(sw).toHaveAttribute("aria-checked", "true")
     expect(await serverWith(page, (s, u) => s.storedSettings(u).notifications.product["in-app"], "u-sato" as const)).toBe(true)
     await settings(page).getByText("結果が不明", { exact: true }).click()
     await sw.click()
-    await expect(settings(page).getByTestId("ntf-setting-error")).toContainText("保存できたかを確認できませんでした")
-    // サーバーでは保存されている。取得し直した値を表示する
+    await expect(settings(page).getByTestId("ntf-setting-error")).toContainText("保存できたかを確認できませんでした。確認するまで、この設定は変更できません。")
+    // 自動では取得し直さない（Settings と同じ）。確認するまで、同じ項目を変更できない
+    await expect(sw).toHaveAttribute("aria-readonly", "true")
+    const settingsRequests = () => serverWith(page, (s) => s.requests.filter((r) => r.kind === "settings").length, null)
+    const before = await settingsRequests()
+    await settings(page).getByRole("button", { name: "新しい機能のお知らせ：アプリ内の設定を確認する" }).click()
+    // サーバーでは保存されている。確認で取得した値を表示する
     await expect(sw).toHaveAttribute("aria-checked", "false")
+    await expect(settings(page).getByTestId("ntf-setting-error")).toHaveCount(0)
+    await expect(settings(page).getByTestId("ntf-settings-live")).toHaveText("新しい機能のお知らせ：アプリ内の設定を保存しました")
+    expect(await settingsRequests()).toBe(before + 1)
   })
 
   test("quiet hours across midnight are described in the user's time zone", async ({ page }) => {
@@ -911,11 +919,11 @@ test.describe("Read-all range, in-flight fetches, removal, live regions", () => 
     await expect(live).toHaveAttribute("role", "status")
     await settings.getByText("失敗", { exact: true }).click()
     await settings.getByRole("switch", { name: "新しい機能のお知らせ：アプリ内" }).click()
-    await expect(live).toHaveText("新しい機能のお知らせ：アプリ内の設定を保存できませんでした。もう一度お試しください。")
+    await expect(live).toHaveText("新しい機能のお知らせ：アプリ内の設定は、保存できなかったため、元の設定に戻しました。")
     await expect(settings.getByTestId("ntf-setting-error")).toHaveAttribute("data-state", "failed")
     await settings.getByText("結果が不明", { exact: true }).click()
     await settings.getByTestId("ntf-digest").click()
-    await expect(live).toHaveText("まとめて受け取る設定を保存できたかを確認できませんでした。最新の設定を取得し直しています。")
+    await expect(live).toHaveText("まとめて受け取る設定は、保存できたかを確認できませんでした。確認するまで、この設定は変更できません。")
     const unknown = settings.locator("[data-testid=ntf-setting-error][data-state=unknown]")
     await expect(unknown).toBeVisible()
     await expect(unknown).toHaveClass(/text-warning/)
