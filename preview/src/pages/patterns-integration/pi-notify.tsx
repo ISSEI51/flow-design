@@ -91,9 +91,14 @@ export function NotificationsSheet({ feed, open, onOpenChange }: { feed: Notific
     }
     guard.release(ticket)
     onOpenChange(false)
-    // setRead は取得の状態を確かめないため、最新の取得に成功している間だけ既読にする（Registry の契約）
-    if (!item.read && feed.canOperate) feed.setRead(item.id, true)
-    nav.navigate(piHref("customer", { ws: w, id: item.customerId }))
+    // 実際に移動したときだけ既読にする（未保存の変更の確認で移動をやめた場合は、未読のまま残す）。
+    // 移動の後に、このスコープの通知かを確かめ直す（移動の確認の間にスコープが変わった場合は既読にしない）
+    const snapshot = guard.capture()
+    nav.navigate(piHref("customer", { ws: w, id: item.customerId }), {
+      onNavigated: () => {
+        if (!item.read && guard.isCurrent(snapshot)) feed.setRead(item.id, true)
+      },
+    })
   }
 
   return (
@@ -178,7 +183,7 @@ function InstantSettings({ initial, offline }: { initial: PiSettings; offline: b
           data-setting-id={r.key}
           label={r.label}
           description={r.description}
-          status={<SettingSaveStatus status={s.statusOf(r.key)} onVerify={() => s.verify(r.key)} />}
+          status={<SettingSaveStatus status={s.statusOf(r.key)} onVerify={() => s.verify(r.key)} verifyLabel="保存されたかを確認" />}
         >
           <Switch
             aria-label={r.label}

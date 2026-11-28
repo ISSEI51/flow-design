@@ -60,8 +60,12 @@ export function usePi() {
 const permissionLabel: Record<Permission, string> = { view: "顧客の閲覧", edit: "顧客の編集", delete: "顧客の削除", export: "顧客のエクスポート" }
 const connectivityOf = (s: ConnectivityStatus) => (s === "online" ? "online" : s === "offline" ? "offline" : "unconfirmed")
 
+export const OFFLINE_REASON = "オフラインのため利用できません。接続が戻ると利用できます"
+/** 操作できない理由の文が、画面の上部の知らせ（オフライン）と同じ内容だけか。同じ文を見える形で重ねない（支援技術には残す） */
+export const onlyOfflineReason = (reasons: string[], connectivity: string) => connectivity === "offline" && reasons.length > 0 && reasons.every((r) => r === OFFLINE_REASON)
+
 const mutationText = {
-  offline: "オフラインのため利用できません。接続が戻ると利用できます",
+  offline: OFFLINE_REASON,
   connecting: "接続を確認しています。確認できるまで、この操作は行えません",
   unconfirmed: "接続を確認しています。確認できるまで、この操作は行えません",
   outage: "障害のため、この機能は一時的に利用できません",

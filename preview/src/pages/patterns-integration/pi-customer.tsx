@@ -15,7 +15,6 @@ import { FormActions, SaveBlockerNotice, focusFormControl } from "@/patterns/for
 import { submitOnEnter, useFormState, type FormFields, type FormSaveResult } from "@/patterns/form-state"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { PageLayout } from "@/patterns/page-layout"
-import { RestrictedAction } from "@/patterns/restricted-action"
 import { Section, SectionHeader, SectionStack, SectionTitle } from "@/patterns/section-layout"
 import { DiscardChangesAlert, useUnsavedChanges } from "@/patterns/unsaved-changes"
 
@@ -31,7 +30,7 @@ import {
   type CustomerValues,
 } from "../../data/patterns-integration/server"
 import { conditionParams, conditionsFrom } from "./pi-analysis"
-import { ProtectedContent, usePi } from "./pi-context"
+import { onlyOfflineReason, ProtectedContent, usePi } from "./pi-context"
 import { Facts, PiBreadcrumb } from "./pi-parts"
 import { piHref } from "./pi-router"
 
@@ -90,7 +89,7 @@ function Missing() {
 
 // ---------------------------------------------------------------- 詳細
 export function CustomerDetailScreen({ id, params }: { id: string; params: URLSearchParams }) {
-  const { ws, scope, nav, permit, permitLatest, viewAccess } = usePi()
+  const { ws, scope, nav, permit, permitLatest, viewAccess, connectivity } = usePi()
   const { toast } = useToast()
   const detail = useCustomer(id)
   // keepPreviousData は同じレコードの取得し直しだけで前の内容を残すため、data は常にこのレコードの内容（再取得中は前回の内容）。
@@ -102,6 +101,8 @@ export function CustomerDetailScreen({ id, params }: { id: string; params: URLSe
   const undo = useUndoableAction({ scopeKey: scope })
   const edit = permit("edit")
   const del = permit("delete")
+  const reasons = [...new Set([del.reason, edit.reason].filter((r): r is string => r !== null))]
+  const reasonId = (r: string | null) => (r === null ? undefined : `pi-detail-reason-${reasons.indexOf(r)}`)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [contactOpen, setContactOpen] = useState(false)
   // 確認中と権限の喪失では、開いている削除の確認を閉じる。連絡の記録の Drawer は、利用者の入力を持つため、
@@ -140,29 +141,45 @@ export function CustomerDetailScreen({ id, params }: { id: string; params: URLSe
           {c && <PageHeaderDescription>{`${c.region}・${planLabel(c.plan)}`}</PageHeaderDescription>}
         </PageHeaderContent>
         {c && (
-          <PageHeaderActions>
-            <RestrictedAction presentation={del.presentation} reason={del.reason ?? undefined}>
-              {(control) => (
-                <Button variant="secondary" className="text-destructive" {...control} disabled={!del.allowed} onClick={() => setConfirmDelete(true)} data-testid="detail-delete">
-                  削除
-                </Button>
-              )}
-            </RestrictedAction>
-            <RestrictedAction presentation={edit.presentation} reason={edit.reason ?? undefined}>
-              {(control) => (
-                <Button
-                  {...control}
-                  disabled={!edit.allowed}
-                  onClick={() => nav.navigate(piHref("customer-edit", { ws: w, id, from: f.from === "metric" ? "metric" : "detail", ...(f.from === "metric" ? f.extra : {}) }))}
-                  data-testid="detail-edit"
-                >
-                  編集
-                </Button>
-              )}
-            </RestrictedAction>
+          // 危険な操作（削除）を先に、主要な操作（編集）を最後に置く。狭い画面でも横に並べ、幅を内容に合わせる
+          <PageHeaderActions className="w-fit flex-row flex-wrap">
+            {del.presentation.mode !== "hidden" && (
+              <Button
+                variant="secondary"
+                className="text-destructive"
+                disabled={!del.allowed}
+                focusableWhenDisabled
+                aria-describedby={reasonId(del.reason)}
+                onClick={() => setConfirmDelete(true)}
+                data-testid="detail-delete"
+              >
+                削除
+              </Button>
+            )}
+            {edit.presentation.mode !== "hidden" && (
+              <Button
+                disabled={!edit.allowed}
+                focusableWhenDisabled
+                aria-describedby={reasonId(edit.reason)}
+                onClick={() => nav.navigate(piHref("customer-edit", { ws: w, id, from: f.from === "metric" ? "metric" : "detail", ...(f.from === "metric" ? f.extra : {}) }))}
+                data-testid="detail-edit"
+              >
+                編集
+              </Button>
+            )}
           </PageHeaderActions>
         )}
       </PageHeader>
+      {c && reasons.length > 0 && (
+        // 操作できない理由は 1 か所に 1 回だけ示し、各操作から aria-describedby で参照する
+        <div className={onlyOfflineReason(reasons, connectivity) ? "sr-only" : "flex flex-col gap-1 text-ui text-muted-foreground"} data-testid="detail-restrictions">
+          {reasons.map((r) => (
+            <p key={r} id={reasonId(r)}>
+              {r}
+            </p>
+          ))}
+        </div>
+      )}
       <ProtectedContent label="顧客の情報">
         {detail.status === "error" && !c ? (
           <DataRegionError title="顧客を取得できませんでした" onRetry={detail.reload} />
@@ -171,8 +188,16 @@ export function CustomerDetailScreen({ id, params }: { id: string; params: URLSe
             <Section>
               <SectionHeader>
                 <SectionTitle>契約</SectionTitle>
-                {c && edit.allowed && (
-                  <Button variant="secondary" size="sm" onClick={() => void pause(c)} data-testid="detail-pause">
+                {c && edit.presentation.mode !== "hidden" && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!edit.allowed}
+                    focusableWhenDisabled
+                    aria-describedby={reasonId(edit.reason)}
+                    onClick={() => void pause(c)}
+                    data-testid="detail-pause"
+                  >
                     {c.status === "active" ? "停止にする" : "契約中に戻す"}
                   </Button>
                 )}
@@ -206,8 +231,16 @@ export function CustomerDetailScreen({ id, params }: { id: string; params: URLSe
             <Section>
               <SectionHeader>
                 <SectionTitle>連絡の記録</SectionTitle>
-                {c && edit.allowed && (
-                  <Button variant="secondary" size="sm" onClick={() => setContactOpen(true)} data-testid="contact-add">
+                {c && edit.presentation.mode !== "hidden" && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!edit.allowed}
+                    focusableWhenDisabled
+                    aria-describedby={reasonId(edit.reason)}
+                    onClick={() => setContactOpen(true)}
+                    data-testid="contact-add"
+                  >
                     記録を追加
                   </Button>
                 )}
@@ -375,10 +408,21 @@ function ContactDrawer({
             </form>
           </DrawerBody>
           <DrawerFooter>
+            <span id="pi-contact-save-reason" className="sr-only">
+              内容を入力すると保存できます
+            </span>
             <Button variant="secondary" disabled={saving} onClick={() => (dirty ? setDiscard(true) : onOpenChange(false))}>
               キャンセル
             </Button>
-            <Button type="submit" form="pi-contact-form" loading={saving} disabled={!dirty} focusableWhenDisabled data-testid="contact-save">
+            <Button
+              type="submit"
+              form="pi-contact-form"
+              loading={saving}
+              disabled={!dirty}
+              focusableWhenDisabled
+              aria-describedby={!dirty ? "pi-contact-save-reason" : undefined}
+              data-testid="contact-save"
+            >
               記録を保存
             </Button>
           </DrawerFooter>
@@ -421,7 +465,9 @@ const valuesOf = (c: PiCustomer): CustomerValues => ({ name: c.name, email: c.em
 const inflightSaves = new Map<string, { submitted: CustomerValues }>()
 
 export function CustomerEditScreen({ id, params }: { id: string; params: URLSearchParams }) {
-  const { scope, access, viewAccess } = usePi()
+  const { ws, scope, access, viewAccess } = usePi()
+  const f = fromOf(params)
+  const w = ws === "hq" ? null : ws
   const detail = useCustomer(id)
   if (viewAccess === "allowed" && detail.status === "ready" && detail.data === null) return <Missing />
   // フォームは、最初に取得した内容で作る。取得し直しでは作り直さない（入力を残す）
@@ -432,9 +478,27 @@ export function CustomerEditScreen({ id, params }: { id: string; params: URLSear
   return (
     <PageLayout width="focused" data-testid="pi-customer-edit">
       <PageHeader>
+        <div className="basis-full">
+          <PiBreadcrumb
+            items={[
+              ...trail(ws, f),
+              { label: viewing && c ? c.name : "顧客", href: piHref("customer", { ws: w, id, ...(f.from === "metric" ? { from: "metric", ...f.extra } : f.from === "list" ? { from: "list" } : {}) }) },
+            ]}
+            current="編集"
+          />
+        </div>
         <PageHeaderContent>
-          {/* 権限の確認中は、見出しに顧客の名前を入れない */}
-          <PageHeaderTitle>{viewing && c ? `${c.name}を編集` : "顧客を編集"}</PageHeaderTitle>
+          {/* 権限の確認中は、見出しに顧客の名前を入れない。「を編集」は途中で改行しない（WebKit は語句の単位の改行に対応していない） */}
+          <PageHeaderTitle>
+            {viewing && c ? (
+              <>
+                {c.name}
+                <span className="whitespace-nowrap">を編集</span>
+              </>
+            ) : (
+              "顧客を編集"
+            )}
+          </PageHeaderTitle>
         </PageHeaderContent>
       </PageHeader>
       {viewing && detail.status === "error" && !c && <DataRegionError title="顧客を取得できませんでした" onRetry={detail.reload} />}
@@ -446,7 +510,7 @@ export function CustomerEditScreen({ id, params }: { id: string; params: URLSear
 }
 
 function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearchParams }) {
-  const { ws, scope, nav, user, permit, permitLatest, draftSource, peekRestoredDraft, consumeRestoredDraft } = usePi()
+  const { ws, scope, nav, user, permit, permitLatest, draftSource, peekRestoredDraft, consumeRestoredDraft, connectivity } = usePi()
   const { toast } = useToast()
   const f = fromOf(params)
   const w = ws === "hq" ? null : ws
@@ -582,6 +646,10 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
   }
 
   const unknown = form.status === "unknown"
+  const errorRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (form.formError) errorRef.current?.scrollIntoView({ block: "nearest" })
+  }, [form.formError])
   const id = (name: string) => `pi-edit-${name}`
   const err = (name: keyof CustomerValues) => {
     const e = form.error(name)
@@ -680,9 +748,11 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
       </FieldGroup>
 
       {form.formError && (
-        <Alert variant={unknown ? "warning" : "destructive"} role="alert" data-testid="edit-form-error">
+        // 固定した操作の領域（FormActions）に隠れないよう、下の余白を空けて表示の範囲に入れる
+        <Alert ref={errorRef} variant={unknown ? "warning" : "destructive"} role="alert" className="scroll-mb-40" data-testid="edit-form-error">
           <AlertTitle>{unknown ? "保存されたかを確かめられていません" : "保存できませんでした"}</AlertTitle>
-          <AlertDescription>{form.formError}</AlertDescription>
+          {/* 見出しと同じ文を説明の先頭で繰り返さない（Registry の既定の文は、見出しと同じ文で始まる） */}
+          <AlertDescription>{form.formError.replace(/^保存されたかを確かめられていません。/, "")}</AlertDescription>
           {unknown && (
             <AlertAction>
               <Button type="button" size="sm" variant="secondary" loading={checking} onClick={() => void checkSaved()} data-testid="edit-check">
@@ -706,7 +776,7 @@ function EditForm({ customer, params }: { customer: PiCustomer; params: URLSearc
               onFocusField={(name) => focusFormControl(id(name))}
             />
             {!edit.allowed && edit.reason && (
-              <p id="pi-edit-blocked" className="text-ui text-muted-foreground" data-testid="edit-blocked">
+              <p id="pi-edit-blocked" className={onlyOfflineReason([edit.reason], connectivity) ? "sr-only" : "text-ui text-muted-foreground"} data-testid="edit-blocked">
                 {edit.reason}
               </p>
             )}

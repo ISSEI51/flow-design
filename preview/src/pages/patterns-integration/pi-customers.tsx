@@ -34,7 +34,7 @@ import { TableScrollArea } from "@/patterns/table-scroll-area"
 import { defaultListFilters, planLabel, regions, statusLabel, yen, type ListFilters, type PiCustomer } from "../../data/patterns-integration/model"
 import { exportCustomers, fetchCustomers, lookupPaused, matchingIds, pauseCustomers, peekCustomer, type ListPage } from "../../data/patterns-integration/server"
 import { ExportDialog, type ExportColumn } from "../forms-workflows/export-dialog"
-import { ProtectedContent, usePi } from "./pi-context"
+import { onlyOfflineReason, ProtectedContent, usePi } from "./pi-context"
 import { Facts } from "./pi-parts"
 import { historyMarks, piHref } from "./pi-router"
 
@@ -109,7 +109,8 @@ function FilterSelect({ label, value, options, onChange, testId }: { label: stri
 }
 
 export function CustomersScreen({ restore }: { restore: boolean }) {
-  const { ws, scope, dataScope, nav, permit, outageSeq, viewAccess } = usePi()
+  const { ws, scope, dataScope, nav, permit, outageSeq, viewAccess, access, connectivity } = usePi()
+  const canImport = access.grants?.permissions.includes("edit") ?? false
   const { toast } = useToast()
   const { mainRef } = useAppShell()
   const root = useRef<HTMLDivElement>(null)
@@ -170,6 +171,17 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
   // 照会の結果の知らせ（照会で結果が不明な行がなくなると、BulkResultAlert を閉じることがあるため、画面に残す）
   const [lookupNotice, setLookupNotice] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
+  const resultRef = useRef<HTMLDivElement>(null)
+  // 押したボタンや進行状況の表示が消えたときに、フォーカスを <body> に落とさない（Data Browsing の検証画面と同じ方法）
+  const keepFocus = (target: () => HTMLElement | null) => {
+    let frames = 0
+    const check = () => {
+      const active = document.activeElement
+      if (!active || active === document.body || !document.contains(active)) target()?.focus()
+      else if (frames++ < 20) requestAnimationFrame(check)
+    }
+    requestAnimationFrame(check)
+  }
   const action = useBulkAction<Query, { kind: "pause" }>({
     scopeKey: scope,
     run: async (target) => {
@@ -181,7 +193,10 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
       selection.settle(summary)
       setLookupNotice(null)
       data.reload()
-      if (isBulkFullySucceeded(summary)) toast({ variant: "success", title: `${fmt(summary.succeeded.length)}件の顧客を停止にしました` })
+      if (isBulkFullySucceeded(summary)) {
+        toast({ variant: "success", title: `${fmt(summary.succeeded.length)}件の顧客を停止にしました` })
+        keepFocus(() => root.current?.querySelector<HTMLElement>("[data-slot=data-table-row-trigger]") ?? searchRef.current)
+      } else keepFocus(() => resultRef.current)
     },
   })
   const running = action.running !== null
@@ -267,6 +282,10 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
   const [exportOrigin, setExportOrigin] = useState<"table" | "selection-bar" | null>(null)
   const selectedIds = selection.mode === "ids" ? selection.selectedIds : []
   const exportBlocked = locked ? "一覧を取得し終えるまで操作できません" : exporting.reason
+  // 操作できない理由は、一覧の上に 1 回だけ見える文で示し、操作の部品から aria-describedby で参照する（同じ文を重ねない）
+  const reasons = [...new Set([exportBlocked, edit.reason].filter((r): r is string => r !== null))]
+  const reasonId = (r: string | null) => (r === null ? undefined : `pi-list-reason-${reasons.indexOf(r)}`)
+  const allSelectedExport = "検索結果全件の選択では、選んだ行のエクスポートはできません。表の上のエクスポートを使ってください"
   // 権限を失ったら、開いているエクスポートと確認を閉じる（古い権限で実行させない）
   useEffect(() => {
     if (!exporting.allowed) setExportOrigin(null)
@@ -324,14 +343,17 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
         <PageHeaderContent>
           <PageHeaderTitle>顧客</PageHeaderTitle>
         </PageHeaderContent>
-        <PageHeaderActions>
-          <a
-            {...nav.linkProps(piHref("import", { ws: ws === "hq" ? null : ws }))}
-            className="inline-flex min-h-control items-center rounded-lg px-5 text-ui font-medium outline-none hover:bg-accent focus-visible:focus-ring"
-          >
-            CSV から取り込む
-          </a>
-        </PageHeaderActions>
+        {/* 取り込みは編集の権限が必要。権限がなければ入口を置かない（取り込みの画面も開けない） */}
+        {canImport && (
+          <PageHeaderActions>
+            <a
+              {...nav.linkProps(piHref("import", { ws: ws === "hq" ? null : ws }))}
+              className="inline-flex min-h-control items-center rounded-xs text-ui font-medium underline underline-offset-4 outline-none focus-visible:focus-ring"
+            >
+              CSV から取り込む
+            </a>
+          </PageHeaderActions>
+        )}
       </PageHeader>
       <ProtectedContent label="顧客の一覧">
         <div ref={root} className="flex min-w-0 flex-col gap-4">
@@ -345,7 +367,7 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
               data-testid="customers-search"
             />
             {/* 狭い画面では、絞り込みと並び順を 2 列に並べる（縦に長くしない） */}
-            <div className="grid w-full grid-cols-2 gap-3 sm:contents">
+            <div className="grid w-full grid-cols-1 gap-3 min-[22.5rem]:grid-cols-2 sm:contents">
               <FilterSelect label="状態" value={q.filters.status} options={[{ value: "active", label: "契約中" }, { value: "paused", label: "停止中" }]} onChange={(v) => browse.setFilters({ status: v as ListFilters["status"] })} testId="filter-status" />
               <FilterSelect label="地域" value={q.filters.region} options={regions.map((r) => ({ value: r, label: r }))} onChange={(v) => browse.setFilters({ region: v })} testId="filter-region" />
               <Select
@@ -369,22 +391,26 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
               className="w-full sm:ml-auto sm:w-auto"
               disabled={exportBlocked !== null}
               focusableWhenDisabled
-              aria-describedby={exportBlocked ? "pi-export-reason" : undefined}
+              aria-describedby={reasonId(exportBlocked)}
               onClick={() => setExportOrigin("table")}
               data-testid="customers-export"
             >
               エクスポート
             </Button>
             </div>
-            {exportBlocked && (
-              <span id="pi-export-reason" className="sr-only">
-                {exportBlocked}
-              </span>
-            )}
           </div>
+          {reasons.length > 0 && (
+            <div className={onlyOfflineReason(reasons, connectivity) ? "sr-only" : "flex flex-col gap-1 text-ui text-muted-foreground"} data-testid="list-restrictions">
+              {reasons.map((r) => (
+                <p key={r} id={reasonId(r)}>
+                  {r}
+                </p>
+              ))}
+            </div>
+          )}
 
           {summary && !isBulkFullySucceeded(summary) && (
-            <div data-testid="bulk-result">
+            <div ref={resultRef} tabIndex={-1} className="outline-none" data-testid="bulk-result">
               <BulkResultAlert
                 summary={summary}
                 getItemLabel={nameOf}
@@ -427,12 +453,27 @@ export function CustomersScreen({ restore }: { restore: boolean }) {
                       size="sm"
                       variant="secondary"
                       disabled={locked || selection.mode !== "ids" || exportBlocked !== null}
+                      focusableWhenDisabled
+                      aria-describedby={exportBlocked ? reasonId(exportBlocked) : selection.mode !== "ids" ? "pi-all-selected-export" : undefined}
                       onClick={() => setExportOrigin("selection-bar")}
                       data-testid="customers-export-selected"
                     >
                       エクスポート
                     </Button>
-                    <Button size="sm" variant="secondary" disabled={locked || !edit.allowed} onClick={() => setConfirmOpen(true)} data-testid="customers-pause-selected">
+                    {selection.mode !== "ids" && !exportBlocked && (
+                      <span id="pi-all-selected-export" className="sr-only">
+                        {allSelectedExport}
+                      </span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={locked || !edit.allowed}
+                      focusableWhenDisabled
+                      aria-describedby={reasonId(edit.reason)}
+                      onClick={() => setConfirmOpen(true)}
+                      data-testid="customers-pause-selected"
+                    >
                       停止にする
                     </Button>
                   </>

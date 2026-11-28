@@ -11,6 +11,7 @@ import { DrillDownLink, captureAnalysisPosition, useAnalysisPositionRestore, typ
 import { Metric, MetricGroup } from "@/patterns/metric"
 import { PageHeader, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { PageLayout } from "@/patterns/page-layout"
+import { Section, SectionHeader, SectionTitle } from "@/patterns/section-layout"
 
 import {
   conditionsText,
@@ -169,8 +170,10 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
             status={st}
             staleLabel={stale}
             data-testid="analysis-metrics"
-            error={st === "error" ? { title: "主要な指標を取得できませんでした", description: "顧客の一覧と編集は、この障害の影響を受けません。", onRetry: summary.reload } : null}
-            conditions={shown && (shown.conditions.region || shown.conditions.plan) ? <AnalysisScopeNote>{conditionsText(shown.conditions)}で集計しています。</AnalysisScopeNote> : null}
+            // 影響の範囲は、画面の上部の知らせ（SystemBanner）で示す。ここでは同じ説明を繰り返さない
+            error={st === "error" ? { title: "主要な指標を取得できませんでした", onRetry: summary.reload } : null}
+            // 集計の条件の注記は、表示中の結果が現在の条件の結果のときだけ示す（再取得中は staleLabel が条件を示す。失敗の後は結果を示さない）
+            conditions={st === "ready" && shown && (shown.conditions.region || shown.conditions.plan) ? <AnalysisScopeNote>{conditionsText(shown.conditions)}で集計しています。</AnalysisScopeNote> : null}
           >
             <MetricGroup>
               {metricIds.map((m) => (
@@ -183,15 +186,19 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
                   action={
                     shown && (
                       <DrillDownLink origin={`metric-${m}`} href={detailsHref(m)} onClick={drill(detailsHref(m))}>
-                        明細を見る
+                        {/* 3 つの指標のリンクを区別できる名前にする（見た目の文は短く保つ） */}
+                        <span className="sr-only">{metricLabel[m]}の</span>明細を見る
                       </DrillDownLink>
                     )
                   }
                 />
               ))}
             </MetricGroup>
-          </AnalysisRegion>
-          <AnalysisRegion title="地域ごとの月額の売上" divider status={st} staleLabel={stale} data-testid="analysis-regions" error={st === "error" ? { title: "地域ごとの月額の売上を取得できませんでした", onRetry: summary.reload } : null}>
+            {/* 同じ取得の結果のため、別の領域にせず、同じ領域の中に置く（更新中と条件の表示を 1 回にする） */}
+            <Section className="mt-12" data-testid="analysis-regions">
+              <SectionHeader>
+                <SectionTitle>地域ごとの月額の売上</SectionTitle>
+              </SectionHeader>
             <Table data-scroll-key="regions">
               <TableHeader>
                 <TableRow>
@@ -214,6 +221,7 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
                 ))}
               </TableBody>
             </Table>
+            </Section>
           </AnalysisRegion>
         </ProtectedContent>
       </div>

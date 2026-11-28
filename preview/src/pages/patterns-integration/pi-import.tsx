@@ -1,8 +1,7 @@
 import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { FileUploadDropzone } from "@/components/ui/file-upload"
 import { reconcileImportResult, type ImportIntegrity, type ImportResult } from "@/patterns/import-mapping"
 import { ImportResultSummary } from "@/patterns/import-review"
 import { PageHeader, PageHeaderContent, PageHeaderTitle } from "@/patterns/page-header"
@@ -97,23 +96,26 @@ export function ImportScreen() {
         </PageHeaderContent>
       </PageHeader>
       <div className="flex flex-col gap-6">
-        <Field>
-          <FieldLabel>CSV ファイル</FieldLabel>
-          <Input
-            type="file"
+        <div className="flex flex-col gap-2" data-testid="import-file">
+          <FileUploadDropzone
             accept=".csv,text/csv"
-            data-testid="import-file"
-            onChange={async (e) => {
-              const file = e.target.files?.[0]
+            title="CSV ファイルをドロップ"
+            description="1 行目は見出し（名前、メールアドレス、プラン）。2 行目から 1 行に 1 件の顧客"
+            disabled={running}
+            onFilesSelected={async ({ accepted, rejected }) => {
               setOutcome(null)
               setError(null)
-              if (!file) return setRows(null)
+              const file = accepted[0]
+              if (!file) {
+                setRows(null)
+                if (rejected[0]) setError(rejected[0].errors.map((e) => e.message).join("。"))
+                return
+              }
               setFileName(file.name)
               setRows(parse(await file.text()))
             }}
           />
-          <FieldDescription>1 行目は見出し（名前、メールアドレス、プラン）。2 行目から 1 行に 1 件の顧客。</FieldDescription>
-        </Field>
+        </div>
         {rows && !outcome && (
           <p className="text-ui" data-testid="import-ready">
             {fileName}：{rows.length.toLocaleString("ja-JP")}件
@@ -131,11 +133,26 @@ export function ImportScreen() {
         ) : (
           <RestrictedAction presentation={edit.presentation} reason={edit.reason ?? undefined}>
             {(control) => (
-              <Button {...control} className="w-fit" disabled={!rows || !edit.allowed} loading={running} onClick={() => void run()} data-testid="import-run">
+              <Button
+                {...control}
+                className="w-fit"
+                disabled={!rows || !edit.allowed}
+                focusableWhenDisabled
+                // 権限や接続による理由は RestrictedAction が示す。ファイルを選んでいない場合の理由はここで示す
+                aria-describedby={[control["aria-describedby"], !rows ? "pi-import-no-file" : null].filter(Boolean).join(" ") || undefined}
+                loading={running}
+                onClick={() => void run()}
+                data-testid="import-run"
+              >
                 取り込む
               </Button>
             )}
           </RestrictedAction>
+        )}
+        {!outcome && !rows && (
+          <p id="pi-import-no-file" className="text-ui text-muted-foreground">
+            CSV ファイルを選ぶと取り込めます
+          </p>
         )}
       </div>
     </PageLayout>
