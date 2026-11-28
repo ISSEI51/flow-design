@@ -900,6 +900,71 @@ test.describe("Account app: settings, permissions and navigation (integration re
     await expect(page.getByTestId("ntf-quiet-summary")).not.toContainText("Asia/Tokyo")
   })
 
+  test("NTF-3: after the unsaved-changes dialog closes, the permission is decided again before moving from a notification", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=profile")
+    await page.getByTestId("set-profile-title").fill("未保存の役職")
+    await trigger(page).click()
+    await page.getByTestId("ntf-center").getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    await expect(unsavedDialog(page)).toBeVisible()
+    // 確認の Dialog を開いている間に、権限の変更の知らせが届き、再確認を始める（応答は保留）
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.setRole("u-sato", "hq", "viewer")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await unsavedDialog(page).getByRole("button", { name: "変更を破棄" }).click()
+    // Dialog を閉じた時点の権限（確認中）で判断し直し、移動しない
+    await settle(page)
+    await expect(page).toHaveURL(/page=settings/)
+    await expect(page).not.toHaveURL(/page=customer&/)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 確認できた後は、通知から開ける（閲覧者も顧客を閲覧できる）
+    await trigger(page).click()
+    const item = page.getByTestId("ntf-center").locator("[data-notification-id=n-101]")
+    await expect(item).not.toHaveAttribute("data-read")
+    await page.getByTestId("ntf-center").getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
+  })
+
+  test("PERM-6: while permissions are re-checked, a page the previous role could not open is not shown as forbidden", async ({ page }) => {
+    await signInAs(page, "misaki.tanaka@example.com")
+    await go(page, "page=members&ws=hq")
+    await expect(h1(page)).toHaveText("このページを表示する権限がありません")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.setRole("u-tanaka", "hq", "admin")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    // 新しいロールでは開ける可能性がある。確認中は「権限がありません」と示さず、内容も描画しない
+    await expect(h1(page)).toHaveText("メンバーと権限")
+    await expect(main(page)).toContainText("最新の権限を確認しています")
+    await expect(main(page)).not.toContainText("権限がありません")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    await expect(main(page)).not.toContainText("最新の権限を確認しています")
+    await expect(h1(page)).toHaveText("メンバーと権限")
+  })
+
+  test("PERM-4: an export that cannot start because of the connection or the service says which one", async ({ page }) => {
+    await signInAs(page, "ichiro.suzuki@example.com")
+    await go(page, "page=jobs&ws=hq")
+    await expect(main(page).getByRole("button", { name: "顧客を書き出す" })).toBeEnabled()
+    await openVerify(page)
+    await page.getByTestId("acct-verify").getByRole("radio", { name: "切断した" }).check()
+    await expect(main(page)).toContainText("オフラインのため、書き出しを開始できません。", { timeout: 8000 })
+    await expect(main(page)).not.toContainText("接続とサービスの状態を確かめるまで")
+  })
+
   test("SYS-3: while offline, instant settings saves and mark-all-read are not sent; the reason is not 'unknown'", async ({ page }) => {
     await signInAs(page, sato)
     await go(page, "page=settings&ws=hq&cat=display")
