@@ -18,7 +18,7 @@ async function openCenter(page: Page) {
 }
 
 test.describe("Patterns integration: system states, settings and notifications", () => {
-  test("S27 offline restricts updates: save, pause and export are blocked with the reason and send nothing @webkit", async ({ page, context }) => {
+  test("S27 offline restricts updates: the save is blocked with the offline reason, sends nothing and keeps the input @webkit", async ({ page, context }) => {
     await openApp(page, { route: "page=customer-edit&id=c01&from=detail" })
     await editForm(page).getByLabel("社内のメモ").fill("オフラインの入力")
     await context.setOffline(true)

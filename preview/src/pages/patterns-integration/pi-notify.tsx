@@ -91,7 +91,8 @@ export function NotificationsSheet({ feed, open, onOpenChange }: { feed: Notific
     }
     guard.release(ticket)
     onOpenChange(false)
-    if (!item.read) feed.setRead(item.id, true)
+    // setRead は取得の状態を確かめないため、最新の取得に成功している間だけ既読にする（Registry の契約）
+    if (!item.read && feed.canOperate) feed.setRead(item.id, true)
     nav.navigate(piHref("customer", { ws: w, id: item.customerId }))
   }
 
