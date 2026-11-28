@@ -273,6 +273,9 @@ function updateToastOverlayOffset() {
   // Toast の表示の範囲（toast.tsx の Toaster と同じ値）
   const toastLeft = wide ? vw - 24 * rem : rem
   const toastRight = wide ? vw - 1.5 * rem : vw - rem
+  // 表示中の Toast の領域の高さ（重ねて表示する Toast を含む）と、上下の余白
+  const toaster = document.querySelector<HTMLElement>("[data-slot=toaster]")
+  const toastSpace = Math.max(9 * rem, (toaster?.getBoundingClientRect().height ?? 0) + 3 * rem)
   let offset = 0
   for (const el of document.querySelectorAll<HTMLElement>(`[${TOAST_OFFSET_ATTR}]`)) {
     const side = el.getAttribute(TOAST_OFFSET_ATTR)
@@ -284,10 +287,10 @@ function updateToastOverlayOffset() {
     const right = side === "left" ? width : side === "right" ? vw : rect.right
     if (right <= toastLeft || left >= toastRight) continue
     // 下から開く Drawer は、Footer だけでなく Drawer の面全体を避ける（入力欄も Toast に隠れないようにする）。
-    // Toast が画面の外に出ないよう、画面の高さから Toast の表示に必要な高さ（9rem）を引いた値を上限にする。
-    // 上限を超える高い Drawer では、Toast が Drawer の上端の付近に重なる（操作の Footer と入力欄の大部分は隠れない）
+    // Toast が画面の外に出ないよう、画面の高さから、表示中の Toast の領域の高さ（Toast がない場合と 1 件の場合も 9rem 以上）を
+    // 引いた値を上限にする。上限を超える高い Drawer では、Toast が Drawer の上端の付近に重なる（操作の Footer は隠れない）
     const surface = side === "bottom" ? el.closest<HTMLElement>("[data-slot=drawer-popup]") : null
-    const height = surface ? Math.min(surface.offsetHeight, Math.max(el.offsetHeight, window.innerHeight - 9 * rem)) : el.offsetHeight
+    const height = surface ? Math.min(surface.offsetHeight, Math.max(el.offsetHeight, window.innerHeight - toastSpace)) : el.offsetHeight
     offset = Math.max(offset, height)
   }
   if (offset > 0) root.style.setProperty("--toast-offset-overlay", `${offset}px`)
@@ -306,6 +309,9 @@ function useToastOverlayOffset(ref: React.RefObject<HTMLElement | null>, sideOf:
     // 下から開く Drawer の面の高さの変化（入力による伸縮、ソフトウェアキーボード）も反映する
     const surface = el.closest<HTMLElement>("[data-slot=drawer-popup]")
     if (surface) ro?.observe(surface)
+    // Toast の増減で、上限を計算し直す
+    const toaster = document.querySelector<HTMLElement>("[data-slot=toaster]")
+    if (surface && toaster) ro?.observe(toaster)
     window.addEventListener("resize", updateToastOverlayOffset)
     return () => {
       ro?.disconnect()

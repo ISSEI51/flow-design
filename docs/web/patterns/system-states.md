@@ -437,7 +437,7 @@ if (screen) return (
 
 // 操作の制限は、表示の遅延と分けてすぐに行う
 const save = getMutationAvailability({ connectivity: connectivity.status, health: healthOf(statusReport, "customers") })
-<Button disabled={!save.allowed} aria-describedby="save-reason">保存</Button>
+<Button disabled={!save.allowed} aria-describedby="save-reason">保存する</Button>
 ```
 
 ```tsx

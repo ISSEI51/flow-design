@@ -267,7 +267,7 @@ test.describe("Onboarding: create organization", () => {
     // 結果が不明な間は、もう一度作成するボタンを押せない（確かめてから）
     await expect(demo.getByTestId("onb-setup-create")).toBeDisabled()
     expect(Object.keys((await snapshot(page)).created)).toHaveLength(1)
-    await demo.getByRole("button", { name: "作成されたかを確認する" }).click()
+    await demo.getByRole("button", { name: "登録されたかを確認" }).click()
     await expect(demo.getByTestId("onb-product")).toBeVisible()
     expect(Object.keys((await snapshot(page)).created)).toHaveLength(1)
   })

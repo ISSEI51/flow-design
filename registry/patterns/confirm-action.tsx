@@ -188,7 +188,7 @@ function ConfirmActionDialog({
       result =
         e instanceof FormSaveError && e.outcome === "failed"
           ? { error: e.message }
-          : { unknown: e instanceof FormSaveError ? e.message : "実行されたかを確かめられていません。最新の状態を確認してください。" }
+          : { unknown: e instanceof FormSaveError ? e.message : "実行されたかを確かめられていません。最新の状態を確かめてから、必要な場合だけもう一度実行してください。" }
     }
     // 閉じた後、開き直した後の古い結果は使わない
     if (gen !== generation.current) return

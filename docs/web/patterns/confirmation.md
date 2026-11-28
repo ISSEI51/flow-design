@@ -77,7 +77,7 @@
 | 結果が不明（実行されたかわからない） | `{ unknown: 文 }` を返す。または `FormSaveError(message, "unknown")` か、それ以外の例外を投げる | Dialog を閉じず、Alert（warning、`role="alert"`）で示す。もう一度実行のボタンを置かず、キャンセルを「閉じる」にする（名前の入力欄も無効にする）。状態を確かめる手段は製品が示す（「請求書の一覧で送信の状態を確認してください」）。結果が不明になった対象（`targetKey`）は、この部品を表示している間、閉じて同じ対象で開き直しても結果が不明のまま示し、実行のボタンを示さない。`onUnknown(targetKey)` で製品に知らせる。製品が状態を確かめて解く場合は、`targetKey` を変える（版や確認の時刻を含める）か、部品を作り直す |
 
 - 結果が不明になると、実行のボタンを取り除く。実行のボタンにあったフォーカスを body に落とさないよう、結果が不明の知らせ（`data-slot="confirm-action-unknown"`、`tabIndex={-1}`）にフォーカスを移す。次の Tab で「閉じる」に移る。検品：「an unknown result moves the focus from the removed confirm button to the notice」。初期実装と v0.1 の途中では、フォーカスが body に移っていた。
-- `FormSaveError` ではない例外の文は「実行されたかを確かめられていません。最新の状態を確認してください。」。初期実装では、例外を失敗として扱い、もう一度実行できるようにしていた。v0.1 では、実行されていないことが確かな場合（`FormSaveError` の `failed`）だけを失敗とする。
+- `FormSaveError` ではない例外の文は「実行されたかを確かめられていません。最新の状態を確かめてから、必要な場合だけもう一度実行してください。」。初期実装では、例外を失敗として扱い、もう一度実行できるようにしていた。v0.1 では、実行されていないことが確かな場合（`FormSaveError` の `failed`）だけを失敗とする。
 - 開閉のたびに世代を進める。閉じた後、または別の対象で開き直した後に届いた古い実行の結果で、Dialog の表示を変えない（検品：「confirm dialog: a result of the previous target does not close the dialog reopened for another target」）。
 
 ### 処理の対象

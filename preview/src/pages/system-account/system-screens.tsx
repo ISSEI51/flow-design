@@ -1171,7 +1171,7 @@ export function BackgroundJobsPanel({
         ))}
         {!compact && (
           <Button variant="ghost" size="sm" onClick={load}>
-            状況を更新
+            最新の情報に更新
           </Button>
         )}
       </div>

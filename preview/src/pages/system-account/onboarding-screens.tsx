@@ -405,7 +405,7 @@ type RunOptions<T> = { success: (v: T) => string; onSuccess?: (v: T) => void; on
 /**
  * 変更の操作の実行。
  * - 二重実行を防ぐ（同じ操作の実行中は受け付けない）。操作ごとに要求の ID を付け、模擬のサーバーは同じ ID を 1 回だけ処理する。
- * - 結果が不明な場合は、同じ操作をもう一度実行させない。「処理されたかを確認する」（confirm）で要求の ID を照会し、
+ * - 結果が不明な場合は、同じ操作をもう一度実行させない。「状態を確認」（confirm）で要求の ID を照会し、
  *   処理されていれば成功として扱い、処理されていなければもう一度実行できるようにする。最新の状態（作業結果）も取得し直す。
  * - 確定した失敗（MockRequestError：サーバーが拒否した）だけを失敗とし、それ以外の例外（通信の例外など）は結果が不明として扱う
  *   （サーバーで処理が終わっている可能性があるため。もう一度実行する前に確認する）。
@@ -525,7 +525,7 @@ function useActions(scope: string, api: OnboardingApi) {
 
 type Actions = ReturnType<typeof useActions>
 
-/** 操作のボタン。結果が不明な間は、同じ操作の代わりに「処理されたかを確認する」を置く */
+/** 操作のボタン。結果が不明な間は、同じ操作の代わりに「状態を確認」を置く */
 function ActionButton({
   actions,
   actionKey,
@@ -548,7 +548,7 @@ function ActionButton({
   if (actions.unresolved(actionKey))
     return (
       <Button type="button" variant="outline" size={size} loading={actions.pending(actionKey)} onClick={() => actions.confirm(actionKey)} data-testid={testId ? `${testId}-confirm` : undefined}>
-        処理されたかを確認する
+        状態を確認
       </Button>
     )
   return (
@@ -1600,7 +1600,7 @@ function SetupForm({
             <AlertDescription>{form.formError}</AlertDescription>
             <AlertAction>
               <Button type="button" variant="outline" size="sm" loading={check === "checking"} onClick={confirm}>
-                作成されたかを確認する
+                登録されたかを確認
               </Button>
             </AlertAction>
           </Alert>

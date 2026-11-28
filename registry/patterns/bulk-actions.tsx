@@ -157,7 +157,7 @@ function BulkResultAlert({
           <p>
             {requestError.message}
             {requestError.outcome === "unknown"
-              ? "。処理されたかを確認できないため、もう一度実行する前に最新の状態を確認してください。"
+              ? "。処理されたかを確認できないため、もう一度実行する前に「状態を確認」で確かめてください。"
               : "。処理は行われていません。選択はそのまま残しています。"}
           </p>
         ) : (

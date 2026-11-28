@@ -32,8 +32,9 @@
 #
 #   <出力先>/verdict.json   判定（pass か fail と、その理由）。fail の場合、このスクリプトは終了コード 1 で終わる
 #
-# 判定: summary.jsonl の 12 行がすべて exit 0 で、counts に failed、flaky、interrupted、didNotRun がなく、pageErrors の
-#       unexplained と consoleProduct が 0、anomalies がすべて 0、各回の終了で same-head=yes かつ dirty=0 であること。
+# 判定: summary.jsonl の 12 行がすべて exit 0 で、counts に failed、flaky、interrupted、didNotRun がなく、Playwright の段階は
+#       passed が 1 件以上、pageErrors の unexplained と consoleProduct が 0、vite（HMR の更新、再読み込み、依存の再最適化）と
+#       anomalies がすべて 0、各回の終了で same-head=yes かつ dirty=0 であること。
 # 出力先は空のディレクトリにする（前回の記録が残っていると、判定を取り違えるため。空でなければ開始しない）。
 set -u
 if [ $# -ne 2 ]; then
@@ -57,6 +58,15 @@ if [ -z "${FLOW_VERIFY_LOCK_HELD:-}" ]; then
   exec /usr/bin/perl "$SCRIPT_DIR/lock.pl" "$COMMON/flow-design-verify.lock" "${FLOW_VERIFY_LOCK_TIMEOUT:-10800}" \
     "$OUT/events.log" -- /usr/bin/env bash "$SCRIPT_DIR/full-pair.sh" "$OUT" "$PORT"
 fi
+
+# ロックを取った後にも、前の実行の記録がないことを確かめる（空の同じ出力先で 2 つを同時に始めた場合、
+# 待っていた側はここで止まる）。ロックの取得の記録（events.log）だけは、この時点で既にある
+for f in summary.jsonl runs.jsonl env.json verdict.json; do
+  if [ -e "$OUT/$f" ]; then
+    echo "output directory already has $f: $OUT" >&2
+    exit 2
+  fi
+done
 
 export PREVIEW_TEST_PORT=$PORT
 cd "$REPO" || exit 2
@@ -157,6 +167,10 @@ node -e '
     const where = `run ${l.run} ${l.step}`;
     if (l.exit !== 0) reasons.push(`${where}: exit ${l.exit}`);
     for (const k of ["failed", "flaky", "interrupted", "didNotRun"]) if (c[k]) reasons.push(`${where}: ${k} ${c[k]}`);
+    // Playwright の段階は、集計の行があり、成功が 1 件以上あること
+    if (l.step.startsWith("test:") && l.step !== "test:tokens" && !(c.passed > 0)) reasons.push(`${where}: no passed tests in the summary`);
+    // 検品中の HMR の更新、再読み込み、依存の再最適化（作業ツリーの変更や、キャッシュの共有の兆候）
+    for (const [k, v] of Object.entries(d.vite ?? {})) if (v) reasons.push(`${where}: vite ${k} ${v}`);
     if (d.pageErrors?.unexplained) reasons.push(`${where}: unexplained page errors ${d.pageErrors.unexplained}`);
     if (d.pageErrors?.consoleProduct) reasons.push(`${where}: product console errors ${d.pageErrors.consoleProduct}`);
     for (const [k, v] of Object.entries(d.anomalies ?? {})) if (v) reasons.push(`${where}: ${k} ${v}`);
