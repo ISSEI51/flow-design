@@ -439,7 +439,8 @@ test.describe("Reauthentication: being the same user is not enough to restore wo
       showTarget: false,
       allowEdit: false,
       discard: ["input", "cache", "async-results", "unconfirmed-mutation"],
-      pendingMutation: "unresolved",
+      // 記録を破棄する（discard の unconfirmed-mutation）ため discarded。照会をやり直す unresolved とは返さない（AUTH-7 で統一した）
+      pendingMutation: "discarded",
       reason: "no-view-permission",
     })
   })
