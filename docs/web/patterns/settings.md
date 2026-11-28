@@ -194,7 +194,7 @@
 - 親の設定を無効にしても、子の設定の値を保持する（「通知を止める時間帯」をオフにしても、開始と終了の時刻を残す）。子の値が使われていないことを示し、実際の動作（「現在の動作：通知を止めていません。」）を別に示す（`resolveDependent`）。
 - 組織のポリシー、組織の標準、製品の標準、個人の上書きの関係を示す（`resolveSetting`）。上書きしていない場合は「組織（本社営業部）の標準の言語を使っています。」、上書きした場合は「あなたが選んだ言語を使っています。組織の標準は日本語です。」。上書きを外す選択肢（「組織の標準（日本語）」）を置く。
 - 組織の必須のポリシーを、個人の設定で無効にできるようにしない。操作を無効にし、理由と、保持している個人の値（「あなたの設定（オフ）は保持しており、ポリシーが変わると使われます。」）を示す。
-- 変更できない理由は、ポリシー、契約プラン、権限の順に判断する（`settingAccess`）。契約プランで使えない設定は、権限とは別の理由として示す（「スタンダードプランでは使えません。ビジネスプランで使えます。」）。
+- 変更できない理由は、ポリシー、契約プラン、権限、権限の未確定の順に判断する（`settingAccess`）。最新の権限を確認していない間（`unresolved`：取得中、取得の失敗、再確認中、再確認の失敗）は、前の権限で変更できる場合も変更させない（`restriction: "unresolved"`。Patterns Integration Review で追加。保護された値を表示するかは `resolveContentAccess` で決める）。契約プランで使えない設定は、権限とは別の理由として示す（「スタンダードプランでは使えません。ビジネスプランで使えます。」）。
 - 個人の設定の保存値（`userValue`）、組織のポリシー（`orgPolicy`）、実際に適用される値（`value`）を区別する。ポリシーの変更の間に個人の設定の保存の結果が届いた場合、保存したのは個人の値であり、「保存しました」は実際に適用される値が変わったことを意味しない。実際に適用される値は、ポリシーを取得し直して `resolveSetting` で決める（プレビューでは、カテゴリを開き直すと、必須のポリシーで固定し、保持している個人の値を示す）。保存の応答に実際に適用される値を含めるかは、製品の API が決める。
 - 権限を失った設定は変更できない。組織の設定のフォームは、権限を含む `scopeKey` で作り直し、保存のボタンを置かない。サーバーは処理の時点のロールで判断する。
 - 標準の設定へ戻す操作は、範囲の外の項目を送らない（`planReset` の変わる項目だけを `changeMany` に渡す）。部分的な失敗の場合も、範囲の外の項目と、成功した項目以外の値を変えない。
@@ -443,8 +443,8 @@ const form = useSettingsForm({
 | 事項 | 内容 |
 | --- | --- |
 | Form Layout（Forms & Workflows） | 未統合のため、明示的な保存のフォームは既存の `Field`、`FieldGroup` で組んだ。統合の後に Form Layout へ置き換える |
-| Unsaved Changes（Forms & Workflows） | カテゴリの移動の前の確認と、招待の Dialog の破棄の確認は、プレビューの `DiscardAlert` で代替した。統合の後に `UnsavedChangesProvider`、`useUnsavedChanges`、`useNavigationGuard().confirmNavigation` へ置き換える。`SettingsArea` の `dirty`（保存の単位ごとの記録）と `go`／`commit` を、`useUnsavedChanges({ dirty, saving, label, canSave, revision, onSave, onDiscard })` の登録に変える。結果が不明なフォームも未保存として登録する（F&W の例：`form.isDirty \|\| form.status === "unknown"`）。即時保存の項目は登録しない |
-| 保存して移動（Forms & Workflows） | Settings にはない。F&W の `saveAndLeave` は各単位の `onSave(): Promise<boolean>` を順に呼び、false か例外で止める。`useSettingsForm.submit()` が返す `SubmitOutcome` を `onSave: () => form.submit().then((r) => r === "saved")` で接続する。`blocked`（結果が不明）と `unchanged` は false にする（移動しない）。F&W は保存の間に `revision` が変わったら確認に戻るため、`useSettingsForm` に入力の版（`revision`）を追加する必要がある（未実装） |
+| Unsaved Changes（Forms & Workflows） | カテゴリの移動の前の確認と、招待の Dialog の破棄の確認は、プレビューの `DiscardAlert` で代替した。統合の後に `UnsavedChangesProvider`、`useUnsavedChanges`、`useNavigationGuard().confirmNavigation` へ置き換える。`SettingsArea` の `dirty`（保存の単位ごとの記録）と `go`／`commit` を、`useUnsavedChanges({ dirty, saving, label, canSave, revision, onSave, onDiscard })` の登録に変える。結果が不明なフォームも未保存として登録する（F&W の例：`form.isDirty \|\| form.status === "unknown"`）。即時保存の項目は登録しない。Patterns Integration Review で置き換えた：`SettingsArea` はカテゴリの移動に `useNavigationGuard().confirmNavigation` を使い、明示的な保存のフォームは `useSettingsFormUnsaved`（`useUnsavedChanges`）で登録する。結果が不明か競合の間も確認の対象にし、「保存されていません」と示さない（製品の `labels.description` に `describeUnsavedSettings` を渡す）。`UnsavedChangesProvider` は製品の画面（統合の検証画面、資料のページの例）に置く。置かない場合、カテゴリの移動は確認なしで進む。招待の Dialog の破棄の確認は `DiscardChangesAlert` |
+| 保存して移動（Forms & Workflows） | Settings にはない。F&W の `saveAndLeave` は各単位の `onSave(): Promise<boolean>` を順に呼び、false か例外で止める。`useSettingsForm.submit()` が返す `SubmitOutcome` を `onSave: () => form.submit().then((r) => r === "saved")` で接続する。`blocked`（結果が不明）と `unchanged` は false にする（移動しない）。F&W は保存の間に `revision` が変わったら確認に戻るため、`useSettingsForm` に入力の版（`revision`）を追加する必要がある（未実装）。Patterns Integration Review で、明示的な保存のフォームの `onSave` を登録した（入力の誤り、確認の Dialog が必要なポリシーの変更、最新の権限を確認していない間、結果が不明な間は示さない） |
 | Confirmation（Forms & Workflows） | 2 段階認証の無効化、ポリシーの保存とリセット、アカウントとワークスペースの削除は `AlertDialog` で組んだ。統合の後に Confirmation へ置き換える |
 | Create & Edit（Forms & Workflows） | 入力の検証（表示名、組織名、メールアドレス）は最小限。検証のタイミングと概要の表示を合わせる |
 | 明示的な保存の重複（Forms & Workflows） | `useSettingsForm` と F&W の `useFormState`（`form-state.ts`）は、同じ処理を別の名前で持つ。保存の状態（`SettingSaveState` ↔ `FormStatus`：`saving` ↔ `submitting`、`saved` ↔ `succeeded`）、保存中の変更の反映（`settle` ↔ `handleSubmit` の成功の分岐）、結果が不明の解除（`verify()` ↔ `resolveUnknown`）、破棄（`discard` ↔ `discard`）、別の経路の値（`replace` ↔ `markSaved`）、二重の保存の防止（`busy` ↔ `submittingRef`）、世代（`useScopeGuard` ↔ 各 hook の `generation`）。統合の後は、フォームの入力の状態（dirty の比較、同期と非同期のバリデーション、`requireChanges`）を `useFormState` に任せ、`useSettingsForm` は設定に固有の部分（`forbidden`、`conflict`、版の照合、権限を含む `scopeKey`）だけを持つ形にするかを判断する |
@@ -455,8 +455,10 @@ const form = useSettingsForm({
 | 版と競合（Forms & Workflows） | F&W には版の番号、`If-Match`、409 の扱いがない（同時の編集は `invalid` の一部）。Settings の `conflict` と版の照合を、F&W の明示的な保存にも使うかを判断する |
 | Authentication | パスワードの変更の Dialog とアカウントの削除の再認証は、`Input type="password"` の最小限の例。Password Input と再認証の手順に置き換える |
 | Permission States | メンバーのロールの変更は扱っていない（一覧と招待だけ）。変更できない理由の表示（`settingAccess`）と、Restricted Action の表示を合わせる |
+| 通知の設定の保存の方針（SET-6） | 未実施。`NotificationSettingsMatrix` の即時保存は、`verify`、`messages`、`onPermissionDenied` を Settings の画面と同じ方針で渡していない（Patterns Integration Review の監査の指摘。担当の時間の都合で残した） |
+| タイムゾーンの正本（SET-4） | 未実施。タイムゾーンの選択肢と表示の値の正本を 1 つにする指摘（監査）。担当の時間の都合で残した |
 | Notifications | 「通知」のカテゴリの `notifications` に、通知の種類 × 受け取り方の部品（`NotificationSettingsMatrix`）を差し込む。部品は `settings-notifications.tsx` に移し、`notification-screens.tsx` から再び export している。通知を止める時間帯は、Settings（`settings-server.ts`）と Notifications（`notifications-server.ts`）の 2 つの保存先があるため、製品では 1 つの保存先にする |
-| System States | 保存の結果が不明な場合の表示（「確認する」）と、オフラインからの復帰の確認の表示を合わせる |
+| System States | 保存の結果が不明な場合の表示（「確認する」）と、オフラインからの復帰の確認の表示を合わせる。Patterns Integration Review の時点：統合の検証画面では、接続を確認できない間は保存を送らない（`useConnectedApi`）。回復の後の取得し直しは、入力中のフォームを作り直すため行っていない |
 | Switch（Components） | [switch.md](../components/switch.md) の「保存中は disabled」の記述と、この資料の判断（連続した変更を受け付ける）を合わせる |
 | Command（Components） | `CommandDialog` に `finalFocus` を渡せるようにするか（互換を保った追加）を判断する |
 | App Structure | Sidebar の下部の「設定」とアカウントメニューから、`SettingsPageScreen` の各カテゴリへの入口を統合の検証画面で確かめる |

@@ -233,9 +233,18 @@ function DrawerBody({ className, ...props }: React.ComponentProps<"div">) {
 
 // 操作ボタン。Dialog と同じく、キャンセルを左、主要な操作を右に置き、640px 未満の幅では均等の幅に広げる。
 // 下端の Safe Area の分だけ余白を足す。
-function DrawerFooter({ className, ...props }: React.ComponentProps<"div">) {
+const drawerSideOf = (el: HTMLElement) => {
+  const direction = el.closest("[data-swipe-direction]")?.getAttribute("data-swipe-direction") ?? "down"
+  return direction === "down" ? "bottom" : direction === "up" ? "top" : direction
+}
+
+function DrawerFooter({ className, ref, ...props }: React.ComponentProps<"div">) {
+  // 狭い画面で下から開く Drawer の下部の操作に、操作つきの Toast が重ならないようにする（Toast を Footer の上に表示する）
+  const footerRef = React.useRef<HTMLDivElement>(null)
+  useToastOverlayOffset(footerRef, drawerSideOf)
   return (
     <div
+      ref={mergeRefs(footerRef, ref)}
       data-slot="drawer-footer"
       className={cn(
         "flex shrink-0 flex-wrap gap-2 px-6 pt-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] *:flex-1 sm:justify-end sm:*:flex-none",
@@ -244,6 +253,67 @@ function DrawerFooter({ className, ...props }: React.ComponentProps<"div">) {
       {...props}
     />
   )
+}
+
+// ---------------------------------------------------------------- Toast との重なり
+// 画面の下に接する Footer（下から開く Drawer、下・左右の Sheet）の表示中は、Toast を Footer の上に表示する。
+// Footer の高さを --toast-offset-overlay に設定する（toast.tsx が --toast-offset-bottom と大きい方を使う）。
+// 画面の下に固定の操作を置く製品のコードが使う --toast-offset-bottom とは別の変数にし、互いに上書きしない。
+// 対象は、表示中の Footer のうち、Toast の表示の範囲（狭い画面では下の全幅、sm 以上では右下の 22.5rem）と横に重なるもの。
+// 複数の Footer が開いている場合は、最も高い Footer に合わせる（Drawer と Sheet で同じ属性を使い、DOM から集める）。
+const TOAST_OFFSET_ATTR = "data-toast-offset-side"
+
+function updateToastOverlayOffset() {
+  if (typeof document === "undefined") return
+  const root = document.documentElement
+  const vw = window.innerWidth
+  const rem = parseFloat(getComputedStyle(root).fontSize) || 16
+  const wide = window.matchMedia("(min-width: 40rem)").matches
+  // Toast の表示の範囲（toast.tsx の Toaster と同じ値）
+  const toastLeft = wide ? vw - 24 * rem : rem
+  const toastRight = wide ? vw - 1.5 * rem : vw - rem
+  let offset = 0
+  for (const el of document.querySelectorAll<HTMLElement>(`[${TOAST_OFFSET_ATTR}]`)) {
+    const side = el.getAttribute(TOAST_OFFSET_ATTR)
+    if (side === "top" || !el.isConnected) continue
+    // 開閉の動き（translate）の途中でも判断できるよう、左右の Overlay は端からの幅で横の範囲を求める
+    const width = el.offsetWidth
+    const rect = el.getBoundingClientRect()
+    const left = side === "left" ? 0 : side === "right" ? vw - width : rect.left
+    const right = side === "left" ? width : side === "right" ? vw : rect.right
+    if (right <= toastLeft || left >= toastRight) continue
+    offset = Math.max(offset, el.offsetHeight)
+  }
+  if (offset > 0) root.style.setProperty("--toast-offset-overlay", `${offset}px`)
+  else root.style.removeProperty("--toast-offset-overlay")
+}
+
+/** Footer の表示中だけ、Toast を Footer の上に表示する。side は Overlay の開く側（top は対象にしない） */
+function useToastOverlayOffset(ref: React.RefObject<HTMLElement | null>, sideOf: (el: HTMLElement) => string) {
+  React.useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.setAttribute(TOAST_OFFSET_ATTR, sideOf(el))
+    updateToastOverlayOffset()
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateToastOverlayOffset)
+    ro?.observe(el)
+    window.addEventListener("resize", updateToastOverlayOffset)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener("resize", updateToastOverlayOffset)
+      el.removeAttribute(TOAST_OFFSET_ATTR)
+      updateToastOverlayOffset()
+    }
+  }, [ref, sideOf])
+}
+
+function mergeRefs<T>(...refs: (React.Ref<T> | undefined)[]) {
+  return (value: T | null) => {
+    for (const r of refs) {
+      if (typeof r === "function") r(value)
+      else if (r) (r as React.RefObject<T | null>).current = value
+    }
+  }
 }
 
 function DrawerTitle({ className, ...props }: DrawerPrimitive.Title.Props) {

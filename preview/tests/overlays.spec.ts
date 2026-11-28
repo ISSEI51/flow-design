@@ -2216,3 +2216,132 @@ test.describe("screenshots", () => {
     await shot("drawer-note")
   })
 })
+
+// Combobox と Multi Select の一覧を開いたまま、後からモーダルが開いた場合（Patterns Integration Review の OVL-3）。
+// Select と Popover と同じく、一覧はモーダルの外側の層（z-40）に下がり、新しいモーダルの背面になって押せない。
+// preview/src/ssr/overlay-stack-harness.tsx を開き、window.__ovl.openAlert() で Alert Dialog を開く（一覧の外を押さない）。
+async function openStackHarness(page: Page) {
+  await page.route("**/ssr.html", async (route) => {
+    const res = await route.fetch()
+    const body = (await res.text()).replace("/src/ssr/client.tsx", "/src/ssr/overlay-stack-harness.tsx")
+    await route.fulfill({ response: res, body })
+  })
+  await page.goto("/ssr.html")
+  await page.waitForFunction(() => (window as unknown as { __ovlReady?: boolean }).__ovlReady === true)
+  await settle(page.getByTestId("ovl-dialog"))
+}
+
+test.describe("stacking: combobox and multi select under a later modal", { tag: "@webkit" }, () => {
+  const cases: { name: string; trigger: (page: Page) => Locator }[] = [
+    { name: "combobox", trigger: (page) => page.getByTestId("ovl-combo") },
+    { name: "multi select", trigger: (page) => page.getByTestId("ovl-dialog").locator("[data-slot=multi-select-trigger]") },
+  ]
+  for (const c of cases) {
+    test(`${c.name}: the open list stays behind an alert dialog opened later and cannot be pressed`, async ({ page }) => {
+      await openStackHarness(page)
+      await c.trigger(page).click()
+      const list = page.locator("[data-slot=combobox-content]")
+      await settle(list)
+      const lb = await box(list)
+      // 開いた直後は、Dialog の前面にあり押せる
+      expect(await hitInside(page, lb.x + lb.width / 2, lb.y + lb.height / 2, list)).toBe(true)
+      await page.evaluate(() => (window as unknown as { __ovl: { openAlert: () => void } }).__ovl.openAlert())
+      const alert = page.getByTestId("ovl-alert")
+      await settle(alert)
+      // 一覧は背後の層に下がる（Base UI がモーダルの外側の要素に付ける data-base-ui-inert の下にあり、z-40 になる）
+      const lb2 = await box(list)
+      expect(await hitInside(page, lb2.x + lb2.width / 2, lb2.y + lb2.height / 2, list)).toBe(false)
+      expect(await list.evaluate((el) => el.closest("[data-base-ui-inert]") !== null)).toBe(true)
+      const ab = await box(alert)
+      expect(await hitInside(page, ab.x + ab.width / 2, ab.y + 12, alert)).toBe(true)
+      await expect(alert.getByRole("button", { name: "キャンセル" })).toBeFocused()
+      await page.keyboard.press("Escape")
+      await expect(alert).toBeHidden()
+      await expect(page.getByTestId("ovl-dialog")).toBeVisible()
+    })
+  }
+})
+
+// Toast と Overlay の Footer の重なり（Patterns Integration Review の OVL-1、OVL-2）。
+// 下から開く Drawer と、下・左右の Sheet の Footer の表示中は、Footer が --toast-offset-overlay を設定し、Toast を Footer の上に表示する。
+// 閉じたら設定を外す。Toast の表示の範囲と横に重ならない Footer（デスクトップの左の Sheet）は対象にしない。
+const overlayOffset = (page: Page) => page.evaluate(() => document.documentElement.style.getPropertyValue("--toast-offset-overlay"))
+async function toastAboveFooter(page: Page, footer: Locator) {
+  const toast = page.locator("[data-slot=toast]").first()
+  await settle(toast)
+  const tb = await box(toast)
+  const fb = await box(footer)
+  return tb.y + tb.height <= fb.y + 1
+}
+
+test.describe("toast above overlay footers", { tag: "@webkit" }, () => {
+  for (const width of [390, 320]) {
+    test(`drawer at ${width}px: an action toast does not cover the footer buttons; the offset is removed on close`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 740 })
+      await open(page, "drawer")
+      expect(await overlayOffset(page)).toBe("")
+      await page.getByTestId("drawer-note-trigger").click()
+      const drawer = page.getByTestId("drawer-note")
+      await settle(drawer)
+      await page.getByTestId("drawer-note-field").fill("来週に連絡する")
+      await page.getByTestId("drawer-note-draft").click()
+      const footer = drawer.locator("[data-slot=drawer-footer]")
+      expect(await toastAboveFooter(page, footer)).toBe(true)
+      // 操作つきの Toast が残っている間も、Footer の主要な操作を押せる
+      const submit = footer.getByRole("button", { name: "メモを追加" })
+      const sb = await box(submit)
+      expect(await hitInside(page, sb.x + sb.width / 2, sb.y + sb.height / 2, submit)).toBe(true)
+      await page.getByTestId("drawer-note-field").fill("")
+      await footer.getByRole("button", { name: "キャンセル" }).click()
+      await expect(drawer).toHaveCount(0)
+      await expect.poll(() => overlayOffset(page)).toBe("")
+    })
+  }
+
+  test("drawer: a result that completes inside the drawer is shown inside it, without a toast", async ({ page }) => {
+    await open(page, "drawer")
+    await page.getByTestId("drawer-resend-trigger").click()
+    const drawer = page.getByTestId("drawer-resend")
+    await settle(drawer)
+    await page.getByTestId("drawer-resend-send").click()
+    await expect(page.getByTestId("drawer-resend-status")).toHaveText("招待のメールを再送しました（模擬）。")
+    await expect(drawer).toBeVisible()
+    await expect(page.locator("[data-slot=toast]")).toHaveCount(0)
+  })
+
+  async function openSheetHarness(page: Page, side: "right" | "left" | "bottom") {
+    await page.route("**/ssr.html?view=sheet", async (route) => {
+      const res = await route.fetch()
+      const body = (await res.text()).replace("/src/ssr/client.tsx", "/src/ssr/overlay-stack-harness.tsx")
+      await route.fulfill({ response: res, body })
+    })
+    await page.goto("/ssr.html?view=sheet")
+    await page.waitForFunction(() => (window as unknown as { __ovlReady?: boolean }).__ovlReady === true)
+    await page.evaluate((s) => (window as unknown as { __ovl: { openSheet: (s: string) => void } }).__ovl.openSheet(s), side)
+    const sheet = page.getByTestId("ovl-sheet")
+    await settle(sheet)
+    await page.evaluate(() => (window as unknown as { __ovl: { toast: () => void } }).__ovl.toast())
+    return sheet
+  }
+
+  for (const side of ["right", "bottom"] as const) {
+    test(`${side} sheet: an action toast does not cover the save button in the footer; the offset is removed on close`, async ({ page }) => {
+      const sheet = await openSheetHarness(page, side)
+      const footer = page.getByTestId("ovl-sheet-footer")
+      expect(await toastAboveFooter(page, footer)).toBe(true)
+      const save = page.getByTestId("ovl-sheet-save")
+      const sb = await box(save)
+      expect(await hitInside(page, sb.x + sb.width / 2, sb.y + sb.height / 2, save)).toBe(true)
+      await page.evaluate(() => (window as unknown as { __ovl: { closeSheet: () => void } }).__ovl.closeSheet())
+      await expect(sheet).toHaveCount(0)
+      await expect.poll(() => overlayOffset(page)).toBe("")
+    })
+  }
+
+  test("left sheet on a wide screen does not move the toast (they do not overlap)", async ({ page, isMobile }) => {
+    test.skip(isMobile, "狭い画面では Toast が下の全幅に表示され、左の Sheet とも重なる")
+    await openSheetHarness(page, "left")
+    await expect(page.locator("[data-slot=toast]").first()).toBeVisible()
+    expect(await overlayOffset(page)).toBe("")
+  })
+})

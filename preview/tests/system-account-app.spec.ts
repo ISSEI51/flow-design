@@ -16,6 +16,8 @@ const tanaka = "misaki.tanaka@example.com"
 const h1 = (page: Page) => page.locator("h1, [role=heading][aria-level='1']")
 const main = (page: Page) => page.getByTestId("acct-main")
 const trigger = (page: Page) => page.getByTestId("ntf-trigger")
+/** 移動の前の未保存の変更の確認（Unsaved Changes の UnsavedChangesProvider の Alert Dialog） */
+const unsavedDialog = (page: Page) => page.locator("[data-slot=unsaved-changes-dialog]")
 
 /** 模擬のサーバーの応答を短くする（検品の時間を短くするため。順序と結果は変えない） */
 async function fast(page: Page) {
@@ -101,7 +103,7 @@ type PermServer = {
   hold: Record<string, boolean>
   held: { kind: string; scope: string }[]
   release: (kind: string, opts?: { scope?: string; last?: boolean }) => number
-  simulate: { setRole: (u: string, w: string, r: string) => void }
+  simulate: { setRole: (u: string, w: string, r: string) => void; grant: (scope: string, p: string) => void }
 }
 const permHeld = (page: Page, kind: string) =>
   page.evaluate((k) => (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer.held.filter((h) => h.kind === k).length, kind)
@@ -245,7 +247,7 @@ test.describe("Account app: everyday use", () => {
     await trigger(page).click()
     const center = page.getByTestId("ntf-center")
     await center.getByRole("button", { name: /担当者に設定されました/ }).first().click()
-    const discard = page.getByTestId("acct-discard")
+    const discard = unsavedDialog(page)
     await expect(discard).toBeVisible()
     await discard.getByRole("button", { name: "編集を続ける" }).click()
     await expect(page).toHaveURL(/page=settings/)
@@ -258,7 +260,7 @@ test.describe("Account app: everyday use", () => {
     await expect(item).toBeVisible()
     await expect(item).not.toHaveAttribute("data-read")
     await page.getByTestId("ntf-center").getByRole("button", { name: /担当者に設定されました/ }).first().click()
-    await page.getByTestId("acct-discard").getByRole("button", { name: "変更を破棄" }).click()
+    await unsavedDialog(page).getByRole("button", { name: "変更を破棄" }).click()
     await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("顧客の詳細")
   })
@@ -579,8 +581,8 @@ test.describe("Account app: scope boundaries", () => {
     await page.getByTestId("set-profile-title").fill("未保存")
     await (await accountMenu(page)).click()
     await page.getByRole("menuitem", { name: "ログアウト" }).click()
-    await expect(page.getByTestId("acct-discard")).toBeVisible()
-    await page.getByTestId("acct-discard").getByRole("button", { name: "変更を破棄" }).click()
+    await expect(unsavedDialog(page)).toBeVisible()
+    await unsavedDialog(page).getByRole("button", { name: "変更を破棄" }).click()
     await expect(page.getByText("ログアウトしました。")).toBeVisible()
   })
 })
@@ -695,5 +697,253 @@ test.describe("Account app: layout", { tag: "@webkit" }, () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), q).toBe(true)
       expect(await main(page).evaluate((el) => el.scrollWidth <= el.clientWidth + 1), q).toBe(true)
     }
+  })
+})
+
+// ------------------------------------------------------------------ Patterns Integration Review（System & Account の横断の検品）
+type SetServer = {
+  requests: { kind: string; scope: string; key?: string }[]
+  outcome: Record<string, string>
+  personalOf: (u: string) => { profile: { title: string } }
+  orgOf: (w: string) => { info: { name: string }; security: { requireMfa: boolean } }
+}
+const setServer = <T,>(page: Page, fn: (s: SetServer) => T) => page.evaluate(`(${fn.toString()})(window.__fdSaSettingsServer)`) as Promise<Awaited<T>>
+const orgInfoRequests = (page: Page) => setServer(page, (s) => s.requests.filter((r) => r.kind === "form" && r.key === "info").length)
+
+test.describe("Account app: settings, permissions and navigation (integration review)", () => {
+  test("PERM-1: while permissions are re-checked after a role change, org settings are hidden and a save is not sent", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=organization")
+    await expect(page.getByTestId("set-org-name")).toHaveValue("本社営業部")
+    await page.getByTestId("set-org-name").fill("本社営業部（変更）")
+    // 権限の変更の知らせと保存の押下を同じタスクで行う（画面の更新の前に押された場合）。保存の要求を数える
+    const sent = await page.evaluate(() => {
+      const w = window as unknown as { __fdSaPermissionServer: PermServer; __fdSaSettingsServer: SetServer }
+      const count = () => w.__fdSaSettingsServer.requests.filter((r) => r.kind === "form" && r.key === "info").length
+      const before = count()
+      w.__fdSaPermissionServer.hold.access = true
+      w.__fdSaPermissionServer.simulate.setRole("u-sato", "hq", "viewer")
+      document.querySelector<HTMLButtonElement>("[data-testid=set-org-info-save]")?.click()
+      return count() - before
+    })
+    expect(sent).toBe(0)
+    // 再確認の応答を保留している間：保護された組織名を表示せず、確認中と示す。保存の操作も示さない
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await expect(page.getByTestId("set-org-pending")).toHaveText(/最新の権限を確認しています/)
+    await expect(page.getByTestId("set-org-name")).toBeHidden()
+    await expect(page.getByTestId("set-org-info-save")).toBeHidden()
+    await expect(page.getByTestId("set-org").getByText("本社営業部（変更）")).toHaveCount(0)
+    await settle(page)
+    expect(await orgInfoRequests(page)).toBe(0)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 閲覧者は組織の設定を閲覧できない：組織のカテゴリを示さない
+    await expect(page.getByTestId("set-org-name")).toHaveCount(0)
+    expect(await orgInfoRequests(page)).toBe(0)
+  })
+
+  test("PERM-1: after the re-check keeps the same permissions, the input is still there and can be saved", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=organization")
+    await page.getByTestId("set-org-name").fill("本社営業部（確認の後）")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      // 権限は変わらないが、変更の知らせが届く（すでに持っている権限の付与）
+      s.simulate.grant("u-sato:hq", "audit.view")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await expect(page.getByTestId("set-org-name")).toBeHidden()
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    await expect(page.getByTestId("set-org-name")).toHaveValue("本社営業部（確認の後）")
+    await page.getByTestId("set-org-info-save").click()
+    await expect(page.getByTestId("set-org-info-status")).toHaveText(/保存しました/)
+  })
+
+  test("SET-1: browser back with unsaved settings input asks first; keep editing stays, discard leaves; beforeunload is registered", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=profile")
+    await expect(page.getByTestId("set-profile-title")).toBeVisible()
+    const beforeUnloadPrevented = () =>
+      page.evaluate(() => {
+        const e = new Event("beforeunload", { cancelable: true })
+        window.dispatchEvent(e)
+        return e.defaultPrevented
+      })
+    expect(await beforeUnloadPrevented()).toBe(false)
+    await page.getByTestId("set-profile-title").fill("戻る操作の前の入力")
+    expect(await beforeUnloadPrevented()).toBe(true)
+    await page.evaluate(() => history.back())
+    await expect(unsavedDialog(page)).toBeVisible()
+    // 確認の間は、表示している画面の URL のまま
+    await expect(page).toHaveURL(/page=settings/)
+    await unsavedDialog(page).getByRole("button", { name: "編集を続ける" }).click()
+    await expect(unsavedDialog(page)).toHaveCount(0)
+    await expect(page).toHaveURL(/page=settings&ws=hq&cat=profile/)
+    await expect(page.getByTestId("set-profile-title")).toHaveValue("戻る操作の前の入力")
+    await page.evaluate(() => history.back())
+    await unsavedDialog(page).getByRole("button", { name: "変更を破棄" }).click()
+    await expect(h1(page)).toHaveText("ホーム")
+    await expect(page).toHaveURL(/page=home/)
+    expect(await beforeUnloadPrevented()).toBe(false)
+    expect(await setServer(page, (s) => s.personalOf("u-sato").profile.title)).toBe("営業部 マネージャー")
+  })
+
+  test("SET-2: leaving after an unknown save result does not claim the input was not saved, and offers no save-and-leave", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=profile")
+    await setServer(page, (s) => {
+      s.outcome.form = "unknown"
+    })
+    await page.getByTestId("set-profile-title").fill("結果が不明な役職")
+    await page.getByTestId("set-profile-save").click()
+    await expect(page.getByTestId("set-profile")).toContainText("保存できたかを確認できませんでした")
+    await (await navLink(page, "ホーム")).click()
+    const dialog = unsavedDialog(page)
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText("「プロフィール」は、保存できたかを確認していません")
+    await expect(dialog).not.toContainText("保存されていません")
+    await expect(dialog.getByRole("button", { name: "保存して移動" })).toHaveCount(0)
+    await dialog.getByRole("button", { name: "編集を続ける" }).click()
+    await expect(page.getByTestId("set-profile").getByRole("button", { name: "確認する" })).toBeVisible()
+  })
+
+  test("SET-7: save and leave saves the form, then moves only after the save succeeded", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=profile")
+    await page.getByTestId("set-profile-title").fill("保存して移動した役職")
+    await (await navLink(page, "ホーム")).click()
+    await unsavedDialog(page).getByRole("button", { name: "保存して移動" }).click()
+    await expect(h1(page)).toHaveText("ホーム")
+    expect(await setServer(page, (s) => s.personalOf("u-sato").profile.title)).toBe("保存して移動した役職")
+  })
+
+  test("SET-3: saved org settings are the single source: the sidebar shows the new name and sign-in follows the saved MFA policy", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=organization")
+    await page.getByTestId("set-org-name").fill("本社営業本部")
+    await page.getByTestId("set-org-info-save").click()
+    await expect(page.getByTestId("set-org-info-status")).toHaveText(/保存しました/)
+    await expect(await accountMenu(page)).toContainText("本社営業本部")
+    await closeSidebar(page)
+    await page.getByTestId("set-policy-requireMfa").click()
+    await page.getByTestId("set-policy-save").click()
+    await expect(page.getByTestId("set-policy-status")).toHaveText(/保存しました/)
+    expect(await setServer(page, (s) => s.orgOf("hq").security.requireMfa)).toBe(false)
+    await (await accountMenu(page)).click()
+    await page.getByRole("menuitem", { name: "ログアウト" }).click()
+    await expect(page.getByText("ログアウトしました。")).toBeVisible()
+    // 保存したポリシー（多要素認証を必須にしない）で判定する：確認コードの画面を出さない
+    await signIn(page, sato, { mfa: false })
+    await expect(h1(page)).toHaveText("ホーム")
+    await expect(page.getByLabel("確認コード")).toHaveCount(0)
+  })
+
+  test("AUTH-3: session expiry with unsaved settings input says the input was discarded and returns to the same settings category", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=profile")
+    await page.getByTestId("set-profile-title").fill("期限切れの前の入力")
+    await openVerify(page)
+    // セッション切れは、未保存の変更の確認を挟まない
+    await page.getByTestId("acct-expire").click()
+    await expect(unsavedDialog(page)).toHaveCount(0)
+    await expect(h1(page)).toHaveText("もう一度ログインしてください")
+    await expect(page.getByTestId("acct-reauth")).toContainText("保存していない入力は破棄されました")
+    await signIn(page, sato, { lockedEmail: true })
+    await expect(page).toHaveURL(/page=settings&ws=hq&cat=profile/)
+    await expect(page.getByTestId("set-profile-title")).toHaveValue("営業部 マネージャー")
+  })
+
+  test("NTF-1: opening a notification while permissions are re-checked says so and does not mark it read", async ({ page }) => {
+    await signInAs(page, sato)
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = true
+      s.simulate.grant("u-sato:hq", "audit.view")
+    })
+    await expect.poll(() => permHeld(page, "access")).toBeGreaterThan(0)
+    await trigger(page).click()
+    const center = page.getByTestId("ntf-center")
+    await center.getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    // 再確認中（refreshing）か、前の権限を使えない間（loading）の文。どちらも「権限がない」とは示さない
+    await expect(center).toContainText(/(最新の)?権限を確認しています。確認できてから、もう一度開いてください。/)
+    await expect(center).not.toContainText("権限がありません")
+    await expect(page).not.toHaveURL(/page=customer&/)
+    await expect(center.locator("[data-notification-id=n-101]")).not.toHaveAttribute("data-read")
+    await page.evaluate(() => {
+      const s = (window as unknown as { __fdSaPermissionServer: PermServer }).__fdSaPermissionServer
+      s.hold.access = false
+      s.release("access")
+    })
+    // 確認できた後は開ける
+    await center.getByRole("button", { name: /担当者に設定されました/ }).first().click()
+    await expect(page).toHaveURL(/page=customer&ws=hq&id=C-00001/)
+  })
+
+  test("SYS-3: while offline, instant settings saves and mark-all-read are not sent; the reason is not 'unknown'", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=settings&ws=hq&cat=display")
+    await expect(page.getByTestId("set-display")).toBeVisible()
+    await openVerify(page)
+    await page.getByTestId("acct-verify").getByRole("radio", { name: "切断した" }).check()
+    await expect(page.locator("[data-slot=system-banner]")).toContainText("オフラインです", { timeout: 8000 })
+    const before = await setServer(page, (s) => s.requests.filter((r) => r.kind === "instant").length)
+    // 送らずに元の設定に戻すため、選んだ直後に選択が戻る（check() は状態の変化を待つため click を使う）
+    await page.getByTestId("set-theme").getByRole("radio", { name: "ダーク" }).click()
+    await expect(page.getByTestId("set-theme").getByRole("radio", { name: "ダーク" })).not.toBeChecked()
+    // 送っていないため、結果の不明ではなく、確定した失敗として元の設定に戻す
+    await expect(page.getByTestId("set-theme-status")).toHaveText(/元の設定に戻しました/)
+    expect(await setServer(page, (s) => s.requests.filter((r) => r.kind === "instant").length)).toBe(before)
+    const ntfRequests = () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __fdSaNotificationsServer: { requests: { kind: string }[] } }).__fdSaNotificationsServer.requests.filter(
+            (r) => r.kind === "read" || r.kind === "readAll"
+          ).length
+      )
+    const ntfBefore = await ntfRequests()
+    await trigger(page).click()
+    await page.getByTestId("ntf-center").getByRole("button", { name: "すべて既読にする" }).click()
+    await settle(page)
+    expect(await ntfRequests()).toBe(ntfBefore)
+  })
+
+  test("AUTH-4: after the password step, focus moves to the verification code input instead of falling to the body", async ({ page }) => {
+    await open(page)
+    await page.getByLabel("メールアドレス").first().fill(sato)
+    await page.getByLabel("パスワード", { exact: true }).fill(PASSWORD)
+    await page.getByLabel("パスワード", { exact: true }).press("Enter")
+    await expect(page.getByLabel("確認コード")).toBeFocused()
+  })
+
+  test("AUTH-1: the return path after re-authentication is checked with the current role, not the initial role", async ({ page }) => {
+    await signInAs(page, sato)
+    await go(page, "page=members&ws=hq")
+    await expect(h1(page)).toHaveText("メンバーと権限")
+    await openVerify(page)
+    await page.getByTestId("acct-verify").getByRole("radio", { name: "閲覧者" }).check()
+    await expect(h1(page)).toHaveText("このページを表示する権限がありません")
+    await page.getByTestId("acct-expire").click()
+    await signIn(page, sato, { lockedEmail: true })
+    await expect(h1(page)).toHaveText("ホーム")
+    await expect(page).toHaveURL(/page=home/)
+  })
+
+  test("AUTH-2: the return path uses the same permission as the page access (members.view)", async ({ page }) => {
+    await signInAs(page, "ichiro.suzuki@example.com")
+    await go(page, "page=members&ws=hq")
+    await expect(h1(page)).toHaveText("メンバーと権限")
+    await openVerify(page)
+    await page.getByTestId("acct-expire").click()
+    await signIn(page, "ichiro.suzuki@example.com", { lockedEmail: true })
+    await expect(page).toHaveURL(/page=members&ws=hq/)
+    await expect(h1(page)).toHaveText("メンバーと権限")
   })
 })

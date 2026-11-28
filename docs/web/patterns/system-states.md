@@ -39,7 +39,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/offline-recovery-dark.svg">
-  <img alt="オフライン、再接続、復旧確認の状態遷移の図。上段に左から、接続（疎通を確認できた、通常の表示）、オフライン（既存のデータと取得時刻、登録・更新・削除を制限）、再接続中（疎通を確認している、保存を受け付けない）、復旧を確認中（再取得と保存の結果の確認）が並ぶ。接続からオフラインへは「ブラウザが offline」、オフラインから再接続中へは「ブラウザが online」、再接続中から復旧を確認中へは「疎通の確認が成功」の矢印がある。復旧を確認中から接続へ戻る矢印には「確認が終わったら接続に戻る（表示した問題だけ、復旧を知らせる）」と書かれている。接続から再接続中へ「要求が通信の失敗で終わった」の矢印がある。再接続中の下に、点線の「間隔を延ばして確認（1 秒、2 秒、4 秒…、読み上げは繰り返さない）」があり、再接続中との間に「失敗」と「再確認」の矢印がある。そこから「上限」の矢印で「接続できない（自動の確認の上限、「再接続を試す」を待つ）」へ進み、「再接続を試す」の矢印で再接続中へ戻る。下の帯に、操作の制限はすぐに行い、Banner の表示と読み上げは 1 秒続いてから（短時間の切断と繰り返しでは出さない）、ブラウザの online だけで接続とせず、接続の回復とデータの取得の成功を区別する、と書かれている。" src="../../diagrams/offline-recovery-light.svg">
+  <img alt="オフライン、再接続、復旧確認の状態遷移の図。上部に「実線の箱：useConnectivity の状態。点線の箱：製品が管理する状態（再取得、結果が不明な保存の確認）」と書かれている。上段に左から、未確認（unknown。最初の描画（SSR を含む）、操作を許可しない）、接続（online。疎通の確認か要求の応答、通常の表示）、点線の復旧を確認中（再取得と保存の結果の確認、製品が管理する状態）が並ぶ。下段に左から、オフライン（offline（reason: browser）、登録・更新・削除を制限）、再接続中（connecting。疎通を確認している、間隔を延ばして再確認）、接続できない（offline（reason: unreachable）、「再接続を試す」を待つ）が並ぶ。未確認から接続へは「疎通の確認が成功または要求の応答（reportReachable）」、接続から未確認へは点線で「probe がない場合：要求が通信の失敗（reportFailure）」の矢印がある。未確認からオフラインへ「ブラウザが offline」、未確認から再接続中へ「最初の疎通の確認に失敗」、オフラインから再接続中へ「ブラウザが online（online だけでは接続としない）」の矢印がある。接続から再接続中へ「要求が通信の失敗（reportFailure）」、再接続中から接続へ「疎通の確認が成功または要求の応答」の矢印がある。再接続中から接続できないへ「自動の確認の上限」、接続できないから再接続中へ「「再接続を試す」（check）」の矢印がある。接続から復旧を確認中へ点線で「切断の後に接続した（lastOutage が変わる）」、復旧を確認中から接続へ点線で「確認が終わる（表示した問題だけ、復旧を知らせる）」の矢印がある。下の帯に、どの状態でもブラウザが offline になったらすぐにオフライン（browser）にし、操作の制限もすぐに行う、Banner の表示と読み上げは 1 秒続いてから（短時間の切断と繰り返しでは出さない）、接続の回復とデータの取得の成功を区別する、probe（疎通の確認）がない場合はブラウザが online になると未確認に戻り次の要求の応答で接続になる、接続の回復の後も結果が不明な更新は自動で再実行しない（取得の再開と更新の再実行を区別する）、と書かれている。" src="../../diagrams/offline-recovery-light.svg">
 </picture>
 
 | 状態（指示書 10 章） | 値 | 管理する部品 |
@@ -59,6 +59,15 @@
 | 疎通の確認の成功、製品の要求に応答が届いた | `ConnectivityStatus` の `online`（`confirmedBy` が `probe`、`request`、`initial`） | サービスが正常に稼働していること、業務のデータを取得できたこと |
 | サービスの正常な稼働 | `ServiceHealth` の `operational`（状態の API の結果） | 利用者の端末から接続できること、データの取得の成功 |
 | 業務のデータの取得の成功 | Data State（`useBrowseData` の `status`、`fetchedAt`） | ほかの機能の稼働、保存できること |
+
+`unknown` は、型によって意味が異なる。同じ語でも、表す事実と画面での扱いを混同しない（Patterns Integration Review の SYS-4 で追加）。
+
+| 値 | 意味 | 意味しないこと | 画面での扱い |
+| --- | --- | --- | --- |
+| `ConnectivityStatus` の `unknown` | サービスとの接続を、まだ確認していない（最初の描画、`probe` がない場合の通信の失敗の後） | オフラインであること、接続できないこと | 「接続を確認しています」。登録・更新・削除を既定で受け付けない（`getMutationAvailability` の `unconfirmed`） |
+| `ServiceHealth` と `SystemCondition` の `unknown` | サービスの状態を取得できない | サービスが停止していること、正常であること | 「状態を確認できません」。正常と表示しない。操作は止めない（拒否はサーバーが返す） |
+| `MutationStatus` の `unknown` | 保存の要求を送ったが、処理されたかがわからない（応答が届かなかった、待機を中止した） | 保存されなかったこと、保存されたこと | 「保存できたかを確認できませんでした」。自動で再実行せず、結果を確認する |
+| `JobState` の `unknown` | 処理の状態か結果を確かめられない（進捗や件数の値が正しくない、状態の値が想定外） | 処理が失敗したこと、成功したこと | 「結果を確認できません」。成功や失敗として扱わない |
 
 プレビューでは、状態の API に応答が届いたことを `reportReachable()` で接続の確認に使うが、サービスの稼働は応答の内容（機能ごとの状態）で判断する。HTTP のエラーの応答（サーバーの失敗）も、経路に届いたため `reportReachable()` を呼ぶ（接続の失敗として扱わない）。
 
@@ -482,11 +491,11 @@ setJobs((jobs) => mergeJobUpdates(jobs, await api.listJobs({ signal })))
 
 ## 統合時に確認する事項
 
-- Forms & Workflows（Unsaved Changes、Create & Edit）：結果が不明な保存の確認と入力の保持を、Unsaved Changes の部品と照合する。現在は既存の Textarea、Button と画面のメモリで模擬している。
+- Forms & Workflows（Unsaved Changes、Create & Edit）：結果が不明な保存の確認と入力の保持を、Unsaved Changes の部品と照合する。この資料のページの例は、既存の Textarea、Button と画面のメモリで模擬している（Patterns Integration Review でも変更していない）。統合の検証画面の設定は、Unsaved Changes の部品に接続した（system-and-account.md）。
 - Forms & Workflows（Import & Export）：ジョブの一覧（`JobStatusList`）と、取り込みと書き出しの進捗・結果の表示を照合する。部分的な失敗の行の確認の操作は、Import & Export の部品に置き換える。
 - Data Analysis：集計の取得の失敗とデータの鮮度の表示を、Data States と合わせて確認する。
 - 統合の検証画面（`account-app.tsx`）：`ServiceUnavailableScreen` を `embedded` なしで使い、Minimal Shell の画面全体で表示する。`SystemBannerArea` は `AppShellMain` の外に置く。
-- 統合の検証画面（`account-signed-in.tsx`）：顧客の編集と制限の例に `offline={!monitor.mutation("customers").allowed}` を渡している。接続の最初の確認の間（`unknown`）も `allowed` が `false` になるため、最初の確認の時間（模擬の応答の時間）だけ、オフラインの文言で制限が示される場合がある（推測。統合の検証画面の表示は確かめていない）。`reason` が `unconfirmed` の場合の文言の分岐は統括の判断に任せる。
+- 統合の検証画面（`account-signed-in.tsx`）：顧客の編集と制限の例には、接続（`connectivityOf`）とサービスの状態を分けて渡す（v0.1 で `offline={!monitor.mutation("customers").allowed}` から変更した）。接続の `unknown` と `connecting` は `unconfirmed`（「接続を確認しています」）、`offline` だけを「オフライン」とする（Patterns Integration Review の SYS-1 で `connecting` を `unconfirmed` に変えた）。設定の保存とお知らせの既読の更新は、接続を確認できない間は送らない（`useConnectedApi`。SYS-3）。
 - `SystemBannerArea` の `scopeKey`：統合の検証画面では渡していない（障害の情報はワークスペースに依存しない模擬のため）。ワークスペースごとの障害を示す製品では渡す。
 - 通知センター（Notifications）との関係：通知の取得の失敗は Notifications の領域に示し、System Banner に重ねない。
 - Status Page を製品が持たない場合は、`onShowDetails` と `onOpenStatusPage` を渡さない。

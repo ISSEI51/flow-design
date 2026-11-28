@@ -581,6 +581,22 @@ test.describe("Verification code", () => {
     await expect(error.locator("[data-slot=alert]")).toHaveAttribute("data-variant", "warning")
   })
 
+  test("AUTH-5: a late SMS send response does not take the focus from where the user moved it", async ({ page }) => {
+    await open(page)
+    const m = mfa(page)
+    await hold(page, "mfa-send")
+    await m.getByTestId("auth-mfa-other").click()
+    await m.getByRole("button", { name: "SMS でコードを受け取る" }).click()
+    await waitHeld(page, "mfa-send", 1)
+    // 応答を待つ間に、利用者が別の入力欄へ移った
+    const note = page.getByTestId("auth-session-note")
+    await note.focus()
+    await release(page, "mfa-send")
+    await expect(m.getByTestId("auth-mfa")).toHaveAttribute("data-method", "sms")
+    await expect(note).toBeFocused()
+    await expect(m.getByTestId("auth-mfa-code")).not.toBeFocused()
+  })
+
   test("alternatives and resend appear only for methods the user has", async ({ page }) => {
     await open(page)
     const m = mfa(page)

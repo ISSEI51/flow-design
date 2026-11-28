@@ -83,6 +83,7 @@
 - サーバー側で検索する場合は `filter={null}` にし、`useComboboxSearch` の `onQueryChange` を `onInputValueChange` に渡す。待ち時間、古い結果の破棄、閉じた後とアンマウントの後の扱い、再試行は [advanced.md](advanced.md#非同期の検索の責務) を参照する。選んだ項目が検索結果に含まれなくても欄に表示できるよう、製品は選んだ項目を `items` に残す。
 - 無効（`disabled`）と読み取り専用（`readOnly`）では開かない。
 - `name` を指定すると、隠れた入力欄で値（`{ value, label }` の場合は `value`）を送信する。
+- 一覧を開いたまま、後からモーダル（Dialog、Alert Dialog など）が開いた場合、一覧はモーダルの層（z-40）に下がり、新しいモーダルの背面に入って押せなくなる（Select、Popover と同じ。[overlays.md](overlays.md) の「重なり順」）。Patterns Integration Review で追加した（OVL-3）。Multi Select も同じ。
 
 ## 6. Anti-patterns
 

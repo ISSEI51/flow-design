@@ -96,7 +96,10 @@ Base UI の資料には「もう一度 F6 を押すと元の位置に戻る」�
   - 回帰の検品：`preview/tests/overlays.spec.ts` の `toast focus: buttons keep focus, editable elements take it`（検品用の画面 `#/forms-checks?case=toast`）。通常の通知と Undo の通知の本体、閉じるボタン、操作のボタンはフォーカスを移さない。入力欄を含む通知の `input`、`textarea`、`select`、`contenteditable` は、モーダルの有無にかかわらずフォーカスを移す。キーボードでは、F6 で通知の領域へ移り、Tab で操作のボタン、閉じるボタン、入力欄へ進み、Enter で操作のボタンを押し、Space で閉じるボタンを押す（閉じた後は F6 を押す前の要素へ戻る）。
 - 失敗の通知（`priority: "high"`）は、Base UI が読み上げ用の領域（`aria-live`）で即時に知らせる。重複して読み上げないため、見た目の通知は F6 で移動するまで支援技術から隠れる。操作つきの失敗の通知でも、同じ操作を画面の別の場所に用意する。
 - 画面下に固定の操作（ナビゲーション、送信ボタンなど）がある場合は、`--toast-offset-bottom` にその高さを指定して、通知を上にずらす。iPhone などの Safe Area の分は自動で空ける（`env(safe-area-inset-bottom)`）。
-- 狭い画面で下から開く Drawer（と下の Sheet）の表示中は、通知が Drawer の下部の操作（保存など）に重なる（全体統合検品のスクリーンショットで確認）。通知は押せるが、操作つきの通知は閉じるまで残り、その間は下の操作が隠れる。Drawer の中の操作の結果は、Drawer の中の表示（状態の文、Field の説明）で伝え、Toast は Drawer を閉じた後の結果に使う。Drawer の表示中に出す必要がある場合は、`--toast-offset-bottom` で Drawer の下部の操作の上へずらす。
+- 下から開く Drawer と、下・左右の Sheet の Footer（`DrawerFooter`、`SheetFooter`）の表示中は、Footer が自分の高さを `--toast-offset-overlay` に設定し、通知を Footer の上に表示する（Patterns Integration Review で追加。OVL-1、OVL-2）。`Toaster` は `--toast-offset-bottom` と `--toast-offset-overlay` の大きい方を使うため、製品が画面の下の固定の操作に設定した `--toast-offset-bottom` は上書きされない。Footer を閉じると設定を外す。
+  - 対象：通知の表示の範囲と横に重なる Footer。狭い画面（40rem 未満）では下の全幅、それ以上では右下の 22.5rem（右から 1.5rem）。デスクトップの右の Sheet（保存のボタンが右下にある）は対象になり、左の Sheet は通常は対象にならない。上から開く Drawer と Sheet は対象にしない。
+  - 変更の前は、狭い画面の Drawer の下部の操作（保存など）と、デスクトップの右の Sheet の Footer の保存のボタンに、操作つきの通知が重なり、閉じるまで押せなかった（全体統合検品のスクリーンショットと、Patterns Integration Review の監査で確認）。検品は `preview/tests/overlays.spec.ts` の `toast above overlay footers`（390px と 320px の Drawer、右と下の Sheet）。
+  - Footer の上に表示しても、通知は Drawer と Sheet の内容（入力欄）の一部を覆う。Drawer と Sheet の中で完結する操作の結果は、通知ではなく、中の表示（状態の文、Field の説明）で伝える（`#/drawer` の「Drawer の中の結果」）。通知は、閉じた後の結果か、閉じた後も残る必要がある結果に使う。
 - 動きを減らす設定では、位置を動かさず、透明度だけで表示・非表示する。
 
 ```tsx

@@ -46,43 +46,58 @@ def system_impact_scope():
 
 
 # ---------------------------------------------------------------- 12 オフライン・再接続・復旧確認
+# useConnectivity（registry/patterns/system-status-hooks.ts）の状態（unknown、online、connecting、offline の reason）と、
+# 製品が管理する「復旧を確認中」を区別する。Patterns Integration Review で unknown と probe のない場合の経路を加えた（DOC-1）。
 def offline_recovery():
     d = D()
-    W, H = 220, hh(2)
-    y0 = 60
-    xs = [0, 320, 640, 960]
-    state(d, xs[0], y0, W, H, "接続", ["疎通を確認できた", "通常の表示"])
-    state(d, xs[1], y0, W, H, "オフライン", ["既存のデータと取得時刻", "登録・更新・削除を制限"], fill=SURFACE, stroke=WARNING_C)
-    state(d, xs[2], y0, W, H, "再接続中", ["疎通を確認している", "保存を受け付けない"])
-    state(d, xs[3], y0, W, H, "復旧を確認中", ["再取得と", "保存の結果の確認"])
-    cy = y0 + H / 2
-    for a, b, lab in ((0, 1, "ブラウザが\noffline"), (1, 2, "ブラウザが\nonline"), (2, 3, "疎通の確認が\n成功")):
-        d.line([(xs[a] + W + 6, cy), (xs[b] - 6, cy)])
-        alabel(d, (xs[a] + W + xs[b]) / 2, y0 - 50, 100, lab)
-    # 確認が終わったら接続へ戻る
-    top = y0 - 64
-    d.line([(xs[3] + W / 2, y0 - 6), (xs[3] + W / 2, top), (xs[0] + W / 2, top), (xs[0] + W / 2, y0 - 6)])
-    T(d, xs[0] + W / 2 + 16, top - 26, 520, "確認が終わったら接続に戻る（表示した問題だけ、復旧を知らせる）", S_SUB, MUTED)
-    # 要求の失敗から再接続中へ
-    fy = y0 + H + 70
-    d.line([(xs[0] + W / 2, y0 + H + 6), (xs[0] + W / 2, fy + 30), (590, fy + 30), (590, y0 + H - 16), (xs[2] - 6, y0 + H - 16)])
-    T(d, xs[0] + W / 2 + 16, fy + 4, 260, "要求が通信の失敗で終わった", S_SUB, MUTED)
-    # 自動の確認と上限
-    ry = fy + 110
-    state(d, xs[2], ry, W, hh(2), "間隔を延ばして確認", ["1 秒、2 秒、4 秒…", "読み上げは繰り返さない"], fill="none", stroke=LINE, dashed=True)
-    state(d, xs[3], ry, W, hh(2), "接続できない", ["自動の確認の上限", "「再接続を試す」を待つ"], fill=SURFACE, stroke=WARNING_C)
-    d.line([(xs[2] + W / 2 - 30, y0 + H + 6), (xs[2] + W / 2 - 30, ry - 6)])
-    alabel(d, xs[2] + W / 2 - 90, (y0 + H + ry) / 2 - 10, 80, "失敗")
-    d.line([(xs[2] + W / 2 + 30, ry - 6), (xs[2] + W / 2 + 30, y0 + H + 6)])
-    alabel(d, xs[2] + W / 2 + 90, (y0 + H + ry) / 2 - 10, 80, "再確認")
-    d.line([(xs[2] + W + 6, ry + hh(2) / 2), (xs[3] - 6, ry + hh(2) / 2)])
-    alabel(d, (xs[2] + W + xs[3]) / 2, ry + hh(2) / 2 - 44, 80, "上限")
-    d.line([(xs[3] + W / 2, ry - 6), (xs[3] + W / 2, ry - 24), (xs[2] + W - 30, ry - 24), (xs[2] + W - 30, y0 + H + 6)])
-    alabel(d, xs[3] + W / 2 + 80, ry - 56, 120, "再接続を試す")
-    by = ry + hh(2) + 50
-    d.rect(0, by, xs[3] + W, 84, fill=SURFACE)
-    T(d, 24, by + 16, 1120, "操作の制限はすぐに行う。Banner の表示と読み上げは、1 秒続いてから（短時間の切断と繰り返しでは出さない）", S_SUB, TEXT, bold=True)
-    T(d, 24, by + 46, 1120, "ブラウザの online だけで接続とせず、接続の回復とデータの取得の成功を区別する", S_SUB, MUTED)
+    W, H = 272, hh(2)
+    xs = [0, 480, 960]
+    y1, y2 = 80, 380
+    # 上段：未確認、接続、復旧を確認中（製品の状態）
+    state(d, xs[0], y1, W, H, "未確認（unknown）", ["最初の描画（SSR を含む）", "操作を許可しない"], fill=SURFACE, stroke=LINE)
+    state(d, xs[1], y1, W, H, "接続（online）", ["疎通の確認か要求の応答", "通常の表示"])
+    state(d, xs[2], y1, W, H, "復旧を確認中", ["再取得と保存の結果の確認", "製品が管理する状態"], fill="none", stroke=LINE, dashed=True)
+    # 下段：オフライン（browser）、再接続中、接続できない（unreachable）
+    state(d, xs[0], y2, W, H, "オフライン", ["offline（reason: browser）", "登録・更新・削除を制限"], fill=SURFACE, stroke=WARNING_C)
+    state(d, xs[1], y2, W, H, "再接続中（connecting）", ["疎通を確認している", "間隔を延ばして再確認"])
+    state(d, xs[2], y2, W, H, "接続できない", ["offline（reason: unreachable）", "「再接続を試す」を待つ"], fill=SURFACE, stroke=WARNING_C)
+    cy1, cy2 = y1 + H / 2, y2 + H / 2
+    # 未確認 ⇄ 接続
+    d.line([(xs[0] + W + 6, cy1 - 14), (xs[1] - 6, cy1 - 14)])
+    alabel(d, (xs[0] + W + xs[1]) / 2, cy1 - 58, 270, "疎通の確認が成功\nまたは要求の応答（reportReachable）")
+    d.line([(xs[1] - 6, cy1 + 14), (xs[0] + W + 6, cy1 + 14)], dashed=True)
+    alabel(d, (xs[0] + W + xs[1]) / 2, cy1 + 22, 220, "probe がない場合：要求が\n通信の失敗（reportFailure）")
+    # 未確認 → オフライン
+    d.line([(xs[0] + W / 2, y1 + H + 6), (xs[0] + W / 2, y2 - 6)])
+    alabel(d, xs[0] + W / 2 + 70, (y1 + H + y2) / 2 - 10, 120, "ブラウザが\noffline", align="left")
+    # 未確認 → 再接続中（最初の疎通の確認に失敗）
+    d.line([(xs[0] + W - 40, y1 + H + 6), (xs[0] + W - 40, y2 - 40), (xs[1] + 40, y2 - 40), (xs[1] + 40, y2 - 6)])
+    alabel(d, (xs[0] + W + xs[1]) / 2 + 20, y2 - 66, 200, "最初の疎通の確認に失敗")
+    # オフライン → 再接続中
+    d.line([(xs[0] + W + 6, cy2), (xs[1] - 6, cy2)])
+    alabel(d, (xs[0] + W + xs[1]) / 2, cy2 + 8, 240, "ブラウザが online\n（online だけでは接続としない）")
+    # 接続 ⇄ 再接続中
+    d.line([(xs[1] + W / 2 - 30, y1 + H + 6), (xs[1] + W / 2 - 30, y2 - 6)])
+    alabel(d, xs[1] + W / 2 - 110, (y1 + H + y2) / 2 - 40, 140, "要求が\n通信の失敗\n（reportFailure）", align="center")
+    d.line([(xs[1] + W / 2 + 30, y2 - 6), (xs[1] + W / 2 + 30, y1 + H + 6)])
+    alabel(d, xs[1] + W / 2 + 100, (y1 + H + y2) / 2 - 30, 130, "疎通の確認が成功\nまたは要求の応答", align="center")
+    # 再接続中 → 接続できない、再接続を試す
+    d.line([(xs[1] + W + 6, cy2 - 14), (xs[2] - 6, cy2 - 14)])
+    alabel(d, (xs[1] + W + xs[2]) / 2, cy2 - 58, 200, "自動の確認の上限")
+    d.line([(xs[2] - 6, cy2 + 14), (xs[1] + W + 6, cy2 + 14)])
+    alabel(d, (xs[1] + W + xs[2]) / 2, cy2 + 22, 200, "「再接続を試す」（check）")
+    # 接続 → 復旧を確認中（製品）→ 接続
+    d.line([(xs[1] + W + 6, cy1 - 14), (xs[2] - 6, cy1 - 14)], dashed=True)
+    alabel(d, (xs[1] + W + xs[2]) / 2, cy1 - 58, 220, "切断の後に接続した\n（lastOutage が変わる）")
+    d.line([(xs[2] - 6, cy1 + 14), (xs[1] + W + 6, cy1 + 14)], dashed=True)
+    alabel(d, (xs[1] + W + xs[2]) / 2, cy1 + 22, 220, "確認が終わる（表示した\n問題だけ、復旧を知らせる）")
+    T(d, 0, 10, 1200, "実線の箱：useConnectivity の状態。点線の箱：製品が管理する状態（再取得、結果が不明な保存の確認）", S_SUB, MUTED)
+    by = y2 + H + 50
+    d.rect(0, by, xs[2] + W, 146, fill=SURFACE)
+    T(d, 24, by + 16, 1150, "どの状態でも、ブラウザが offline になったら、すぐにオフライン（browser）にする。操作の制限もすぐに行う", S_SUB, TEXT, bold=True)
+    T(d, 24, by + 46, 1150, "Banner の表示と読み上げは、1 秒続いてから（短時間の切断と繰り返しでは出さない）。接続の回復とデータの取得の成功を区別する", S_SUB, MUTED)
+    T(d, 24, by + 76, 1150, "probe（疎通の確認）がない場合は、ブラウザが online になると未確認に戻り、次の要求の応答で接続になる", S_SUB, MUTED)
+    T(d, 24, by + 106, 1150, "接続の回復の後も、結果が不明な更新は自動で再実行しない（取得の再開と更新の再実行を区別する）", S_SUB, MUTED)
     d.save("offline-recovery")
 
 

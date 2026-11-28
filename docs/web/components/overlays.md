@@ -170,13 +170,14 @@ const [confirm, setConfirm] = useState(false)
 | 層 | z-index | コンポーネント |
 | --- | ---: | --- |
 | モーダルの面 | 40 | Dialog、Alert Dialog、Sheet、Drawer（背景と面） |
-| 浮かぶ要素と通知 | 50 | Popover、Dropdown Menu、Select、Tooltip、Toast |
+| 浮かぶ要素と通知 | 50 | Popover、Dropdown Menu、Select、Combobox、Multi Select、Tooltip、Toast |
 
 - Dialog の中で開いた Select、Popover、Tooltip は、Dialog の上に重なる（50 > 40）。
 - Toast の領域はアプリの起動時に追加されるため、同じ層にすると、後から開いた Dialog や Sheet の下に隠れる。モーダルの面を 1 段下にすることで、Toast は開いている Dialog と Sheet の上に表示され、閉じるボタンを押せる。Toast を押しても Dialog は閉じない（検品で確認）。
 - モーダルの Overlay は外側の要素に `aria-hidden` を付けるが、`aria-live` の領域（Toast）は除く（Base UI）。Dialog の表示中も通知は読み上げの対象に残る。
 - 浮かぶ要素は、後から開いたモーダルの外側に残った場合、モーダルの層（40）に下がる。Base UI はモーダルを開くとき、外側の要素に `data-base-ui-inert` と `aria-hidden` を付ける。浮かぶ要素は、この印の下では `z-40` になり、DOM の順で新しいモーダルの背面に入って押せなくなる。たとえば、Dialog の中の Popover から Alert Dialog を開くと、Popover は Alert Dialog の背面に入る。Alert Dialog を閉じると元の層に戻る。
 - 前面のモーダルの中で新しく開いた浮かぶ要素は印を持たないため、`z-50` のまま前面に出る（Dialog の中の Select など）。
+- Combobox と Multi Select の一覧も、Patterns Integration Review で同じ切り替えを持つようにした（OVL-3。変更の前は、一覧を開いたまま後から開いたモーダルの前面に残り、押せた）。
 - Toast は印の下でも層を変えない。通知はモーダルの上に残し、押せる。
 - 層を増やす場合は、この表に理由とともに追加する。
 

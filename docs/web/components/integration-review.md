@@ -248,11 +248,11 @@ skip の 149 件は、次のテストである。
 | Next.js での導入 | 未検証。`"use client"` の境界は規則で確かめている。Registry & Gallery の段階で確かめる |
 | WebKit の座標が NaN のイベント | 発生元は未特定。条件を満たすものだけを環境の事象として記録している（`overlays.md`） |
 | Overlay の中のフォームの検証の表示 | プレビューに例がない。フォームの検証は Forms の検品で確かめている |
-| Command から通常の Dialog を開く | プレビューに例がない。Command と Alert Dialog の組み合わせは確かめている |
+| Command から通常の Dialog を開く | プレビューに例がない。Command と Alert Dialog の組み合わせは確かめている。Patterns Integration Review でも検品を追加していない |
 | Tabs と Accordion の中の Chart | プレビューに例がない。非表示の領域（`<details>`）から表示したときの Chart の大きさは確かめている |
-| Drawer の表示中の Toast の位置 | 狭い画面で Drawer の下部の操作に重なる。使い方で避ける（`toast.md`）。部品での自動の調整は行っていない |
+| Drawer の表示中の Toast の位置 | Patterns Integration Review で解消した（OVL-1、OVL-2）。`DrawerFooter`、`SheetFooter` の表示中は、Toast を Footer の上に表示する（`--toast-offset-overlay`。`toast.md`）。390px と 320px の Drawer、右と下の Sheet で、Toast が Footer の操作に重ならず、Footer の操作を押せることを検品した（`overlays.spec.ts` の `toast above overlay footers`）。実機では未検証 |
 | ページの移動での未保存の変更の確認 | ルーティングに依存するため、Patterns の範囲とする |
-| Combobox と Multi Select の層の切り替え | Popover、Tooltip、Select、Dropdown Menu と異なり、`in-[[data-base-ui-inert]]:z-40` を持たない。開いたまま後からモーダルが開く操作の経路は見つかっていない。問題が確認されていないため、変更していない |
+| Combobox と Multi Select の層の切り替え | Patterns Integration Review で解消した（OVL-3）。一覧を開いたまま、利用者の操作によらずにモーダルが開く場合（時間切れの通知など）に、一覧が新しいモーダルの前面に残り、押せることを検品用の画面（`preview/src/ssr/overlay-stack-harness.tsx`）で再現した。`in-[[data-base-ui-inert]]:z-40` を追加し、`overlays.spec.ts` の `stacking: combobox and multi select under a later modal` で、一覧が背面に入り押せないことを 4 つの project で確かめた |
 
 ## 10. 次のフェーズへの引き継ぎ
 

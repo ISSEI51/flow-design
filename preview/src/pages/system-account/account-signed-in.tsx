@@ -27,7 +27,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useToast } from "@/components/ui/toast"
-import { decideAccess } from "@/patterns/access"
+import { decideAccess, restrictionText } from "@/patterns/access"
 import { AccessState } from "@/patterns/access-state"
 import { AppShell, AppShellBody, AppShellHeader, AppShellMain } from "@/patterns/app-shell"
 import { useBrowseData } from "@/patterns/browse-data"
@@ -36,22 +36,23 @@ import { PageLayout } from "@/patterns/page-layout"
 import { PageHeader, PageHeaderActions, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { useScopeGuard } from "@/patterns/scope-guard"
 import { SidebarNav, SidebarNavItem, type NavGroup } from "@/patterns/sidebar-nav"
+import { UnsavedChangesProvider, useNavigationGuard } from "@/patterns/unsaved-changes"
 
-import { membershipOf, roles, users, workspaces, workspacesOf, type OnboardingTaskId, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
+import { membershipOf, roles, users, workspacesOf, type OnboardingTaskId, type Permission, type UserId, type WorkspaceId } from "../../data/system-account/model"
 import { onboardingApi } from "../../data/system-account/onboarding-server"
 import { notificationsApi } from "../../data/system-account/notifications-server"
 import { scopeKeyOf } from "../../data/system-account/permission-data"
 import { permissionServer } from "../../data/system-account/permission-server"
-import { settingsApi } from "../../data/system-account/settings-server"
+import { orgNameOf, settingsApi } from "../../data/system-account/settings-server"
 import { ProductMark } from "../app-structure/structure-sidebar"
-import { DiscardAlert } from "../overlays/discard-alert"
 import { accountHref, pagePermission, type AccountPage, type AccountRoute } from "./account-route"
 import { AccountVerifyPanel } from "./account-verify"
 import { NotificationHeaderCenter, NotificationInbox, NotificationSettingsMatrix, useMockNotificationFeed, type BrowserPermission, type OnNavigate } from "./notification-screens"
 import { GettingStartedConnected, useGettingStarted } from "./onboarding-screens"
 import { contactText, CustomerEditor, RestrictedOperations, RoleManagement, usePermissionAccess, type OperationConditions, type PermissionAccess } from "./permission-screens"
+import { describeUnsavedSettings, useOrgSettingsVersion } from "./settings-parts"
 import { SettingsArea, type SettingsCategoryId } from "./settings-screens"
-import { BackgroundJobsPanel, StatusPageExample, SystemBannerArea, type SystemMonitor } from "./system-screens"
+import { BackgroundJobsPanel, StatusPageExample, SystemBannerArea, useConnectedApi, type SystemMonitor } from "./system-screens"
 
 // System & Account の統合の検証画面のうち、ログインした後の製品の画面（製品側のコード）。正式な Pages の実装ではない。
 //
@@ -60,6 +61,21 @@ import { BackgroundJobsPanel, StatusPageExample, SystemBannerArea, type SystemMo
 // - 利用者が変わったら、この部品ごと作り直す（呼び出し側の key）。ワークスペースと権限が変わったら、各部品の scopeKey が変わり、
 //   前のスコープのデータ、選択、未保存の入力、非同期の結果を表示しない。Toast も閉じる（別のスコープへの誤操作を防ぐ）。
 // - 所属していないワークスペースの URL を信頼しない（canEnterWorkspace。呼び出し側で確かめる）。
+
+// 接続を確認できない間は送らない登録・更新・削除（useConnectedApi）
+const settingsMutations = [
+  "saveDisplay",
+  "saveDisplayBatch",
+  "saveProfile",
+  "changePassword",
+  "setGoogle",
+  "scheduleAccountDeletion",
+  "saveOrgInfo",
+  "saveSecurity",
+  "scheduleWorkspaceDeletion",
+  "invite",
+] as const satisfies readonly (keyof typeof settingsApi)[]
+const notificationMutations = ["updateRead", "markAllRead", "remove", "saveSetting"] as const satisfies readonly (keyof typeof notificationsApi)[]
 
 const settingsCategoryIds: SettingsCategoryId[] = ["profile", "display", "notifications", "security", "organization", "members"]
 const asCategory = (v: string | null): SettingsCategoryId | null => (settingsCategoryIds.includes(v as SettingsCategoryId) ? (v as SettingsCategoryId) : null)
@@ -84,6 +100,12 @@ const navLabels: Record<AccountPage, string> = {
   status: "稼働状況",
 }
 
+/**
+ * 製品のルーターの外からの移動（ブラウザの戻る・進む、アドレスバーの URL の変更）の確認。
+ * proceed を、未保存の変更がなければすぐに呼んで true を返す。あれば確認を開いて false を返し、許可されたら proceed を呼ぶ
+ */
+export type NavigationBlocker = (proceed: () => void, options?: { onCancel?: () => void }) => boolean
+
 export type SignedInAppProps = {
   userId: UserId
   route: AccountRoute & { ws: WorkspaceId }
@@ -91,11 +113,32 @@ export type SignedInAppProps = {
   /** URL を変える（製品のルーター）。未保存の変更の確認は、この部品が済ませてから呼ぶ */
   onRouteChange: (route: Partial<AccountRoute>) => void
   onSignOut: () => void
-  onExpireSession: () => void
+  /**
+   * セッションの有効期限を切る（検証用の操作）。確認を挟まずに呼ぶ（セッション切れは利用者の操作ではないため、遅らせない）。
+   * discardedInput：保存していない入力（未保存の変更、保存の結果を確認していない入力）があった
+   */
+  onExpireSession: (info: { discardedInput: boolean }) => void
+  /** ブラウザの戻る・進むの確認を、製品のルーター（account-app.tsx の hashchange）に渡す。アンマウントで null にする */
+  onBlockerChange?: (blocker: NavigationBlocker | null) => void
 }
 
-export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, onExpireSession }: SignedInAppProps) {
+/**
+ * 移動の前の未保存の変更の確認は、Unsaved Changes（Forms & Workflows）の部品で行う。設定の明示的な保存のフォームが
+ * useSettingsFormUnsaved で登録し、Sidebar、アカウントメニュー、通知からの移動、ブラウザの戻る・進むが confirmNavigation を通る。
+ * beforeunload（再読み込み、タブを閉じる）も、未保存の変更がある間だけ登録される。
+ */
+export function SignedInApp(props: SignedInAppProps) {
+  return (
+    <UnsavedChangesProvider labels={{ description: describeUnsavedSettings }}>
+      <SignedInAppContent {...props} />
+    </UnsavedChangesProvider>
+  )
+}
+
+function SignedInAppContent({ userId, route, monitor, onRouteChange, onSignOut, onExpireSession, onBlockerChange }: SignedInAppProps) {
   const ws = route.ws
+  // 組織名は Settings の模擬のサーバーの正本から読む。組織の設定を保存したら、Header と Sidebar の組織名を描画し直す
+  useOrgSettingsVersion()
   const scope = useMemo(() => ({ userId, workspaceId: ws }), [userId, ws])
   const { access, revision, notice } = usePermissionAccess({ scope, api: permissionServer.api })
   // 表示と各部品のスコープに使う権限。確定していない間は空（許可しない）。再確認中は前の確定した権限で表示を決める。
@@ -111,33 +154,51 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
     for (const t of toastsRef.current) dismiss(t.id)
   }, [ws, permissionKey, dismiss])
 
-  // 未保存の変更（設定の明示的な保存のフォーム）。画面の外への移動の前に確認する。
-  const [dirty, setDirty] = useState(false)
-  const [pendingNav, setPendingNav] = useState<{ next: Partial<AccountRoute> | "sign-out"; resolve: (ok: boolean) => void; returnFocus?: () => void } | null>(null)
+  // 未保存の変更（設定の明示的な保存のフォーム）。移動の前に Unsaved Changes の確認を通す
+  const guard = useNavigationGuard()
+  const { confirmNavigation } = guard
   const requestNavigate = useCallback(
     (next: Partial<AccountRoute> | "sign-out", options: { beforeConfirm?: () => void; returnFocus?: () => void } = {}) =>
       new Promise<boolean>((resolve) => {
-        const leaving = next === "sign-out" || next.page !== "settings"
-        if (dirty && leaving) {
-          options.beforeConfirm?.()
-          setPendingNav({ next, resolve, returnFocus: options.returnFocus })
-          return
+        const proceed = () => {
+          if (next === "sign-out") onSignOut()
+          else onRouteChange(next)
+          resolve(true)
         }
-        if (next === "sign-out") onSignOut()
-        else onRouteChange(next)
-        resolve(true)
+        const proceeded = confirmNavigation(proceed, {
+          onCancel: () => {
+            resolve(false)
+            // Alert Dialog がフォーカスを戻し終わった後に移す
+            if (options.returnFocus) window.setTimeout(options.returnFocus, 0)
+          },
+        })
+        // 確認の Dialog の前に閉じる Overlay（通知センター）。同じ処理の中で閉じるため、確認の Dialog と同時には開かない
+        if (!proceeded) options.beforeConfirm?.()
       }),
-    [dirty, onRouteChange, onSignOut]
+    [confirmNavigation, onRouteChange, onSignOut]
   )
   const go = (next: Partial<AccountRoute>) => void requestNavigate({ ws, ...next })
+  // ブラウザの戻る・進むも、同じ確認を通す
+  const blockerRef = useRef(onBlockerChange)
   useEffect(() => {
-    if (route.page !== "settings") setDirty(false)
-  }, [route.page])
+    blockerRef.current = onBlockerChange
+  })
+  useEffect(() => {
+    const register = blockerRef.current
+    register?.(confirmNavigation)
+    return () => register?.(null)
+  }, [confirmNavigation])
+  // セッション切れは確認せずに進める。保存していない入力があったかだけを、再認証の画面に渡す
+  const hasPendingInput = guard.hasUnsavedChanges || guard.saving
+  const expireSession = () => onExpireSession({ discardedInput: hasPendingInput })
 
   // お知らせ（Header の通知センターと専用のページで 1 つの状態を共有する）。専用のページの表示中は、新着を保留する。
   // 通知センターを開いている間と専用のページの表示中は、新着を保留する（閲覧の位置とフォーカスを動かさない）
   const [centerOpen, setCenterOpen] = useState(false)
+  // 業務の要求を接続の監視とつなぐ。接続を確認できない間は、既読の更新と設定の保存を送らない（SYS-3）
+  const connectedNotificationsApi = useConnectedApi(notificationsApi, monitor, notificationMutations)
   const feed = useMockNotificationFeed({
+    api: connectedNotificationsApi,
     userId,
     workspaceId: ws,
     scopeVersion: permissionKey,
@@ -145,12 +206,18 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
     subscriberLabel: "account-app",
   })
   useEffect(() => setCenterOpen(false), [ws])
+  // 接続が回復したら（切断の後に online）、お知らせを取得し直す。結果が不明な既読の更新は再実行しない（取得だけを再開する）
+  const outageSeq = monitor.connectivity.lastOutage?.seq ?? 0
+  const { reload: reloadFeed } = feed
+  useEffect(() => {
+    if (outageSeq > 0) reloadFeed()
+  }, [outageSeq, reloadFeed])
   // 通知から移動する処理は、開始したワークスペースと権限のスコープでだけ続ける。確認の応答を待つ間に切り替えたら、移動しない
   const navigationGuard = useScopeGuard(`${userId}:${ws}:${permissionKey}`)
   const onNotificationNavigate: OnNavigate = async (target, { workspaceId }) => {
     const ticket = navigationGuard.begin("navigate")
     // 通知のリンクを認可済みとして信頼しない。対象の存在と閲覧の権限を、移動の前に確かめる。
-    const check = await notificationsApi.resolveTarget({ userId, workspaceId }, target, { signal: ticket.signal })
+    const check = await connectedNotificationsApi.resolveTarget({ userId, workspaceId }, target, { signal: ticket.signal })
     const current = navigationGuard.isLatest(ticket)
     navigationGuard.release(ticket)
     if (!current) return { status: "cancelled" }
@@ -161,7 +228,12 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
     const needed = pagePermission[next.page as AccountPage]
     // クリックした時点ではなく、確認の応答の後の最新の権限で判断する（再確認中は許可しない）。
     // access.latest() は commit した時点の値で照合する。変更の知らせを受けた処理の中で reload() を呼んだ後は、確認済みの権限を返さない
-    if (needed && !decideAccess(access.latest(), { permissions: [needed] }).allowed) {
+    const decision = needed ? decideAccess(access.latest(), { permissions: [needed] }) : null
+    if (decision && !decision.allowed) {
+      // 権限を確認している間（再確認中、確認の失敗）は、権限がないとは示さず、通知を既読にしない（NTF-1）
+      if (decision.reason.kind === "unresolved") {
+        return { status: "unavailable", reason: "unresolved", message: `${restrictionText(decision.reason)}。確認できてから、もう一度開いてください。` }
+      }
       return { status: "unavailable", reason: "forbidden", message: "この対象を閲覧する権限がありません。管理者に権限を依頼してください。" }
     }
     const ok = await requestNavigate(
@@ -235,9 +307,9 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
         permissions={permissions}
         monitor={monitor}
         feed={feed}
+        notificationsApi={connectedNotificationsApi}
         onNavigate={onNotificationNavigate}
         go={go}
-        onDirtyChange={setDirty}
       />
     )
   }
@@ -266,7 +338,7 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
             <span className="truncate">Flow 営業管理</span>
           </span>
           <span className="hidden min-w-0 truncate text-ui text-muted-foreground md:inline" data-testid="acct-workspace">
-            {workspaces[ws].name}
+            {orgNameOf(ws)}
           </span>
           <div className="ml-auto flex items-center">
             <NotificationHeaderCenter
@@ -296,30 +368,10 @@ export function SignedInApp({ userId, route, monitor, onRouteChange, onSignOut, 
         <AppShellMain pageKey={`${ws}:${route.page}:${route.id ?? ""}:${route.page === "settings" ? "" : route.cat ?? ""}`} data-testid="acct-main">
           {body}
           <div className="px-4 pb-16 md:px-6">
-            <AccountVerifyPanel phase="app" start="signin" onStartChange={() => undefined} signedIn={{ userId, workspaceId: ws }} onExpireSession={onExpireSession} />
+            <AccountVerifyPanel phase="app" start="signin" onStartChange={() => undefined} signedIn={{ userId, workspaceId: ws }} onExpireSession={expireSession} />
           </div>
         </AppShellMain>
       </AppShellBody>
-      <DiscardAlert
-        open={pendingNav !== null}
-        onOpenChange={(open) => {
-          if (open || !pendingNav) return
-          pendingNav.resolve(false)
-          setPendingNav(null)
-          // Alert Dialog がフォーカスを戻し終わった後に移す
-          if (pendingNav.returnFocus) window.setTimeout(pendingNav.returnFocus, 0)
-        }}
-        onDiscard={() => {
-          if (!pendingNav) return
-          const { next, resolve } = pendingNav
-          setPendingNav(null)
-          setDirty(false)
-          if (next === "sign-out") onSignOut()
-          else onRouteChange(next)
-          resolve(true)
-        }}
-        testId="acct-discard"
-      />
     </AppShell>
   )
 }
@@ -359,13 +411,14 @@ type PageBodyProps = {
   permissions: readonly Permission[]
   monitor: SystemMonitor
   feed: ReturnType<typeof useMockNotificationFeed>
+  /** 接続の監視とつないだお知らせの API */
+  notificationsApi: typeof notificationsApi
   onNavigate: OnNavigate
   go: (next: Partial<AccountRoute>) => void
-  onDirtyChange: (dirty: boolean) => void
 }
 
 function PageBody(props: PageBodyProps) {
-  const { page, route, userId, scope, access, revision, monitor, feed, onNavigate, go, onDirtyChange } = props
+  const { page, route, userId, scope, access, revision, monitor, feed, onNavigate, go } = props
   const ws = route.ws
   switch (page) {
     case "home":
@@ -406,7 +459,7 @@ function PageBody(props: PageBodyProps) {
         </PageLayout>
       )
     case "settings":
-      return <SettingsPage {...props} onDirtyChange={onDirtyChange} />
+      return <SettingsPage {...props} />
     case "members":
       return (
         <PageFrame title="メンバーと権限" description="ロールの名前だけでなく、ロールごとに実際にできる操作を示します。">
@@ -442,11 +495,14 @@ function PageBody(props: PageBodyProps) {
 // ---------------------------------------------------------------- 監視の状態を、操作の条件に分ける
 // 接続（オフライン、未確認）と、サービスの状態（障害、メンテナンス）を区別する。障害を「オフライン」と示さない。
 
-/** 接続の状態。unknown（確認していない）は unconfirmed として渡し、確認済みの online と区別する（操作は許可しない） */
+/**
+ * 接続の状態。unknown（確認していない）と connecting（再接続の確認中）は unconfirmed として渡し、確認済みの online と区別する
+ * （操作は許可しない）。connecting を「オフライン」と示さない（Banner は「再接続しています」と示すため。SYS-1）
+ */
 function connectivityOf(monitor: SystemMonitor): "online" | "offline" | "unconfirmed" {
   const status = monitor.connectivity.status
   if (status === "online") return "online"
-  if (status === "unknown") return "unconfirmed"
+  if (status === "unknown" || status === "connecting") return "unconfirmed"
   return "offline"
 }
 
@@ -487,7 +543,7 @@ function HomePage(props: PageBodyProps) {
   return (
     <PageFrame
       title="ホーム"
-      description={`${workspaces[ws].name}・${membership ? roles[membership.role].name : ""}`}
+      description={`${orgNameOf(ws)}・${membership ? roles[membership.role].name : ""}`}
       actions={
         hidden ? (
           <Button variant="outline" onClick={() => state.setVisibility("expanded")} data-testid="acct-checklist-show">
@@ -576,22 +632,27 @@ function CustomerLinks({ scope, revision, go, limit, title }: PageBodyProps & { 
   )
 }
 
-function SettingsPage({ userId, route, permissions, go, onDirtyChange }: PageBodyProps) {
+function SettingsPage({ userId, route, permissions, access, monitor, notificationsApi: connectedNotificationsApi, go }: PageBodyProps) {
   const ws = route.ws
+  // 設定の保存を接続の監視とつなぐ。接続を確認できない間（オフラインなど）は、即時保存と明示的な保存を送らない（SYS-3）
+  const connectedSettingsApi = useConnectedApi(settingsApi, monitor, settingsMutations)
   const settingsScope = useMemo(() => ({ userId, workspaceId: ws, permissions }), [userId, ws, permissions])
   const [browserPermission, setBrowserPermission] = useState<BrowserPermission>("default")
   return (
-    <PageFrame title="設定" description={`${users[userId].name}さんの個人の設定と、${workspaces[ws].name}の設定`}>
+    <PageFrame title="設定" description={`${users[userId].name}さんの個人の設定と、${orgNameOf(ws)}の設定`}>
       <SettingsArea
         scope={settingsScope}
-        api={settingsApi}
+        api={connectedSettingsApi}
+        // 権限の再確認中は、組織の設定とメンバーの一覧（保護された情報）を表示せず、保存と削除を始めない
+        access={access}
         category={asCategory(route.cat)}
         onCategoryChange={(cat) => go({ page: "settings", cat })}
         hrefFor={(cat) => accountHref({ page: "settings", ws, cat })}
-        onPermissionDenied={() => undefined}
-        onAnyDirtyChange={onDirtyChange}
+        // 保存が権限不足で拒否された：最新の権限を取り直す（Sidebar、ページのアクセス、設定の表示を更新する）
+        onPermissionDenied={access.reload}
         notifications={
           <NotificationSettingsMatrix
+            api={connectedNotificationsApi}
             userId={userId}
             workspaceId={ws}
             browserPermission={browserPermission}
@@ -666,7 +727,7 @@ function AccountSidebar({
                 </div>
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate font-medium text-sidebar-foreground">{user.name}</span>
-                  <span className="truncate text-caption">{workspaces[ws].name}</span>
+                  <span className="truncate text-caption">{orgNameOf(ws)}</span>
                 </span>
                 <ChevronsUpDown aria-hidden="true" className="ml-auto size-4! group-data-[collapsible=icon]/sidebar:hidden" />
               </SidebarMenuButton>
@@ -683,7 +744,7 @@ function AccountSidebar({
                         {list.map((w) => (
                           // 選んだら閉じる（Base UI の RadioItem は既定では閉じない。切り替えの後もメニューが開いたまま残らないように）
                           <DropdownMenuRadioItem key={w.id} value={w.id} closeOnClick>
-                            {w.name}
+                            {orgNameOf(w.id)}
                           </DropdownMenuRadioItem>
                         ))}
                       </DropdownMenuRadioGroup>

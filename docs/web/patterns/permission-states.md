@@ -423,12 +423,13 @@ Permission Matrix と権限の申請を Registry の部品にしなかった理�
 ## 統合時に確認する事項
 
 - Forms & Workflows の Confirmation が統合されたら、ロールの変更の確認（現在は Alert Dialog を直接使用）を Confirmation の Pattern に置き換える。
-- Forms & Workflows の Unsaved Changes が統合されたら、編集中の権限変更の「入力の保持・破棄」と、移動の際の未保存の確認（`DiscardAlert`）の関係をそろえる。
+- Forms & Workflows の Unsaved Changes が統合されたら、編集中の権限変更の「入力の保持・破棄」と、移動の際の未保存の確認（`DiscardAlert`）の関係をそろえる。Patterns Integration Review の時点：統合の検証画面の移動の確認は `UnsavedChangesProvider` に置き換えた。組織の設定は、権限の再確認中にフォームを `hidden` と `inert` にして入力を残し、確定した権限が変わった場合だけ作り直す。この資料のページの `CustomerEditor` の扱いは変えていない。
 - Forms & Workflows の Create & Edit、Form Layout が統合されたら、閲覧専用の表示と編集の画面の配置を、その Pattern に合わせる。
 - Data Analysis が統合されたら、集計値と Chart での「閲覧できない対象を含めない」を、その Pattern の資料にも記載する。
 - 統合の検証画面（`account-app.tsx`）では、Authentication のセッション、Settings の組織の設定、Notifications の通知（閲覧できない対象の通知）、System States の障害の表示と、同じ `PermissionScope` と模擬のサーバーの状態を共有するかを決める。
 - 統合の検証画面（`account-signed-in.tsx`）の `CustomerEditor` と `RoleManagement` は、`whileUnverified` を指定していないため、既定（`hide`）で動く（権限の変更の知らせの後、取得し直すまで顧客の内容とメンバーの一覧を表示しない）。製品として `keep` を選ぶかは、統合の画面で決める。
-- 統合の検証画面の通知からの移動は、描画の中で代入した ref（`accessRef.current = access`）で判断している。`access.latest()` に置き換えると、知らせの処理の中の `reload()` を反映できる。
+- 統合の検証画面の通知からの移動は、`access.latest()` で判断している（v0.1 で、描画の中で代入した ref から置き換えた）。Patterns Integration Review で、最新の権限を確認している間（`unresolved`）は「権限がありません」ではなく「最新の権限を確認しています」と示し、通知を既読にしないようにした（NTF-1）。
+- 統合の検証画面の設定（Settings）：`SettingsArea` に `access` を渡し、組織の設定とメンバーの一覧を `resolveContentAccess`（既定の `hide`）で扱う。保存と削除は `access.latest()` で判断し直す。`settingAccess` は `unresolved` を受け取り、理由を `restriction: "unresolved"` で返す（PERM-1）。
 
 ## 検品
 

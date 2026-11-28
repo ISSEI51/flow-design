@@ -67,6 +67,7 @@
 - 開いている間は並びを変えない。選ぶたびに項目の位置が動かないようにするため。
 - サーバー側で検索する場合は `filter={null}` と `onSearchChange`、`searchStatus` を渡す（`useComboboxSearch`）。検索結果に含まれない選択済みの項目も、値と表示名を保つ。読み込んでいない項目を、まとめて選ぶ操作は提供しない。
 - `name` を指定すると、選んだ ID ごとに隠れた入力欄を作って送信する（`FormData.getAll(name)`）。
+- 一覧は `ComboboxContent` を使うため、後からモーダルが開いた場合は Combobox と同じく背面に入る（[combobox.md](combobox.md)）。
 
 ## 6. Anti-patterns
 

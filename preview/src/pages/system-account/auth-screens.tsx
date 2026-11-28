@@ -39,7 +39,7 @@ import {
   type SignInResult,
 } from "../../data/system-account/auth-server"
 import { MockRequestError, isAbortError } from "../../data/system-account/mock"
-import { orgSettings, workspaces } from "../../data/system-account/model"
+import { orgNameOf, orgPolicyOf } from "../../data/system-account/settings-server"
 import { ProductMark } from "../app-structure/structure-sidebar"
 
 // Authentication の画面の部品（プレビュー）。資料のページと、統合の検証画面（account-app.tsx）で使う。
@@ -96,7 +96,7 @@ export type SignInMethods = {
 }
 
 export function signInMethodsFor(org: AuthOrg, product: "password" | "magic-link" = "password"): SignInMethods {
-  const policy = orgSettings[org]
+  const policy = orgPolicyOf(org)
   if (policy.requireSso) return { password: false, providers: [], passkey: false, sso: true, magicLink: false }
   if (product === "magic-link") return { password: false, providers: [], passkey: false, sso: false, magicLink: true }
   return { password: true, providers: policy.allowSocialLogin ? ["google", "microsoft"] : [], passkey: true, sso: false, magicLink: false }
@@ -489,6 +489,7 @@ export function SignInScreen({
         challenge={step.challenge}
         onAuthenticated={(userId) => onAuthenticated(userId, destinationFor(userId, returnTo))}
         onCancel={() => go({ kind: "credentials" })}
+        focusOnMount
         layout={layout}
         headingLevel={headingLevel}
         aside={aside}
@@ -520,7 +521,7 @@ export function SignInScreen({
     )
   }
 
-  const orgName = workspaces[org].name
+  const orgName = orgNameOf(org)
   const anyAlternative = methods.passkey || methods.providers.length > 0
   return (
     <AuthLayout
@@ -698,7 +699,21 @@ export type MfaScreenProps = AuthScreenLayout & {
   autoSubmit?: boolean
   /** リカバリーコードの大文字・小文字を区別する（製品の指定）。区別する場合は大文字にそろえない */
   recoveryCaseSensitive?: boolean
+  /**
+   * 表示した時点で、利用者がフォーカスを動かしていなければ（body にある）、コードの入力欄へフォーカスを移す。
+   * ログインの画面から続けて表示する場合に指定する（押したボタンが消え、フォーカスが body に落ちるため。AUTH-4）。既定は false
+   */
+  focusOnMount?: boolean
   testId?: string
+}
+
+/**
+ * 利用者がフォーカスを動かしていない場合だけ、フォーカスを移す。フォーカスが body にある、押したボタン（pressed）にある、
+ * または DOM から外れた要素にある場合が対象。利用者が別の入力欄へ移った後に、遅れて届いた処理でフォーカスを奪わない（AUTH-5）
+ */
+function focusIfIdle(target: HTMLElement | null, pressed: Element | null = null) {
+  const active = document.activeElement
+  if (!active || active === document.body || active === pressed || !active.isConnected) target?.focus()
 }
 
 export function MfaScreen({
@@ -708,6 +723,7 @@ export function MfaScreen({
   onCancel,
   autoSubmit = false,
   recoveryCaseSensitive = false,
+  focusOnMount = false,
   layout = "minimal",
   headingLevel = 1,
   aside = defaultAside,
@@ -730,6 +746,12 @@ export function MfaScreen({
   const codeRef = useRef<HTMLInputElement>(null)
   const copy = methodCopy[method]
   const policy = codePolicyFor(method, challenge, recoveryCaseSensitive)
+
+  // ログインの画面から続けて表示した：押したボタンが消えて body に落ちたフォーカスを、コードの入力欄へ移す
+  const focusOnMountRef = useRef(focusOnMount)
+  useEffect(() => {
+    if (focusOnMountRef.current) focusIfIdle(codeRef.current)
+  }, [])
 
   // SMS のコードを送った直後は、再送信までの待ち時間を示す（時刻は効果の中で読む）
   useEffect(() => {
@@ -804,8 +826,10 @@ export function MfaScreen({
     verify(code)
   }
 
-  const sendSms = (switching: boolean) =>
-    run(
+  const sendSms = (switching: boolean) => {
+    // 押したボタン。応答の後に、利用者がほかの要素へ移っていなければ、入力欄へフォーカスを移す
+    const pressed = document.activeElement
+    return run(
       "send",
       (signal) => api.sendMfaCode({ challengeId: challenge.id, method: "sms" }, { signal }),
       (r) => {
@@ -818,8 +842,8 @@ export function MfaScreen({
         setError(null)
         setResendAt(Date.now() + r.retryAfterMs)
         setStatus(`${challenge.smsDestination ?? "登録した"}の電話番号に、${switching ? "" : "新しい"}コードを送信しました。`)
-        // 方式を変えると入力欄を作り直すため、描画の後にフォーカスを移す
-        requestAnimationFrame(() => codeRef.current?.focus())
+        // 方式を変えると入力欄を作り直すため、描画の後にフォーカスを移す（利用者がフォーカスを動かしていない場合だけ）
+        requestAnimationFrame(() => focusIfIdle(codeRef.current, pressed))
       },
       (err) => {
         if (codeOf(err) === "too-soon") {
@@ -829,6 +853,7 @@ export function MfaScreen({
         } else setError(formError(err, { title: "コードを送信できませんでした", description: "時間をおいて、もう一度お試しください。" }))
       }
     )
+  }
 
   const choose = (next: MfaMethod) => {
     if (next === "sms") {
@@ -842,7 +867,8 @@ export function MfaScreen({
     setFieldError(null)
     setError(null)
     setStatus("")
-    requestAnimationFrame(() => codeRef.current?.focus())
+    const pressed = document.activeElement
+    requestAnimationFrame(() => focusIfIdle(codeRef.current, pressed))
   }
 
   const others = challenge.methods.filter((m) => m !== method)
@@ -1588,10 +1614,23 @@ export type ReauthScreenProps = AuthScreenLayout & {
   onAuthenticated: (userId: string) => void
   /** 保持している作業を、同じアカウントでのログインの後に復元するか（説明の文を変える） */
   keepsWork?: boolean
+  /** keepsWork が false で、保存していない入力を破棄した（復元しない）ことを知らせる。既定は false */
+  discardedInput?: boolean
   testId?: string
 }
 
-export function ReauthScreen({ api, org, user, onAuthenticated, keepsWork = true, layout = "minimal", headingLevel = 1, aside, testId = "auth-reauth" }: ReauthScreenProps) {
+export function ReauthScreen({
+  api,
+  org,
+  user,
+  onAuthenticated,
+  keepsWork = true,
+  discardedInput = false,
+  layout = "minimal",
+  headingLevel = 1,
+  aside,
+  testId = "auth-reauth",
+}: ReauthScreenProps) {
   return (
     <SignInScreen
       api={api}
@@ -1601,7 +1640,9 @@ export function ReauthScreen({ api, org, user, onAuthenticated, keepsWork = true
       description={
         keepsWork
           ? "セッションの有効期限が切れました。同じアカウントでログインすると、権限を確かめてから、保存していない入力内容を復元します。"
-          : "セッションの有効期限が切れました。続けるには、もう一度ログインしてください。"
+          : discardedInput
+            ? "セッションの有効期限が切れました。保存していない入力は破棄されました。続けるには、もう一度ログインしてください。"
+            : "セッションの有効期限が切れました。続けるには、もう一度ログインしてください。"
       }
       onAuthenticated={(userId) => onAuthenticated(userId)}
       layout={layout}
