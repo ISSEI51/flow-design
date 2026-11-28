@@ -6,12 +6,13 @@ import { listReady, noHorizontalScroll, openApp, pi, requests, row, setConfig, s
 // Patterns の横断の検証画面：Drawer と Toast、Select と Dialog のフォーカス、320px での主要な操作（15 章の 34〜36）。
 collectPageErrors(test)
 
-/** 要素の中央の点で、その要素（か子孫）が最前面にある（ほかの要素に覆われず、押せる） */
+/** 要素の中央の点で、その要素（か子孫）が最前面にある（ほかの要素に覆われず、押せる）。覆っている場合は、その要素の説明を返す */
 const hitTestable = (l: Locator) =>
   l.evaluate((el) => {
     const r = el.getBoundingClientRect()
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-    return hit !== null && (el === hit || el.contains(hit))
+    if (hit !== null && (el === hit || el.contains(hit))) return true
+    return `covered by ${hit?.tagName ?? "nothing"}[${hit?.closest("[data-slot]")?.getAttribute("data-slot") ?? ""}] at ${Math.round(r.top)}/${window.innerHeight}`
   })
 
 const overlaps = async (a: Locator, b: Locator) => {
@@ -39,7 +40,8 @@ for (const width of [390, 320]) {
     await expect.poll(() => drawer.evaluate((el) => el.getAnimations().length)).toBe(0)
     const save = drawer.getByTestId("contact-save")
     const cancel = drawer.getByRole("button", { name: "キャンセル" })
-    // 表示中の Toast は Drawer の上へずらす（Drawer の操作と重ねない）
+    // 表示中の Toast は Drawer の上へずらす（Drawer の操作と重ねない）。Toast の移動の動き（transform の transition）が終わってから確かめる
+    await expect.poll(() => failed.evaluate((el) => el.getAnimations().length)).toBe(0)
     await expect.poll(() => overlaps(failed, drawer)).toBe(false)
     expect(await hitTestable(cancel)).toBe(true)
 
