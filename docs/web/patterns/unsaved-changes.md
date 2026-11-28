@@ -17,11 +17,11 @@
 | 部分 | 部品 | 仕様 |
 | --- | --- | --- |
 | 確認の仕組み | `UnsavedChangesProvider` | 画面（App Shell の外側など）に 1 つ置く。保存の単位ごとの状態を集め、移動の確認の Alert Dialog と beforeunload の登録を持つ。`labels` で文言を変える |
-| 保存の単位の登録 | `useUnsavedChanges({ dirty, saving, label, canSave, revision, onSave, onDiscard })` | フォームごとに呼ぶ。`revision` には `useFormState` の `revision` を渡す。アンマウントで登録を解除する |
-| ルーターとの接続 | `useNavigationGuard()` | `confirmNavigation(proceed, { onCancel })`、`hasUnsavedChanges`、`saving`、`pending` |
+| 保存の単位の登録 | `useUnsavedChanges({ dirty, saving, unknown, label, canSave, revision, onSave, onDiscard })` | フォームごとに呼ぶ。`revision` には `useFormState` の `revision` を渡す。`unknown` には保存の結果が不明か（`form.status === "unknown"`）を渡す。アンマウントで登録を解除する |
+| ルーターとの接続 | `useNavigationGuard()` | `confirmNavigation(proceed, { onCancel })`、`cancelNavigation()`、`releaseAll()`、`hasUnsavedChanges`、`saving`、`pending` |
 | 移動の確認 | Alert Dialog（`data-slot="unsaved-changes-dialog"`） | 「変更を破棄しますか？」。「編集を続ける」「変更を破棄」、必要な場合だけ「保存して移動」 |
 | 保存を待つ確認 | 同じ Alert Dialog（`data-phase="waiting"`） | 「保存しています」「保存が終わると移動します。」「移動をやめる」 |
-| Overlay を閉じるときの確認 | `DiscardChangesAlert` | Dialog、Sheet、Drawer の `onDiscardRequest` から開く。`onSave` を渡すと「保存して閉じる」を加える |
+| Overlay を閉じるときの確認 | `DiscardChangesAlert` | Dialog、Sheet、Drawer の `onDiscardRequest` から開く。`onSave` を渡すと「保存して閉じる」を加える。`unknown` で、保存の結果が不明な場合の文にする |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../diagrams/unsaved-navigation-dark.svg">
@@ -40,6 +40,9 @@
 | Dialog、Sheet、Drawer を閉じる | 各部品の `unsavedChanges` と `DiscardChangesAlert` |
 | 保存中の移動 | 保存が終わるまで待つ（200ms 後に「保存しています」を表示） |
 | 保存の単位が複数ある画面 | 1 つの確認で、未保存のすべての単位を対象にする |
+| スコープ（ワークスペース、アカウント）の変更 | 表示中の確認を取り消す（`cancelNavigation`）。確認の対象がなくなった確認は自動で閉じる |
+| 認可の失効、別のアカウントへの切り替え、強制のログアウト | 確かめない（`releaseAll` の後に移動する） |
+| 利用者の操作による通常のログアウト | 通常の移動と同じく確かめる |
 
 ## 動作
 
@@ -72,6 +75,7 @@
   - 検品：`forms-workflows-checks.spec.ts` の「save and move: a failure in the second unit stays and keeps the input」「save and move: new input during the save asks again instead of moving」（`#/forms-checks?case=unsaved`）。
 - 初期フォーカスは「編集を続ける」（Alert Dialog の既定）、Escape も「編集を続ける」と同じ。外側のクリックでは閉じない。
 - 確認の文には、保存の単位の `label` を並べる（「「会社の情報」「請求先」の変更は保存されていません。」）。`label` がなければ「入力した内容は保存されません。」。
+- 保存の結果が不明な単位（`unknown: true`）は、「保存されていません」と書かない（保存されている可能性がある）。「「顧客の情報」は、保存されたかを確認できていません。移動する前に、保存されたかを確かめてください。」（`labels.unknownDescription`）と示す。結果が不明な単位があれば「保存して移動」を示さない（無条件に再送信しない）。「変更を破棄」は残す（状態を確かめる通信ができない場合に、移動できなくならないため）。`useFormState` の `discard` は結果が不明の間は値を変えないため、移動が起きなかった場合は再び確認の対象になる。検品：「a unit whose save result is unknown is described as not confirmed and is not offered save and move」。
 - 「変更を破棄」は、各単位の `onDiscard` を呼んでから移動する。同じ画面に残る場合に再び確かめないよう、`onDiscard` では値を基準値に戻す（`form.discard`）。
 
 ### 複数の移動の要求
@@ -79,6 +83,30 @@
 - 確認の表示中（`confirm`）と保存を待つ間（`waiting`）に別の移動の要求が来た場合は、最後の要求だけを残す。前の要求の `onCancel` を呼ぶ。古い要求では移動しない。
 - 「保存して移動」の実行中（`saving`）に別の移動の要求が来た場合は、保存を続け、保存の後の移動先を最新の要求に置き換える。前の要求の `onCancel` を呼ぶ。保存がすべて成功し、保存の間の新しい入力がなければ、最新の要求の移動先へ移動する。新しい入力が残っていれば、最新の要求で確認に戻る。保存に失敗したら移動せず、最新の要求の `onCancel` を呼ぶ。初期実装と v0.1 の途中では、実行中に来た要求を受け付けず、その要求の `onCancel` を呼んでいた（利用者が最後に選んだ移動先が無視されていた）。
 - 「編集を続ける」「移動をやめる」の後は、要求を捨てる（`onCancel`）。取り消した後に、遅れて移動しない。保存の結果が後から届いても移動しない。
+
+### スコープの変更と認可の失効
+
+通常の離脱（Sidebar、Breadcrumb、戻る・進む、Command、通知、Drill-down、利用者の操作によるログアウト）では、利用者の変更を守る（確かめる）。権限の喪失と別のアカウントへの切り替えでは、保護された情報を画面に保持することを優先しない。破棄の確認を理由に、認可の失効を遅らせない。
+
+| 場面 | 製品が呼ぶ処理 | 動作 |
+| --- | --- | --- |
+| ワークスペースなど、スコープの変更（別のタブでの切り替え、通知からの移動を含む） | スコープが変わった描画の後に `cancelNavigation()` | 表示中の確認を閉じ、要求の `onCancel` を呼ぶ。前のスコープで求めた移動先（前のワークスペースの URL）へは移動しない |
+| 確認の表示中に、確認の対象がなくなった（フォームのアンマウント、保存の完了） | なし（Provider が行う） | 確認（`confirm` の段階）を閉じ、要求の `onCancel` を呼ぶ。移動はしない（要求を受けた時点の移動先が、現在のスコープで正しいとは限らないため）。利用者はもう一度移動の操作をする |
+| 認可の失効（サーバーが 401 を返した、セッションの期限切れ）、別のアカウントへの切り替え、強制のログアウト | `releaseAll()` の後に移動する | 表示中の確認を取り消し（`onCancel`）、登録済みのすべての単位を、アンマウント（登録の解除）まで確認、保存を待つ確認、beforeunload の対象から外す。値は変えず、`onDiscard` も呼ばない。直後の `confirmNavigation` はすぐに `proceed` を呼ぶ |
+| 利用者の操作による通常のログアウト | `confirmNavigation(signOut)` | 通常の移動と同じく確かめる。「変更を破棄」の後にログアウトする |
+
+- `releaseAll()` の後に、製品はすぐに移動し、フォームをアンマウントする（ログインの画面へ移る、`key` を変えて作り直す）。アンマウントまでは、値がメモリと画面に残る。新しく登録した単位（再ログインの後のフォーム）は、通常どおり確認の対象になる。
+- beforeunload の処理は、イベントの時点の登録で確認を出すかを決める。`releaseAll()` の直後に、描画を待たずに `location.assign()` で移動しても、確認は出ない。
+- 再認証（同じ利用者の認証のやり直し）は、認可の失効ではない。入力を残して再認証させる場合は `releaseAll` を呼ばない（[authentication.md](authentication.md)）。
+- 例：検証画面（`#/forms-app`）の「検証用の操作」の「認可の失効」は `releaseAll()` の後にログアウトの画面へ移る。Sidebar の「ログアウト」は確かめる。確認なしのワークスペースの切り替えは、表示中の確認を `cancelNavigation()` で取り消す。検品：「a workspace change while the confirmation is shown closes it without moving to the old workspace」「authorization loss moves without asking and removes beforeunload; a normal sign-out still asks」、`forms-workflows-checks.spec.ts` の「unsaved changes: scope change, authorization loss and unknown results」。
+
+確定した仕様の変更（Patterns Integration Review）：
+
+| 変更 | 理由 | 影響の範囲 | 検討した代替案 |
+| --- | --- | --- | --- |
+| `cancelNavigation()` と、対象がなくなった確認を自動で閉じる動作を加えた | スコープの変更の後も確認が残り、「変更を破棄」で前のワークスペースの URL へ移動していた（`forms-router.ts` の `navigate` の `proceed`） | 確認の表示中に保存が終わり、未保存の変更がなくなった場合も、移動せずに確認を閉じる（以前は確認が残り、「変更を破棄」で移動した）。利用者はもう一度移動の操作をする | 対象がなくなった時点で移動する（`proceed`）：移動先が前のスコープの URL である場合に、誤った移動になるため採らない |
+| `releaseAll()` を加えた | 認可の失効、別のアカウントへの切り替え、強制のログアウトで、確認と beforeunload を止める手段がなかった | 追加の API。既存の動作は変わらない | 製品が `UnsavedChangesProvider` を作り直す：Provider の外側の状態（App Shell など）もアンマウントされ、表示中の確認の `onCancel` が呼ばれないため採らない |
+| `useUnsavedChanges` の `unknown`、`DiscardChangesAlert` の `unknown`、`labels.unknownDescription` を加えた | 結果が不明な保存の単位にも「保存されていません」「入力した内容は保存されません」と示していた（事実と異なる） | 追加の API。`unknown` を渡さない単位の文は変わらない | 結果が不明な間は「変更を破棄」を置かない：状態を確かめられない場合に移動できなくなるため採らない |
 
 ### 確認の繰り返しの防止
 
@@ -137,8 +165,9 @@ Registry は特定のルーターに依存しない。実際の移動の阻止�
 
 ### 再読み込みとタブを閉じる操作
 
-- beforeunload は、未保存の変更か保存中の処理がある間だけ登録し、なくなったら解除する。
-- ブラウザの標準の確認が出る。独自の文言は指定できない。ブラウザによっては、利用者がページを操作していない場合などに確認を出さない。
+- beforeunload は、未保存の変更か保存中の処理がある間だけ登録し、なくなったら解除する。確認を出すかは、イベントの時点の登録で判断する（`releaseAll` の後は出さない）。
+- ブラウザの標準の確認が出る。独自の文言は指定できない。ブラウザによっては、利用者がページを操作していない場合などに確認を出さない。確認が表示されることは、ブラウザが保証しない。beforeunload だけで入力を守らない（長い入力は下書きを使う）。
+- 検品は Chromium と WebKit（Playwright）で、利用者の入力の後にページを閉じて、確認が出ることを確かめている（「closing the page with unsaved changes shows the browser's own confirmation; without changes it does not」）。Firefox、実機の Safari、モバイルのブラウザでの表示は確かめていない。
 
 ### 下書き
 
@@ -179,7 +208,7 @@ Registry は特定のルーターに依存しない。実際の移動の阻止�
 
 | 状態 | 持つ場所 | 内容 |
 | --- | --- | --- |
-| 保存の単位 | Provider の登録の一覧（`useUnsavedChanges` の id ごと） | `label`、`dirty`、`saving`、`canSave`（`onSave` がない場合は false）、`revision`、`save`、`discard`、`released`（確認を省く印と、その時点の `revision`） |
+| 保存の単位 | Provider の登録の一覧（`useUnsavedChanges` の id ごと） | `label`、`dirty`、`saving`、`unknown`、`canSave`（`onSave` がない場合は false）、`revision`、`save`、`discard`、`released`（確認を省く印と、その時点の `revision`）、`forced`（`releaseAll` で外した。登録の解除まで残る） |
 | 移動の要求 | Provider | `proceed`、`onCancel`、段階（`waiting`、`confirm`、`saving`）。最後の 1 件だけ |
 | 未保存の変更があるか | `useNavigationGuard().hasUnsavedChanges` | `dirty` で、`released` でない（または印の `revision` が現在と異なる）単位がある |
 | 保存中か | `useNavigationGuard().saving` | `saving` の単位がある |
@@ -187,7 +216,7 @@ Registry は特定のルーターに依存しない。実際の移動の阻止�
 
 - `useUnsavedChanges` は、マウントで登録し、アンマウントで解除する。値の変化は登録を保ったまま反映する（`update`）。Provider の外では何もしない。
 - Provider は、登録の関数（変わらない Context）と状態（変わる Context）を分けて提供する。状態が変わるたびに登録をやり直さないため、確認を省く印（`released`）が登録のやり直しで消えない。
-- `useNavigationGuard` は Provider の外では、常に `proceed` を呼んで true を返す。
+- `useNavigationGuard` は Provider の外では、常に `proceed` を呼んで true を返す。`cancelNavigation` と `releaseAll` は何もしない。
 
 ## アクセシビリティ
 
@@ -203,6 +232,7 @@ Registry は特定のルーターに依存しない。実際の移動の阻止�
 - 下書きの永続化、保存の時期、機密の情報の除外、境界ごとのキー。
 - アプリの外への移動（beforeunload の対象）と、同じ origin の別のアプリの部分との境界（ルーターの blocker で `confirmNavigation` を通す）。
 - 戻る・進むの履歴の項目への位置の記録と、移動を許可した後の印の解除（上の「ルーターとの接続」）。
+- スコープの変更の後の `cancelNavigation()`、認可の失効と別のアカウントへの切り替えの前の `releaseAll()` と、その後のアンマウント（上の「スコープの変更と認可の失効」）。認可の失効の判断（401、セッションの期限切れ）。
 
 ## 実装例
 
@@ -236,6 +266,15 @@ const linkProps = (href: string) => ({
   },
 })
 
+// スコープ（ワークスペース）が変わったら、表示中の移動の確認を取り消す
+useEffect(() => guard.cancelNavigation(), [workspaceId, guard.cancelNavigation])
+
+// 認可の失効（API が 401 を返した）：確かめずにログインの画面へ移る
+onUnauthorized(() => {
+  guard.releaseAll()
+  router.replace("/login")
+})
+
 // 移動を止めて proceed と reset を渡すルーターの場合
 // shouldBlock: () => guard.hasUnsavedChanges || guard.saving
 // onBlocked: (blocker) => guard.confirmNavigation(blocker.proceed, { onCancel: blocker.reset })
@@ -249,4 +288,4 @@ const linkProps = (href: string) => ({
 </Sheet>
 ```
 
-プレビュー：`#/unsaved-changes`、`#/forms-app?page=settings`（2 つのフォーム）、`#/forms-app?page=customer-edit&id=cu-1&from=list`（ブラウザの戻る・進む）、`#/forms-checks?case=unsaved`（検品用の画面。保存して移動の一部の失敗、保存中の入力、移動の失敗の後の保護）。
+プレビュー：`#/unsaved-changes`、`#/forms-app?page=settings`（2 つのフォーム）、`#/forms-app?page=customer-edit&id=cu-1&from=list`（ブラウザの戻る・進む）、`#/forms-checks?case=unsaved`（検品用の画面。保存して移動の一部の失敗、保存中の入力、移動の失敗の後の保護、確認の表示中の対象の消滅、`cancelNavigation`、`releaseAll`、結果が不明な単位）。

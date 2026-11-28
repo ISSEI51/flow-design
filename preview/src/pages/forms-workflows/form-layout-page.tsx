@@ -191,7 +191,7 @@ function BillingExample() {
           </FieldGroup>
         </PatternSection>
       </SectionStack>
-      <FormActions notice={<SaveBlockerNotice id="fl-notice" blockers={form.blockers} hidden={form.composing} />}>
+      <FormActions notice={<SaveBlockerNotice id="fl-notice" blockers={form.blockers} reason={form.composing ? "composing" : undefined} />}>
         <Button type="submit" disabled={!form.canSubmit} focusableWhenDisabled aria-describedby="fl-notice" data-testid="fl-submit">
           請求先を登録
         </Button>

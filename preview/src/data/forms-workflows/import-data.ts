@@ -119,7 +119,7 @@ export function planCounts(plan: ImportPlanRow[], policy: DuplicatePolicy) {
  * onProgress は処理した行の数を報告する（実際の進捗がわかる場合だけ）。
  * importMode：success（すべて成功）、partial（3 行が失敗。再処理は成功）、fail（すべて失敗）、unknown（途中で通信が切れ、後半の行の結果がない）、
  * throw（途中で通信の例外になり、応答がない。前半の行は登録済み）、
- * inconsistent（同じ行の異なる結果、対象ではない行の結果、結果の不足、行の結果と合わない件数を含む）。
+ * inconsistent（同じ行の異なる結果、対象ではない行の結果、結果の不足、行の結果と合わない件数を含む。最後の行は確定した失敗）。
  * unknown と throw では、応答を返せなかった行の一部（最初の 1 行、throw では前半）をサーバーは処理している。
  */
 export async function runImport(
@@ -147,6 +147,11 @@ export async function runImport(
     done++
     if (mode === "throw") {
       processedRows.add(t.row)
+      continue
+    }
+    // 矛盾のある応答でも、確定した失敗は再処理できる（最後の行を失敗にする。3 行以上の場合だけ）
+    if (mode === "inconsistent" && total > 2 && t === targets[total - 1]) {
+      rows.push({ row: t.row, outcome: "failed", reason: "サーバーで処理できませんでした" })
       continue
     }
     // 一部失敗は、最初の試行だけ失敗させる（失敗した行の再処理は成功する）

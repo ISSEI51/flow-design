@@ -105,6 +105,7 @@ declare global {
   interface Window {
     __fdFormsChangeWhileConfirm?: boolean
     __fdFormsClearSelection?: () => void
+    __fdFormsSetSelected?: (id: string, selected: boolean) => void
   }
 }
 
@@ -117,8 +118,11 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
   // 検証用：一括操作のバーの選択を、ほかの処理が解除したことを再現する（エクスポートの範囲が広がらないことの検品）
   useEffect(() => {
     window.__fdFormsClearSelection = () => selection.clear()
+    // 検証用：確認の表示中に、選んだ行がほかの処理で入れ替わったことを再現する
+    window.__fdFormsSetSelected = (id, selected) => selection.setSelected(id, selected)
     return () => {
       delete window.__fdFormsClearSelection
+      delete window.__fdFormsSetSelected
     }
   })
   const browse = useBrowseQuery<Record<string, never>>({
@@ -493,6 +497,16 @@ export function CustomersScreen({ nav, ws, restore }: { nav: Nav; ws: string; re
           kind="顧客"
           columns={exportColumns}
           counts={{ selected: selectedIds.length, page: rows.length, results: total, all: listCustomers(false, ws).length + listCustomers(true, ws).length }}
+          // 個人情報の確認の対象に、範囲の中身を含める（選んだ行の ID、検索の条件、表示中のページの ID）
+          targetOf={(scope) =>
+            scope === "selected"
+              ? JSON.stringify([...selectedIds].sort())
+              : scope === "page"
+                ? JSON.stringify(rows.map((r) => r.id))
+                : scope === "results"
+                  ? JSON.stringify(q.search)
+                  : `all:${ws}`
+          }
           getRows={async (scope) => {
             if (scope === "selected") {
               // 実行の時点の選択で出す。選択がなくなった場合に、検索結果へ広げない

@@ -442,11 +442,16 @@ export function useFormState<V extends FormValues>({
       const failed = (reason: "error" | "timeout") => {
         const config = fieldsRef.current[name]
         const label = config.label
-        const message =
-          reason === "timeout"
+        const allow = config.asyncFailure === "allow"
+        // allow（保存を止めない）では、確かめ直しを求めない。保存の時にサーバーが同じ確認を行うことを伝える
+        const message = allow
+          ? reason === "timeout"
+            ? `${label}の確認が時間内に終わりませんでした。保存するときに確かめます`
+            : `${label}をいまは確かめられませんでした。保存するときに確かめます`
+          : reason === "timeout"
             ? `${label}の確認が時間内に終わりませんでした。もう一度確かめてください`
             : `${label}を確かめられませんでした。通信の状態を確認して、もう一度確かめてください`
-        settle(config.asyncFailure === "allow" ? "unverified" : "error", message)
+        settle(allow ? "unverified" : "error", message)
       }
       job.timer = window.setTimeout(() => {
         if (!isCurrent()) return
@@ -803,11 +808,15 @@ export type FormState<V extends FormValues> = ReturnType<typeof useFormState<V>>
  * - Textarea、contenteditable、ボタン、Checkbox、Radio、File、日付と時刻の入力欄
  * - Combobox、Multi Select、Select、Date Picker、Dropdown Menu などの部品（role が combobox、listbox、menu、grid、
  *   aria-haspopup、aria-expanded="true" の要素、それらの中の要素）
+ * - Date Picker と Date Range Picker の文字の入力欄（data-slot が date-picker、date-range-picker の中の入力欄）。
+ *   Enter は入力した日付の確定であり、送信ではない（確定した日付を確かめてから、利用者が保存する）
  * - フォームの外の要素、フォームとは別の Dialog の中の要素（Dialog の中の独立した操作）、読み取り専用と無効の入力欄
  * - data-submit-on-enter="false" を付けた要素とその中の要素
  */
 const textInputTypes = new Set(["text", "email", "tel", "url", "search", "number", "password", ""])
 const widgetSelector = "[role=combobox],[role=listbox],[role=menu],[role=grid],[role=tree],[aria-haspopup]:not([aria-haspopup=false]),[aria-expanded=true]"
+// 日付の文字の入力欄（Components の DatePicker、DateRangePicker）。Enter は日付の確定（部品が onKeyDown で確定する）
+const dateEntrySelector = "[data-slot=date-picker],[data-slot=date-range-picker]"
 
 // 暗黙の送信（Enter）の対象になる入力欄の種類
 const implicitSubmitTypes = new Set([...textInputTypes, "date", "datetime-local", "month", "week", "time", "checkbox", "radio", "range", "color"])
@@ -831,6 +840,7 @@ export function submitOnEnter(event: React.KeyboardEvent<HTMLFormElement>, submi
     target.readOnly ||
     target.disabled ||
     Boolean(target.closest(widgetSelector)) ||
+    Boolean(target.closest(dateEntrySelector)) ||
     Boolean(target.closest("[data-submit-on-enter=false]")) ||
     target.closest("[role=dialog],[role=alertdialog]") !== form.closest("[role=dialog],[role=alertdialog]")
   if (excluded) {

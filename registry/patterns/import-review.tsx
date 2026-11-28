@@ -9,7 +9,16 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
-import { importOutcome, type ColumnMapping, type ImportColumn, type ImportField, type ImportIntegrity, type ImportResult, type MappingIssues } from "@/patterns/import-mapping"
+import {
+  importOutcome,
+  type ColumnMapping,
+  type ImportColumn,
+  type ImportField,
+  type ImportIntegrity,
+  type ImportOutcome,
+  type ImportResult,
+  type MappingIssues,
+} from "@/patterns/import-mapping"
 
 // Flow Design Import Review（Patterns / Forms & Workflows / Import & Export）
 // インポートの対応付け、データの検証の結果、処理の結果の表示。定義は docs/web/patterns/import-and-export.md を参照。
@@ -225,8 +234,13 @@ function ImportIssueTable({ issues, caption, className }: { issues: readonly Imp
   )
 }
 
+const countLabels: Record<string, string> = { created: "新規登録", updated: "更新", skipped: "スキップ", failed: "失敗", unknown: "結果が不明" }
+
 /**
  * 処理の結果。件数の合計が処理の対象と一致しない場合は、結果が不明として扱う。
+ * - 結果の種類は importOutcome(result, integrity) で決める。integrity を省略すると、照合していない件数として扱い、成功として示さない。
+ * - 照合に矛盾がある（integrity.complete が false）が、対象のすべての行の結果が確定している（重なった結果、対象ではない行の結果、
+ *   件数と行ごとの結果の不一致だけ）場合は、件数で判定した結果を示す。成功の形（success の色、role="status"）にはせず、矛盾を一覧で示す。
  * - 失敗した行だけを再処理できる（onRetryFailed）。成功した行は再処理の対象にしない（製品が対象を絞る）。
  * - 結果が不明な場合は、再処理のボタンを置かず、状態の確認を促す（onCheckStatus）。
  */
@@ -240,7 +254,10 @@ function ImportResultSummary({
   className,
 }: {
   result: ImportResult
-  /** reconcileImportResult の照合の結果。矛盾がある場合は、成功として示さず、件数に含めなかった結果と理由を示す */
+  /**
+   * reconcileImportResult の照合の結果。矛盾がある場合は、成功として示さず、件数に含めなかった結果と理由を示す。
+   * 省略すると、件数を照合していないため、件数の上で成功でも結果が不明として示す
+   */
   integrity?: ImportIntegrity
   onRetryFailed?: () => void
   onDownloadFailed?: () => void
@@ -248,17 +265,31 @@ function ImportResultSummary({
   retrying?: boolean
   className?: string
 }) {
-  const counted = importOutcome(result)
-  // 照合で矛盾が見つかった場合は、件数の上で成功していても、成功として示さない
-  const outcome = integrity && !integrity.complete && (counted === "success" || counted === "partial") ? "unknown" : counted
+  const counted = importOutcome(result, integrity)
+  // 照合していない件数（integrity がない）は、件数の上で成功していても、成功として示さない
+  const outcome = !integrity && counted === "success" ? "unknown" : counted
+  // 照合に矛盾があるが、すべての行の結果が確定している（outcome が unknown ではない）
+  const anomalies = integrity !== undefined && !integrity.complete && outcome !== "unknown"
   const missing = result.total - (result.created + result.updated + result.skipped + result.failed + result.unknown)
   const title = {
-    success: "取り込みが終わりました",
+    success: anomalies ? "取り込みが終わりました。サーバーの応答に矛盾がありました" : "取り込みが終わりました",
     partial: "一部の行を取り込めませんでした",
     failed: "取り込めませんでした",
     unknown: "結果を確かめられていない行があります",
   }[outcome]
-  const variant = outcome === "success" ? "success" : outcome === "failed" ? "destructive" : "warning"
+  const variant = outcome === "success" && !anomalies ? "success" : outcome === "failed" ? "destructive" : "warning"
+  const missingCounts = integrity?.missingCounts ?? []
+  // 結果が不明な理由。事実と異なる理由を示さない（合計が一致しているのに「一致しません」と書かない）
+  const unknownReason =
+    result.unknown > 0
+      ? "処理の途中で結果を受け取れなかった行があり、登録されたかを確かめられていません。"
+      : !integrity
+        ? "処理の対象と結果を照合していないため、結果を確かめられていません。"
+        : missingCounts.length > 0
+          ? `サーバーが${missingCounts.map((k) => `「${countLabels[k] ?? k}」`).join("")}の件数を返さなかったため、すべての行の結果を確かめられていません。`
+          : integrity.invalidCounts.length > 0
+            ? "件数の形式が正しくない結果があったため、すべての行の結果を確かめられていません。"
+            : "結果の件数の合計が、処理の対象の件数と一致しません。"
   const parts = [
     ["新規登録", result.created],
     ["更新", result.updated],
@@ -267,7 +298,14 @@ function ImportResultSummary({
     ["結果が不明", result.unknown + Math.max(0, missing)],
   ] as const
   return (
-    <Alert variant={variant} role={outcome === "success" ? "status" : "alert"} data-slot="import-result" data-outcome={outcome} className={className}>
+    <Alert
+      variant={variant}
+      role={outcome === "success" && !anomalies ? "status" : "alert"}
+      data-slot="import-result"
+      data-outcome={outcome}
+      data-complete={integrity ? String(integrity.complete) : undefined}
+      className={className}
+    >
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>
         <dl className="flex flex-wrap gap-x-6 gap-y-1 tabular-nums">
@@ -287,7 +325,8 @@ function ImportResultSummary({
         {integrity && !integrity.complete && (
           <ul className="mt-2 list-disc pl-5" data-slot="import-integrity">
             {integrity.missingRows.length > 0 && <li>{fmt(integrity.missingRows.length)}行の結果が返されませんでした（結果が不明として数えています）</li>}
-            {integrity.duplicateRows.length > 0 && <li>{fmt(integrity.duplicateRows.length)}行について、結果が重なって返されました（1 つとして数え、異なる結果は不明にしています）</li>}
+            {missingCounts.length > 0 && <li>サーバーが{missingCounts.map((k) => `「${countLabels[k] ?? k}」`).join("")}の件数を返しませんでした（0 件とはみなしていません）</li>}
+            {integrity.duplicateRows.length > 0 && <li>{fmt(integrity.duplicateRows.length)}行について、結果が重なって返されました（同じ結果は 1 つとして数え、異なる結果は結果が不明として扱いました）</li>}
             {integrity.unexpectedRows.length > 0 && <li>取り込みの対象ではない {fmt(integrity.unexpectedRows.length)}行の結果が返されました（件数に含めていません）</li>}
             {integrity.countsDisagree && <li>サーバーが返した件数が、行ごとの結果と一致しません（行ごとの結果で数えています）</li>}
             {integrity.invalidCounts.length > 0 && <li>件数の形式が正しくない結果がありました</li>}
@@ -295,12 +334,11 @@ function ImportResultSummary({
         )}
         {outcome === "unknown" && (
           <p className="mt-2">
-            {result.unknown > 0
-              ? "処理の途中で結果を受け取れなかった行があり、登録されたかを確かめられていません。"
-              : "結果の件数の合計が、処理の対象の件数と一致しません。"}
+            {unknownReason}
             もう一度取り込む前に、状態を確認してください。
           </p>
         )}
+        {anomalies && <p className="mt-2">処理の対象のすべての行の結果は確定しています。応答の矛盾は、サーバーの記録で確認してください。</p>}
       </AlertDescription>
       {(outcome === "partial" || outcome === "failed" || outcome === "unknown") && (
         <AlertAction>
@@ -332,4 +370,4 @@ function ImportResultSummary({
 
 export { ColumnMappingList, ImportIssueTable, ImportResultSummary, ImportValidationSummary }
 // 結果の型と判定は import-mapping.ts にある（React を使わず、サーバーでも使える）。ここからも使えるように再び公開する
-export { importOutcome, type ImportResult }
+export { importOutcome, type ImportOutcome, type ImportResult }

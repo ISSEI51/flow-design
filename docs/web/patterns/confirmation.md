@@ -25,6 +25,7 @@
 | 実行の方式 | `progress`（`"inline"`、`"external"`） | 下の「実行の方式」 |
 | 追加の確認 | `confirmationText`、`confirmationLabel` | 対象の名前の入力。一致するまで実行できない |
 | 対象の変化 | `targetKey`、`changedNotice` | 開いている間に対象が変わったら警告（Alert の warning）と「変更後の内容を確かめました」を示す。押すまで実行できない |
+| 実行できない理由 | `blockedReason` | 権限の不足、接続の切断などで、いまは実行できない。実行のボタンを Focusable Disabled にし、理由を示す（下の「実行できない理由」） |
 | 実行の結果 | `onConfirm` の戻り値 | 失敗は `{ error }`、結果が不明は `{ unknown }`。例外は `FormSaveError` の `outcome` で区別する |
 | 取り消し | `useUndoableAction({ windowMs, scopeKey })` の `run` | 実行の結果と「元に戻す」を Toast で示す |
 
@@ -48,7 +49,7 @@
 | `progress` | 用途 | 動作 |
 | --- | --- | --- |
 | `"inline"`（既定） | 短時間で終わる単一のレコードの操作（担当者の削除、ワークスペースの削除、請求書の送信） | Dialog の中で実行のボタンを Loading にし、結果を待つ。成功したら閉じる。失敗と結果が不明は Dialog の中に示す |
-| `"external"` | 一括の操作（選んだ顧客の削除など） | 実行のボタンを押した時点（実行の開始時）で Dialog を閉じ、`onConfirm` を呼ぶ。進捗と結果は、製品が一覧の上に示す。`onConfirm` の戻り値と例外は使わない |
+| `"external"` | 一括の操作（選んだ顧客の削除など） | 実行のボタンを押した時点（実行の開始時）で Dialog を閉じ、`onConfirm` を呼ぶ。進捗と結果は、製品が一覧の上に示す。`onConfirm` の戻り値と例外は使わない。閉じるまでの間に実行のボタンがもう一度押されても（ダブルクリック）、`onConfirm` は 1 回だけ呼ぶ（開閉の commit で解く。製品が `onOpenChange(false)` で閉じなかった場合は、開き直すまで実行しない）。検品：「external progress: two presses before the dialog closes run once」 |
 
 - 一括の操作は `"external"` を標準にする。Data Browsing v0.1 の Bulk Actions（[bulk-actions.md](bulk-actions.md)、[data-browsing.md](data-browsing.md#一括削除の確認)）と同じく、実行前の確認、実行中の進捗（`BulkRunStatus`）、実行後の結果（`BulkResultAlert`、すべて完了した場合は Toast）を、それぞれ別の場所で示す。実行と結果の照合は `useBulkAction` が行う。
 - Dialog を閉じることは、処理の中止ではない。
@@ -75,6 +76,7 @@
 | 失敗（実行されていないことが確か） | `{ error: 文 }` を返す。または `FormSaveError(message, "failed")` を投げる | Dialog を閉じず、原因を Alert（destructive、`role="alert"`）で示す。同じ Dialog から、もう一度実行できる（`retryLabel`） |
 | 結果が不明（実行されたかわからない） | `{ unknown: 文 }` を返す。または `FormSaveError(message, "unknown")` か、それ以外の例外を投げる | Dialog を閉じず、Alert（warning、`role="alert"`）で示す。もう一度実行のボタンを置かず、キャンセルを「閉じる」にする（名前の入力欄も無効にする）。状態を確かめる手段は製品が示す（「請求書の一覧で送信の状態を確認してください」）。結果が不明になった対象（`targetKey`）は、この部品を表示している間、閉じて同じ対象で開き直しても結果が不明のまま示し、実行のボタンを示さない。`onUnknown(targetKey)` で製品に知らせる。製品が状態を確かめて解く場合は、`targetKey` を変える（版や確認の時刻を含める）か、部品を作り直す |
 
+- 結果が不明になると、実行のボタンを取り除く。実行のボタンにあったフォーカスを body に落とさないよう、結果が不明の知らせ（`data-slot="confirm-action-unknown"`、`tabIndex={-1}`）にフォーカスを移す。次の Tab で「閉じる」に移る。検品：「an unknown result moves the focus from the removed confirm button to the notice」。初期実装と v0.1 の途中では、フォーカスが body に移っていた。
 - `FormSaveError` ではない例外の文は「実行されたかを確かめられていません。最新の状態を確認してください。」。初期実装では、例外を失敗として扱い、もう一度実行できるようにしていた。v0.1 では、実行されていないことが確かな場合（`FormSaveError` の `failed`）だけを失敗とする。
 - 開閉のたびに世代を進める。閉じた後、または別の対象で開き直した後に届いた古い実行の結果で、Dialog の表示を変えない（検品：「confirm dialog: a result of the previous target does not close the dialog reopened for another target」）。
 
@@ -87,8 +89,18 @@
   - 名前の入力をやり直させる（入力を消す）。
   - 利用者が「変更後の内容を確かめました」を押すまで、実行のボタンを無効にする。押した時点の `targetKey` を、確かめた対象とする。
 - `onConfirm({ targetKey })` には、実行のボタンを押した時点で表示していた `targetKey` を渡す。製品は、実行する対象がこのキーと一致するかを確かめる。古い確認の内容で別の対象を実行しない。
+- `targetKey` を省略すると、この部品のすべての表示を同じ対象として扱う。結果が不明になった後は、どの対象で開き直しても実行のボタンを示さない（再実行しない側に倒す）。1 つの部品で複数の対象を確かめる場合（行のメニューから開く削除の確認など）は、必ず `targetKey` を渡す。
 - 破壊的な操作では、実行の時点でも、対象、権限、整合性をバックエンドで検証する。確認の Dialog の表示は、実行の時点の対象を保証しない（例の一括の削除の説明：「実行の時点で、サーバーが対象と権限を確かめます。」）。
 - 例：選んだ顧客の一括の削除（`#/forms-app?page=customers`）。「検証用の操作」の「削除の確認の表示中に、選んだ行の 1 件を選択から外す」を選び、2 件以上を選んで削除の確認を開くと、1.5 秒後に 1 件が選択から外れる。確認は件数と名前を描き直し、変わったことを示し、「変更後の内容を確かめました」を押すまで実行できない。`targetKey` は対象の ID を並べた文字列である。
+
+### 実行できない理由（`blockedReason`）
+
+- 確認の表示中に権限を失った、接続が切れたなど、いまは実行できない場合は、`blockedReason` に理由と次の操作を渡す（「削除する権限がなくなりました。管理者に権限を確認してください。」）。
+- 指定している間は、実行のボタンを Focusable Disabled（`aria-disabled="true"`）にし、理由の文（Alert の warning）を `aria-describedby` で関連付ける。クリック、Enter、Space で実行しない（`onConfirm` を呼ばない）。キャンセルはそのまま使える。
+- 表示を閉じずに理由を示すのは、利用者が対象と影響を読み終えた後に、実行できない理由を同じ場所で知るためである。権限を失った後に保護された情報を表示し続けない場合は、製品が Dialog を閉じる（[permission-states.md](permission-states.md)）。
+- `blockedReason` は表示の制御であり、実行の時点の権限の検証（バックエンド）の代わりにならない。
+- 検品：「blockedReason: the confirm button is focusable disabled with the reason and cannot run by click, Enter or Space」。
+- 変更の記録（Patterns Integration Review）：追加の API。権限と接続の状態で実行を止める手段がなく、製品が `confirmLabel` と `onConfirm` を独自に差し替える必要があったため加えた。代替案（製品が Dialog を閉じて理由を別の場所に示す）は、確認の途中で理由が見えなくなるため、標準にしない。
 
 ### 追加の確認
 
@@ -115,6 +127,8 @@
 | 取り消しの確定した失敗 | 「元に戻せませんでした」（`undoFailedTitle`、destructive）。期限の中であれば、この通知に「もう一度元に戻す」（`retryUndoLabel`）を置き、期限で通知を閉じる。`handle.undo()` でももう一度取り消せる。再試行の通知は新しい id で出す（閉じた通知と同じ id は、閉じる途中の通知として扱われ、操作できない） | false |
 | 取り消しの結果が不明 | 「元に戻せたかを確かめられていません」（`undoUnknownTitle`、warning）。「元に戻す」も「もう一度元に戻す」も示さず、もう一度取り消せる状態に戻さない | false |
 
+- `run` が返す `handle.undo()`（画面に残した戻す手段）も、スコープと世代で照合する。A → B → A と切り替えた後は、最初の A の `handle` で、現在の A のデータを戻さない（検品：「undo: after A → B → A, the handle from the first A is refused」）。実行の間にスコープが変わった場合は、通知を出さずに `{ ok: false, outcome: "stale", performed }` を返す。`performed` は実行の結果（`succeeded`、`failed`、`unknown`。`succeeded` と `unknown` はサーバーで処理された可能性がある）（検品：「undo: a result arriving after a scope change is stale, reports what was performed and shows no toast」）。
+- `useUndoableAction` をアンマウントしたら、表示中の「元に戻す」の通知を閉じる（検品：「undo: unmounting the hook closes its open undo toasts」）。v0.1 の途中では、アンマウントの後も通知が残り、押しても取り消しが動かなかった。
 - Toast は消えるため、重要な戻す手段を Toast だけにしない。画面にも戻す手段を置く（例：アーカイブ済みの顧客の一覧の「元に戻す」）。
 
 ### 危険な操作の配置
@@ -157,16 +171,17 @@
 | 確かめた対象 | `ConfirmActionDialog` | 開いたときの `targetKey`。「変更後の内容を確かめました」を押すと、その時点の値にする |
 | 結果が不明になった対象 | `ConfirmActionDialog` | `targetKey` ごとの結果が不明の文。部品を表示している間は残り、同じ対象で開き直しても実行のボタンを示さない |
 | 世代 | `ConfirmActionDialog` | 開閉のたびに進める。古い世代の実行の結果は使わない |
-| 取り消し | `useUndoableAction` | hook のインスタンスの番号と実行ごとの番号から作る通知の id、実行したときのスコープ、期限（`expiresAt`）、状態（`open`、`undoing`、`done`）、タイマー。アンマウントでタイマーを止める |
+| 取り消し | `useUndoableAction` | hook のインスタンスの番号と実行ごとの番号から作る通知の id、実行したときのスコープ、期限（`expiresAt`）、状態（`open`、`undoing`、`done`）、タイマー。アンマウントでタイマーを止め、表示中の通知を閉じる |
 
-`run` は `{ ok: true, handle: { expiresAt, scopeKey, undo } }` か `{ ok: false, outcome: "failed" | "unknown" | "stale" }` を返す。`undo()` は、期限を過ぎた場合、すでに取り消した場合、スコープが変わった場合、失敗した場合、結果が不明の場合に false を返す。
+`run` は `{ ok: true, handle: { expiresAt, scopeKey, undo } }`、`{ ok: false, outcome: "failed" | "unknown" }`、`{ ok: false, outcome: "stale", performed: "succeeded" | "failed" | "unknown" }` のいずれかを返す。`undo()` は、期限を過ぎた場合、すでに取り消した場合、スコープが変わった場合、失敗した場合、結果が不明の場合に false を返す。
 
 ## アクセシビリティ
 
 - Alert Dialog（`role="alertdialog"`）。見出しと説明は `AlertDialogTitle` と `AlertDialogDescription` で関連付ける。
 - 初期フォーカスはキャンセル（名前の入力を求める場合は入力欄）。
 - 名前の入力欄は Field のラベル（「確認のため「本社営業部」と入力してください」など）で名前を持つ。
-- 失敗の原因と結果が不明の知らせは `role="alert"`。対象の変化の警告は Alert の warning。
+- 失敗の原因と結果が不明の知らせは `role="alert"`。結果が不明になったら、知らせにフォーカスを移す（実行のボタンを取り除くため）。対象の変化の警告は Alert の warning。
+- 実行できない理由（`blockedReason`）は、Focusable Disabled の実行のボタンの `aria-describedby` で読み上げる。
 - 取り消しの結果、失敗、期限の後の知らせは Toast（Components の Toast の読み上げ）。
 - `progress="external"` の場合、Dialog を閉じた後のフォーカスと実行の開始の読み上げは、製品の一覧が扱う（Data Browsing の `BulkRunStatus`、[bulk-actions.md](bulk-actions.md)）。
 
@@ -245,4 +260,4 @@ const archive = (c: Customer) =>
   })
 ```
 
-プレビュー：`#/confirmation`、`#/forms-app?page=customers`（下部の「検証用の操作」で実行と取り消しの結果を切り替える）、`#/forms-app?page=settings`（ワークスペースの削除）、`#/forms-checks?case=scope`（検品用の画面。Undo の通知の id、スコープの変更、確認の Dialog の開き直し）。
+プレビュー：`#/confirmation`、`#/forms-app?page=customers`（下部の「検証用の操作」で実行と取り消しの結果を切り替える）、`#/forms-app?page=settings`（ワークスペースの削除）、`#/forms-checks?case=scope`（検品用の画面。Undo の通知の id、スコープの変更、A → B → A の `handle`、アンマウント、確認の Dialog の開き直し、結果が不明の後のフォーカス、`blockedReason`、`external` の二重の押下）。

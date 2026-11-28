@@ -38,6 +38,11 @@ import { useScopeGuard } from "@/patterns/scope-guard"
 //     external：一括の操作。実行を始めた時点で Dialog を閉じ、進捗と結果は製品が一覧の上に示す（Data Browsing の Bulk Actions）。
 // - 結果が不明（onConfirm が { unknown } を返す、FormSaveError ではない例外、FormSaveError の unknown）の場合は、
 //   もう一度実行のボタンを置かない（無条件に再実行させない）。状態を確かめる手段は製品が示す。
+//   実行のボタンを取り除くため、フォーカスを結果が不明の知らせ（Alert）に移す（body に落とさない）。
+// - blockedReason：権限の不足、接続の切断などで、いまは実行できない。実行のボタンを Focusable Disabled にし、理由を示す
+//   （aria-describedby）。クリック、Enter、Space で実行しない。
+// - targetKey を省略すると、この部品のすべての表示を同じ対象として扱う（結果が不明の状態を共有する）。
+//   1 つの部品で複数の対象を確かめる場合は、必ず targetKey を渡す。
 // - 開いている間に対象（targetKey）が変わったら、変わったことを示し、入力をやり直させ、
 //   「変更後の内容を確かめました」を押すまで実行できない。件数が同じでも ID が違えば、targetKey が変わるように作る。
 //   onConfirm には、そのとき表示していた targetKey を渡す。製品は、実行する対象と一致するかを、実行の時点でも確かめる。
@@ -63,6 +68,7 @@ function ConfirmActionDialog({
   confirmationLabel,
   targetKey,
   changedNotice = "表示している間に、対象か内容が変わりました。変更後の内容を確かめてください。",
+  blockedReason,
   onConfirm,
   onUnknown,
   ...props
@@ -87,9 +93,17 @@ function ConfirmActionDialog({
   /** 入力による追加の確認。この文字列と一致するまで実行できない */
   confirmationText?: string
   confirmationLabel?: React.ReactNode
-  /** 対象と内容を表すキー（ID の一覧、操作の内容、条件から作る） */
+  /**
+   * 対象と内容を表すキー（ID の一覧、操作の内容、条件から作る）。
+   * 省略すると、この部品のすべての表示を同じ対象として扱う（結果が不明になった後は、どの対象で開いても実行のボタンを示さない）
+   */
   targetKey?: string
   changedNotice?: React.ReactNode
+  /**
+   * いまは実行できない理由（権限の不足、接続の切断など）。指定している間は、実行のボタンを Focusable Disabled にし、
+   * この文を示して aria-describedby で関連付ける。実行の時点の権限の検証（バックエンド）の代わりにはならない
+   */
+  blockedReason?: React.ReactNode
   /**
    * 実行する。失敗した場合は { error }、結果が不明な場合は { unknown } を返す。
    * 例外は、FormSaveError の failed は失敗、それ以外は結果が不明として扱う。progress が external の場合、結果は使わない
@@ -111,6 +125,11 @@ function ConfirmActionDialog({
   // 結果が不明になった対象。閉じて同じ対象で開き直しても、もう一度実行できる状態に戻さない
   const unknownByKey = React.useRef(new Map<string | undefined, string>())
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const unknownRef = React.useRef<HTMLDivElement>(null)
+  // 実行の結果が不明になった：実行のボタンを取り除くため、知らせにフォーカスを移す
+  const focusUnknown = React.useRef(false)
+  const blockedId = React.useId()
+  const blocked = blockedReason !== undefined && blockedReason !== null && blockedReason !== false
 
   // 開いたとき：その時点の対象を確認済みにし、入力と前回の結果を消す。開閉のたびに世代を進める
   const [wasOpen, setWasOpen] = React.useState(open)
@@ -139,11 +158,19 @@ function ConfirmActionDialog({
 
   const matches = confirmationText === undefined || typed.trim().normalize("NFKC") === confirmationText.normalize("NFKC")
 
+  React.useLayoutEffect(() => {
+    if (!unknown || !focusUnknown.current) return
+    focusUnknown.current = false
+    unknownRef.current?.focus()
+  }, [unknown])
+
   const run = async () => {
-    if (running.current || !matches || changed || unknown) return
+    if (running.current || !matches || changed || unknown || blocked) return
     const key = targetKey
     if (progress === "external") {
-      // 一括の操作：閉じてから実行する。進捗と結果は製品が一覧の上に示す
+      // 一括の操作：閉じてから実行する。進捗と結果は製品が一覧の上に示す。
+      // 閉じるまでの間の 2 回目の押下（ダブルクリック）で、二重に実行しない（開閉の commit で解く）
+      running.current = true
       onOpenChange(false)
       void Promise.resolve()
         .then(() => onConfirm({ targetKey: key }))
@@ -173,6 +200,7 @@ function ConfirmActionDialog({
     }
     if (result && "unknown" in result) {
       unknownByKey.current.set(key, result.unknown)
+      focusUnknown.current = true
       setUnknown(result.unknown)
       onUnknown?.(key)
       return
@@ -227,8 +255,13 @@ function ConfirmActionDialog({
           </Alert>
         )}
         {unknown && (
-          <Alert variant="warning" role="alert" data-slot="confirm-action-unknown">
+          <Alert ref={unknownRef} tabIndex={-1} variant="warning" role="alert" data-slot="confirm-action-unknown" className="outline-none">
             <AlertDescription>{unknown}</AlertDescription>
+          </Alert>
+        )}
+        {blocked && !unknown && (
+          <Alert variant="warning" data-slot="confirm-action-blocked">
+            <AlertDescription id={blockedId}>{blockedReason}</AlertDescription>
           </Alert>
         )}
         <AlertDialogFooter>
@@ -236,7 +269,9 @@ function ConfirmActionDialog({
           {!unknown && (
             <AlertDialogAction
               variant={variant === "destructive" ? "destructive" : "default"}
-              disabled={!matches || changed}
+              disabled={!matches || changed || blocked}
+              focusableWhenDisabled={blocked || undefined}
+              aria-describedby={blocked ? blockedId : undefined}
               loading={pending}
               onClick={() => void run()}
             >
@@ -266,6 +301,7 @@ let undoInstanceSeq = 0
  * - 取り消しの対象は、実行の結果（perform の戻り値）で固定する。描画の時点の値を使わない。
  * - 取り消せる期限（windowMs）を過ぎたら、通知を閉じ、取り消しを受け付けない（ポインターを重ねて通知が残った場合も）。
  * - scopeKey（アカウント、ワークスペース）が変わったら、前のスコープの通知を閉じ、取り消しを受け付けない（別のスコープに操作しない）。
+ * - アンマウントしたら、表示中の「元に戻す」の通知を閉じる。
  * - 実行の結果が不明（FormSaveError の unknown、それ以外の例外）の場合は、「元に戻す」を示さない。
  * - 取り消しの失敗は、期限の中ならもう一度取り消せる。取り消しの結果が不明の場合は、もう一度取り消せる状態に戻さない。
  * - Toast は消えるため、重要な復元の手段は画面にも残す（アーカイブ済みの一覧から戻すなど）。run が返す undo を使える。
@@ -295,9 +331,12 @@ function useUndoableAction({ windowMs = 10_000, scopeKey }: { windowMs?: number;
     for (const [id, scope] of openIds.current) if (scope !== scopeKey) toastRef.current.dismiss(id)
   }, [scopeKey])
 
+  // アンマウント：タイマーを止め、表示中の「元に戻す」の通知を閉じる（押しても、この画面の取り消しは動かない）
   React.useEffect(
     () => () => {
       for (const t of timers.current) window.clearTimeout(t)
+      for (const id of openIds.current.keys()) toastRef.current.dismiss(id)
+      openIds.current.clear()
     },
     []
   )

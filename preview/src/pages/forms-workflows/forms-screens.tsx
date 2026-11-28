@@ -444,6 +444,7 @@ function ContactSheet({
           open={confirm}
           onOpenChange={setConfirm}
           data-testid="contact-discard"
+          unknown={form.status === "unknown"}
           onDiscard={() => {
             setConfirm(false)
             form.discard()
@@ -506,7 +507,7 @@ function SettingsForm<V extends FormValues>({
         <FormActions
           notice={
             <>
-              <SaveBlockerNotice id={`${id("notice" as keyof V)}`} blockers={form.blockers} hidden={form.submitting} unchanged={!form.isDirty} />
+              <SaveBlockerNotice id={`${id("notice" as keyof V)}`} blockers={form.blockers} reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : undefined} unchanged={!form.isDirty} />
               {form.isDirty && !form.submitting && form.blockers.length === 0 && <p className="text-ui text-muted-foreground">保存していない変更があります</p>}
             </>
           }
@@ -589,7 +590,7 @@ export function AutosaveMemo({ ws = "hq" }: { ws?: string }) {
       await saveSetting("memo", v, { mode: formsServer.autosaveMode, ws })
     },
   })
-  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", label: "チームのメモ", canSave: auto.status !== "unknown", onSave: () => auto.flush() })
+  useUnsavedChanges({ dirty: auto.hasUnsavedChanges, saving: auto.status === "saving", unknown: auto.status === "unknown", label: "チームのメモ", canSave: auto.status !== "unknown", onSave: () => auto.flush() })
   const status = {
     saved: auto.savedAt ? `${auto.savedAt.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} に保存しました` : "保存済み",
     unsaved: "入力が止まると保存します",

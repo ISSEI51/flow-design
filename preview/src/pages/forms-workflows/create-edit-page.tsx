@@ -2,14 +2,14 @@ import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/toast"
-import { SaveBlockerNotice, focusFormControl } from "@/patterns/form-layout"
+import { FormActions, SaveBlockerNotice, focusFormControl } from "@/patterns/form-layout"
 import { useFormState, type FormFields, submitOnEnter } from "@/patterns/form-state"
 import { DiscardChangesAlert } from "@/patterns/unsaved-changes"
 
-import { saveSettingsForm } from "../../data/forms-workflows/server"
+import { checkInvitedEmail, inviteMember, saveSettingsForm } from "../../data/forms-workflows/server"
 import { PageHeader } from "../../layout/page-header"
 import { Compare, Section } from "../../layout/section"
 import { Bullets } from "../app-structure/parts"
@@ -78,7 +78,7 @@ function MemberDialog() {
             )}
           </DialogBody>
           <DialogFooter>
-            <SaveBlockerNotice id="member-notice" blockers={form.blockers} hidden={form.submitting} className="w-full sm:w-auto sm:flex-1" />
+            <SaveBlockerNotice id="member-notice" blockers={form.blockers} reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : undefined} className="w-full sm:w-auto sm:flex-1" />
             <Button variant="secondary" disabled={form.submitting} onClick={() => (form.isDirty ? setConfirm(true) : close())}>
               キャンセル
             </Button>
@@ -98,6 +98,68 @@ function MemberDialog() {
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+// asyncFailure: "allow" の例。招待の処理（inviteMember）の中で、サーバーが必ず同じ確認（招待済みか）を行い、
+// 招待済みなら保存を拒否する（invalid）。そのため、入力中の確認ができなくても、招待を止めない。
+// 権限や前提の条件の確認には使わない（確認の API の障害の間に、確かめていない保存を通すことになる）。
+type InviteValues = { email: string }
+const inviteFields: FormFields<InviteValues> = {
+  email: {
+    label: "メールアドレス",
+    required: true,
+    validate: (v) => (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) ? null : "メールアドレスの形式が正しくありません（例：yamada@example.com）"),
+    normalize: (v) => v.trim().toLowerCase(),
+    validateAsync: (v, _all, { signal }) => checkInvitedEmail(v, { signal }),
+    asyncFailure: "allow",
+    asyncTimeoutMs: 3000,
+  },
+}
+function InviteExample() {
+  const { toast } = useToast()
+  const form = useFormState<InviteValues>({ initialValues: { email: "" }, fields: inviteFields })
+  const save = form.handleSubmit((v) => inviteMember(v), {
+    onBlocked: () => focusFormControl("invite-email"),
+    onSuccess: (v) => {
+      toast({ variant: "success", title: `${v.email} に招待を送りました` })
+      form.reset({ email: "" })
+    },
+  })
+  const status = form.asyncStatus("email")
+  return (
+    <form noValidate onSubmit={(e) => void save(e)} onKeyDown={(e) => submitOnEnter(e, save)} className="flex max-w-[40rem] flex-col gap-4" data-testid="invite-form">
+      <Field invalid={!!form.error("email")}>
+        <FieldLabel>招待する担当者のメールアドレス</FieldLabel>
+        <Input {...form.inputProps("email")} id="invite-email" type="email" autoComplete="off" />
+        {form.error("email") ? (
+          <FieldError>{form.error("email")}</FieldError>
+        ) : status === "unverified" ? (
+          <FieldDescription data-testid="invite-email-unverified">{form.asyncMessage("email")}</FieldDescription>
+        ) : status === "validating" ? (
+          <FieldDescription>招待済みかを確かめています</FieldDescription>
+        ) : null}
+      </Field>
+      {form.formError && (
+        <p role="alert" className="text-ui text-destructive">
+          {form.formError}
+        </p>
+      )}
+      <FormActions
+        notice={
+          <SaveBlockerNotice
+            id="invite-notice"
+            blockers={form.blockers}
+            goal="招待できます"
+            reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}
+          />
+        }
+      >
+        <Button type="submit" loading={form.submitting} disabled={!form.canSubmit} focusableWhenDisabled aria-describedby="invite-notice" data-testid="invite-submit">
+          招待する
+        </Button>
+      </FormActions>
+    </form>
   )
 }
 
@@ -152,6 +214,26 @@ export function CreateEditPage() {
             ["保存", "送信の処理でも条件を確かめる（Enter、requestSubmit、プログラムからの送信）。サーバー側でも検証する"],
           ]}
         />
+      </Section>
+
+      <Section
+        title="入力中の確認ができなかった場合（asyncFailure）"
+        lead="既定は block（確かめ直すまで保存できない）。allow は、保存の処理の中でサーバーが必ず同じ確認を行い、確認に失敗した保存を拒否する場合だけ選ぶ。"
+      >
+        <div className="flex flex-col gap-6">
+          <Rules
+            rows={[
+              ["block（既定）", "権限、前提の条件、重複など、保存してよいかを決める確認。確かめられなかったら保存できず、「もう一度確かめる」で確かめ直す（顧客コードの例）"],
+              ["allow", "サーバーが保存の時に同じ確認を必ず行う場合だけ。確かめられなくても保存でき、「保存するときに確かめます」と示す。保存の時に重複なら、項目のエラーとして返す"],
+              ["使わない場面", "権限と前提の条件の確認。確認の API の障害の間に、確かめていない保存を通すことになる"],
+            ]}
+          />
+          <ServerModes keys={["checkMode"]} name="invite" />
+          <p className="text-ui text-muted-foreground">招待済みのメールアドレス：yamada@example.com、sato@example.com。「通信の失敗」を選んで招待済みのアドレスを入力すると、招待の時にサーバーが拒否する。</p>
+          <DemoFrame testId="invite-demo">
+            <InviteExample />
+          </DemoFrame>
+        </div>
       </Section>
 
       <Section title="表示の方法">

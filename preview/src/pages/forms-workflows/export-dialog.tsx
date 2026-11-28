@@ -18,6 +18,9 @@ import { downloadText } from "./import-wizard"
 // - CSV は UTF-8。Excel で開く場合は BOM を付ける。
 // - 「選んだ行」を選んでいる間に選択がなくなった場合は、出力できないことを示す（検索結果のすべてに暗黙に広げない）。
 // - 個人情報の列（sensitive）を含む場合は、ダウンロードの前に ConfirmActionDialog で確かめる。
+//   確認の対象（targetKey）には、範囲、範囲の中身（選んだ行の ID、検索の条件。targetOf）、列を含める
+//   （件数が同じでも、確認の表示中に選んだ行が入れ替わったら、確かめ直させる）。
+// - 形式の既定は「Excel で開く」（spreadsheet）。「ほかのシステムへの取り込み」（raw）は式の無効化をしないため、選んだときに注意を示す。
 
 /** sensitive：個人情報など、出力の前に確かめる列 */
 export type ExportColumn = { id: string; label: string; visible: boolean; sensitive?: boolean }
@@ -30,6 +33,7 @@ export function ExportDialog({
   columns,
   kind,
   getRows,
+  targetOf,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -40,6 +44,8 @@ export function ExportDialog({
   columns: ExportColumn[]
   kind: string
   getRows: (scope: ExportScope) => Promise<Record<string, unknown>[]>
+  /** 範囲の中身を表すキー（選んだ行は並べた ID、検索結果は検索の条件）。個人情報の確認の targetKey に含める */
+  targetOf?: (scope: ExportScope) => string
 }) {
   // 選んだ行がない場合は「選んだ行」を、ページに分けていない一覧（page が undefined）では「表示中のページ」を、選択肢にしない
   const scopes = (["selected", "page", "results", "all"] as ExportScope[]).filter(
@@ -167,6 +173,14 @@ export function ExportDialog({
                 </SelectContent>
               </Select>
               <FieldDescription>Excel で直接開くと、電話番号や郵便番号の先頭の 0 が消えることがあります</FieldDescription>
+              {format === "utf8" && (
+                // raw の形式は、式として解釈される値（= + - @ で始まる値）をそのまま書き出す
+                <Alert variant="warning" data-testid="export-raw-warning">
+                  <AlertDescription>
+                    ほかのシステムへの取り込み用の形式です。値をそのまま書き出すため、「=」「+」「-」「@」で始まる値は、表計算ソフトで開くと式として実行されることがあります。表計算ソフトで開く場合は「CSV（Excel で開く）」を選んでください。
+                  </AlertDescription>
+                </Alert>
+              )}
             </Field>
             {noSelection && (
               <Alert variant="warning" role="alert" data-testid="export-no-selection">
@@ -194,7 +208,7 @@ export function ExportDialog({
           title={`個人情報を含む${exportScopeLabel(scope, counts[scope] ?? null)}をダウンロードしますか？`}
           description={`${sensitive.map((c) => `「${c.label}」`).join("")}を含みます。ダウンロードしたファイルは、社内の規程に従って管理してください。`}
           confirmLabel="ダウンロード"
-          targetKey={JSON.stringify([scope, chosen.map((c) => c.id)])}
+          targetKey={JSON.stringify([scope, targetOf?.(scope) ?? null, chosen.map((c) => c.id)])}
           data-testid="export-sensitive-confirm"
           onConfirm={() => run()}
         />

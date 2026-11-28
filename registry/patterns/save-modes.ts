@@ -21,6 +21,14 @@ import { useScopeGuard } from "@/patterns/scope-guard"
 // それより前に始めた保存の結果で、新しいスコープの表示と状態を変えない。AbortSignal はサーバーでの処理の取り消しを保証しない。
 //
 // 保存の API、冪等性、再試行の方針、通知の文言は製品が持つ。
+//
+// 選び方（docs/web/patterns/create-and-edit.md の「即時保存と設定の保存の選び方」）
+// - サーバーに保存する設定で、権限（forbidden）、競合（conflict、版）、部分的な保存（partial）を扱う場合は、
+//   setting-save.ts の useInstantSettings、useSettingsForm を使う。
+// - useInstantSave は、1 つの値だけを保存し、成功、確定した失敗、結果が不明の 3 つだけで足りる場合に使う。
+// - 1 つの保存の対象は、1 つの hook のインスタンスだけが持つ。画面は、保存した値の写しを別の state に持たない。
+// - useAutosave は、スコープが変わった描画の value を新しいスコープの保存済みの値とみなす。その描画で新しいスコープの値を
+//   渡すか、key で作り直す。入力が止まる前にスコープが変わった値は保存しない。
 
 const outcomeOf = (error: unknown) => (error instanceof FormSaveError ? error.outcome : "unknown")
 

@@ -155,7 +155,7 @@ export function ContractWizard({
     setResumeOffered(Boolean(d))
   }, [draftKey])
 
-  useUnsavedChanges({ dirty: (form.isDirty || form.status === "unknown") && !doneId, saving: form.submitting || draftSaving, label: "契約の登録", revision: form.revision, onDiscard: form.discard })
+  useUnsavedChanges({ dirty: (form.isDirty || form.status === "unknown") && !doneId, saving: form.submitting || draftSaving, unknown: form.status === "unknown", label: "契約の登録", revision: form.revision, onDiscard: form.discard })
 
   const stepBlockers = form.blockers.filter((b) => stepFields[current].includes(b.name))
   const noticeId = `${idPrefix}-step-notice`
@@ -461,7 +461,7 @@ export function ContractWizard({
               <SaveBlockerNotice
                 id={noticeId}
                 blockers={stepBlockers}
-                hidden={form.composing}
+                reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}
                 goal={current === "review" ? "登録できます" : "次へ進めます"}
                 onFocusField={(name) => focusFormControl(id(name))}
                 data-testid={`${idPrefix}-notice`}
