@@ -590,6 +590,16 @@ test.describe("Navigation from a notification", () => {
     await expect(nav(page).getByTestId("ntf-nav-memo")).toHaveValue("連絡の予定を確認する")
     expect(await requests(page, "resolve")).toHaveLength(0)
     expect((await stored(page, "hq")).find((n) => n.id === "n-103")!.read).toBe(false)
+    // 確認の Dialog を閉じた直後は、通知センターが閉じる動きの途中の場合がある（見えているが、間もなく DOM から外れる）。
+    // 有限の動き（Dialog と通知センターの開閉）が終わってから、開いているかを確かめる（時間では待たない）
+    await page.evaluate(() =>
+      Promise.all(
+        document
+          .getAnimations()
+          .filter((a) => Number.isFinite(Number(a.effect?.getComputedTiming().endTime)))
+          .map((a) => a.finished.catch(() => undefined))
+      )
+    )
     if (!(await panel(page).isVisible())) center = await openCenter(page, nav(page))
     await openButton(panel(page), "n-103").click()
     await alert.getByRole("button", { name: "変更を破棄" }).click()
