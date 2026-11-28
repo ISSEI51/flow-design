@@ -1,10 +1,9 @@
-import { fileURLToPath } from "node:url"
-
 import { expect, test } from "@playwright/test"
 import { createElement } from "react"
 import { renderToString } from "react-dom/server"
-import { createServer, type ViteDevServer } from "vite"
+import type { ViteDevServer } from "vite"
 import { collectPageErrors } from "./page-errors"
+import { createSsrServer } from "./ssr-server"
 
 // 捕捉されなかった例外と、製品のコードから出たコンソールのエラーを失敗にする（page-errors.ts）。
 collectPageErrors(test)
@@ -17,15 +16,8 @@ test.describe("Data Display SSR", { tag: "@webkit" }, () => {
   let vite: ViteDevServer
   let html = ""
 
-  test.beforeAll(async () => {
-    vite = await createServer({
-      configFile: fileURLToPath(new URL("../vite.config.ts", import.meta.url)),
-      server: { middlewareMode: true, hmr: false },
-      appType: "custom",
-      logLevel: "error",
-      // 検品の開発サーバーと、ssr.spec.ts のキャッシュを共有しない。同時に書き込むと失敗するため。
-      cacheDir: fileURLToPath(new URL("../../node_modules/.vite-ssr-check-data-display", import.meta.url)),
-    })
+  test.beforeAll(async ({}, workerInfo) => {
+    vite = await createSsrServer("ssr-data-display", workerInfo)
     const mod = (await vite.ssrLoadModule("/src/ssr/data-display-fixture.tsx")) as typeof import("../src/ssr/data-display-fixture")
     html = renderToString(createElement(mod.DataDisplaySsrFixture))
   })

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { defineConfig, devices } from "@playwright/test"
 
 const port = Number(process.env.PREVIEW_TEST_PORT ?? 5174)
@@ -20,7 +21,8 @@ export default defineConfig({
   ],
   webServer: {
     command: "npx vite --config vite.config.ts",
-    env: { PREVIEW_PORT: String(port) },
+    // キャッシュは手動の preview:dev（node_modules/.vite）と分ける。SSR の検品のキャッシュは tests/ssr-server.ts で分ける。
+    env: { PREVIEW_PORT: String(port), PREVIEW_CACHE_DIR: fileURLToPath(new URL("../node_modules/.vite-test", import.meta.url)) },
     url: `http://localhost:${port}`,
     reuseExistingServer: false,
     // Vite の標準出力（依存の最適化 "new dependencies optimized"、再読み込み "page reload"、"hmr update"）も記録に残す。
