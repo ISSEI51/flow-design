@@ -166,9 +166,11 @@ function useBulkSelection<Q>({ queryKey, query, scopeKey, visibleIds, total }: U
    * この値を返した描画の選択から作る（描画の中で呼ぶと、その描画の選択。commit された画面の操作から呼ぶと、
    * 表示中の選択。commit されていない描画の選択は使わない）
    */
+  // この描画の選択に対応する版（snapshot は、選択と版を同じ時点のものにする）
+  const revisionAtRender = revision.current
   const snapshot = React.useCallback((): BulkTarget<Q> => {
     const s = state
-    const selectionRevision = revision.current
+    const selectionRevision = revisionAtRender
     if (s.mode === "ids") return { kind: "ids", ids: Object.keys(s.ids), scope: s.scope, selectionRevision }
     return {
       kind: "query",
@@ -179,7 +181,7 @@ function useBulkSelection<Q>({ queryKey, query, scopeKey, visibleIds, total }: U
       excludedIds: Object.keys(s.excluded),
       expectedCount: total === null ? null : Math.max(0, total - Object.keys(s.excluded).length),
     }
-  }, [state, total])
+  }, [state, total, revisionAtRender])
 
   /**
    * 実行の結果を選択に反映する。完了した行と、結果が不明な行の選択を解除し、失敗した行の選択を残す。
