@@ -28,7 +28,8 @@ import { drillBucketPeriod, drillPeriodFor, drillRangeFor, groupOther } from "..
 import { formatMetricValue } from "../../registry/patterns/metric-format"
 import { accountDetail, churnByPlan, churnByTerm, churnedAccountList, churnTrend, mrrTrend, overviewData, retentionSummary, withScope } from "../src/data/data-analysis/analysis-model"
 import * as S from "../src/data/data-analysis/subscriptions"
-import { paramsFromQuery, queryFromParams } from "../src/pages/data-analysis/analysis-route"
+import { paramsFromQuery, queryFromParams, singleRegionQuery } from "../src/pages/data-analysis/analysis-route"
+import { describeConditions } from "../src/pages/data-analysis/analysis-session"
 
 // Data Analysis の計算（registry/patterns の数値の表記、比較値、期間、条件の継承）と、模擬データの整合性の単体の検品。
 // ブラウザを使わず Node.js で実行する。同じ処理を繰り返さないよう、desktop の project だけで実行する。
@@ -882,9 +883,36 @@ test.describe("Mock data consistency", () => {
   })
 
   test("the workspace scope restricts the data on the server side", () => {
-    const k = withScope("kyushu", { ...f, regions: ["kanto"] })
-    expect(k.regions).toEqual(["kyushu-okinawa"])
+    // ワークスペースの条件と画面の条件は積集合。画面の条件（関東）をスコープの条件（九州・沖縄）で上書きしない（重ならないため conflict）
+    expect(withScope("kyushu", { ...f, regions: ["kanto"] })).toEqual({ status: "conflict", conflicts: ["regions"] })
+    expect(withScope("kyushu", f)).toMatchObject({ status: "ready", filters: { regions: ["kyushu-okinawa"] } })
+    expect(withScope("kyushu", { ...f, regions: ["kyushu-okinawa"] })).toMatchObject({ status: "ready", filters: { regions: ["kyushu-okinawa"] } })
+    expect(withScope("kyushu", { ...f, regions: ["kanto", "kyushu-okinawa"] })).toMatchObject({ status: "ready", filters: { regions: ["kyushu-okinawa"] } })
+    expect(withScope("hq", { ...f, regions: ["kanto"] })).toMatchObject({ status: "ready", filters: { regions: ["kanto"] } })
     expect(accountDetail(S.accounts.find((a) => a.region === "kanto")!.id, "manager", "kyushu")).toBeNull()
+  })
+
+  test("hiding the counts gives the same response shape whether or not hidden rows exist", () => {
+    // 閲覧できない明細がない一覧（管理者）と、ある一覧（担当者）で、件数を示さない設定の応答の形が同じ
+    const manager = churnedAccountList({ range: year, filters: f, role: "manager", hiddenCountPolicy: "hide" })
+    const staff = churnedAccountList({ range: year, filters: f, role: "staff", hiddenCountPolicy: "hide" })
+    for (const r of [manager, staff]) expect(r).toMatchObject({ total: null, hidden: null, concealed: true, outOfRange: false })
+    expect(Object.keys(manager).sort()).toEqual(Object.keys(staff).sort())
+    // 担当者でも、閲覧できない明細がない条件（理由で絞り込んだ結果に制限のある取引先がない場合）でも同じ形
+    const reasons = [...new Set(churnedAccountList({ range: year, filters: f, role: "manager" }).rows.map((r) => r.reason))]
+    for (const reason of reasons) {
+      const r = churnedAccountList({ range: year, filters: f, role: "staff", reason, hiddenCountPolicy: "hide" })
+      expect(r).toMatchObject({ total: null, hidden: null, concealed: true })
+    }
+  })
+
+  test("a restricted account detail is forbidden, or not found when the product conceals its existence", () => {
+    const restricted = S.accounts.find((a) => a.restricted)!
+    expect(() => accountDetail(restricted.id, "staff", "hq")).toThrow("この企業の詳細を表示する権限がありません")
+    // 存在を明かさない方針：本当に存在しない ID と同じ結果（null）
+    expect(accountDetail(restricted.id, "staff", "hq", "not-found")).toBeNull()
+    expect(accountDetail("A-9999", "staff", "hq", "not-found")).toBeNull()
+    expect(accountDetail(restricted.id, "manager", "hq", "not-found")).not.toBeNull()
   })
 
   test("a fixed expected value (computed once by hand from the generated records)", () => {
@@ -930,5 +958,118 @@ test.describe("Mock data consistency", () => {
     const before = S.operatingProfitIn({ from: makeDate(2025, 11, 1)!, to: makeDate(2025, 11, 25)! }, k)!
     expect(before).toBeLessThan(0)
     expect(now).toBeGreaterThan(0)
+  })
+})
+
+// ------------------------------------------------------------------ Patterns Integration Review の指摘への対処
+test.describe("Integration review: comparison fairness and alignment", () => {
+  const c = ctx(2026, 11, 25)
+  const cmp = (from: string, to: string, mode: "previous-month" | "previous-year", extra: Partial<Parameters<typeof comparisonRange>[0]> = {}) =>
+    comparisonRange({ period: resolved(abs(from, to), c), mode, ...extra })
+
+  test("a calendar comparison whose period has a different number of days is not fair (period totals)", () => {
+    // 月末に合わせたため短くなる：3/1〜3/30（30 日）の前月は 2/1〜2/28（28 日）
+    const a = cmp("2025-03-01", "2025-03-30", "previous-month")
+    expect(a.status === "ready" && [describeRange(a.range), a.basis, a.adjusted, a.truncated, a.fair]).toEqual(["2025/02/01〜2025/02/28", "calendar", true, true, false])
+    expect(a.status === "ready" && a.reason).toBe("比較期間と分析の対象の日数が異なります（分析の対象は 30 日間、比較期間は 28 日間）")
+    expect(a.status === "ready" && a.note).toContain("2025/03/30 に対応する日がないため")
+    // 2 日間の期間が 1 日の比較期間になる（検証画面で +101.9% と示していた例）
+    const b = cmp("2025-03-30", "2025-03-31", "previous-month")
+    expect(b.status === "ready" && [describeRange(b.range), b.days, b.fair]).toEqual(["2025/02/28", 1, false])
+    const leap = cmp("2024-02-28", "2024-02-29", "previous-year")
+    expect(leap.status === "ready" && [describeRange(leap.range), leap.fair]).toEqual(["2023/02/28", false])
+    // 月末に合わせなくても、月末をまたぐと日数が変わる（3/15〜4/14 の 31 日と、2/15〜3/14 の 28 日）
+    const cross = cmp("2025-03-15", "2025-04-14", "previous-month")
+    expect(cross.status === "ready" && [describeRange(cross.range), cross.adjusted, cross.fair]).toEqual(["2025/02/15〜2025/03/14", false, false])
+    // 日数が同じなら公平（月末に合わせた 1 日どうし、月の途中の同じ日付）
+    const leapDay = cmp("2024-02-29", "2024-02-29", "previous-year")
+    expect(leapDay.status === "ready" && [leapDay.adjusted, leapDay.fair, leapDay.reason]).toEqual([true, true, null])
+    const mid = cmp("2026-10-05", "2026-10-20", "previous-month")
+    expect(mid.status === "ready" && [describeRange(mid.range), mid.fair]).toEqual(["2026/09/05〜2026/09/20", true])
+    // 時点の指標は期間の日数に関係しない（同じ時点の値と比べる）
+    const point = cmp("2025-03-30", "2025-03-31", "previous-month", { basis: "point-in-time" })
+    expect(point.status === "ready" && [describeRange(point.range), point.fair]).toEqual(["2025/02/28", true])
+  })
+
+  test("weekday alignment does not move a previous-month comparison far beyond the previous month", () => {
+    // 31 日間の月は、前月の 28 日前と重なるため 35 日前と比べる（暦でずらした 28 日 + 7 日以内）
+    const march = cmp("2025-03-01", "2025-03-31", "previous-month", { basis: "weekday" })
+    expect(march.status === "ready" && [describeRange(march.range), march.note]).toEqual(["2025/01/25〜2025/02/24", "曜日をそろえるため、35 日前の期間と比べます"])
+    // 85 日間の期間の前月は、91 日前（前月ではなく 3 か月前）になるため比較できない
+    expect(cmp("2025-01-05", "2025-03-30", "previous-month", { basis: "weekday" })).toEqual({ status: "invalid", reason: "overlap" })
+    // 前年同期は 364 日前のまま
+    const py = cmp("2025-01-05", "2025-03-30", "previous-year", { basis: "weekday" })
+    expect(py.status === "ready" && py.note).toBe("曜日をそろえるため、364 日前の期間と比べます")
+  })
+
+  test("elapsed time with asOf at or before the start has nothing to compare and is not fair", () => {
+    const tm = resolved({ kind: "relative", id: "this-month" }, c)
+    for (const asOf of [zonedStartOfDay("2026-11-01", "Asia/Tokyo"), Date.UTC(2026, 9, 31)]) {
+      const r = comparisonRange({ period: tm, mode: "previous-month", basis: "elapsed-time", context: { ...c, timeZone: "Asia/Tokyo", asOf } })
+      expect(r.status === "ready" && [r.fair, r.reason, r.instant && r.instant.end - r.instant.start]).toEqual([false, "集計済みの時刻が分析の対象の始まり以前のため、比べる経過時間がありません", 0])
+    }
+  })
+
+  test("elapsed alignment uses the bucket granularity, not the display label", () => {
+    const relabel = (list: ReturnType<typeof buildBuckets>) => list.map((b) => ({ ...b, fullLabel: `bucket ${b.key}` }))
+    const cur = relabel(buildBuckets({ from: makeDate(2026, 9, 1)!, to: makeDate(2026, 10, 31)! }, "month", c))
+    const base = relabel(buildBuckets({ from: makeDate(2026, 7, 1)!, to: makeDate(2026, 8, 31)! }, "month", c))
+    const rows = alignBuckets(cur, base, { by: "elapsed", allowDifferentLength: true })
+    expect(rows.map((r) => [r.key, toDateString(r.current!.from), toDateString(r.baseline!.from)])).toEqual([
+      ["u0", "2026-09-01", "2026-07-01"],
+      ["u1", "2026-10-01", "2026-08-01"],
+    ])
+    const weeks = alignBuckets(relabel(buildBuckets(resolved({ kind: "relative", id: "this-month" }, c).range, "week", c)), relabel(buildBuckets({ from: makeDate(2026, 10, 1)!, to: makeDate(2026, 10, 25)! }, "week", c)), { by: "elapsed" })
+    expect(weeks[0].key).toBe("w0")
+  })
+
+  test("a sign change from positive to negative shows the difference first", () => {
+    const flip = compareValues({ current: ready(-50), baseline: ready(100) })
+    expect(flip.status === "ready" && [flip.signChange, flip.rate]).toEqual(["positive-to-negative", -1.5])
+    expect(describeComparison(flip, { format: { unit: "円" } })).toMatchObject({ text: "−150円", detail: "プラスからマイナスに転換" })
+    // 製品が増減率を指定した場合は、増減率を示す
+    expect(describeComparison(flip, { format: { unit: "円" }, show: "rate" }).text).toBe("−150.0%")
+  })
+
+  test('"Other" is created for skipped members even when no value is grouped', () => {
+    const opts = { key: (i: { k: string }) => i.k, label: (i: { k: string }) => i.k, value: (i: { v: number | null }) => i.v, aggregate: "sum" as const, includeSkippedInOther: true }
+    // まとめる値のある項目が 0 件：値は null（0 にしない）、members は欠損した分類
+    const none = groupOther([{ k: "a", v: 10 }, { k: "b", v: 8 }, { k: "e", v: null }], { ...opts, limit: 2 })
+    expect(none.groups.map((g) => g.key)).toEqual(["a", "b", "__other"])
+    expect(none.groups[2]).toMatchObject({ kind: "other", value: null, members: ["e"] })
+    // まとめる値のある項目が 1 件：欠損した分類と一緒に「その他」にする
+    const one = groupOther([{ k: "a", v: 10 }, { k: "b", v: 8 }, { k: "c", v: 3 }, { k: "e", v: null }], { ...opts, limit: 2 })
+    expect(one.groups[2]).toMatchObject({ kind: "other", value: 3, members: ["c", "e"] })
+    // 指定しない場合は従来どおり（欠損した分類は skipped だけ、1 件は「その他」にしない）
+    expect(groupOther([{ k: "a", v: 10 }, { k: "b", v: 8 }, { k: "e", v: null }], { ...opts, includeSkippedInOther: false, limit: 2 }).groups.map((g) => g.kind)).toEqual(["item", "item"])
+  })
+
+  test("scopeFilters treats only own keys of the global conditions as known", () => {
+    expect(scopeFilters({ regions: [] as string[] }, { toString: "x" } as never)).toEqual({ status: "invalid", unknown: ["toString"] })
+    expect(scopeFilters({ regions: [] as string[] }, { constructor: "x" } as never)).toEqual({ status: "invalid", unknown: ["constructor"] })
+  })
+})
+
+test.describe("Integration review: shown conditions", () => {
+  test("a single-region screen keeps only the first region from the URL and says so", () => {
+    const r = singleRegionQuery(queryFromParams(new URLSearchParams("region=kanto,kinki")))
+    expect(r.query.filters?.regions).toEqual(["kanto"])
+    expect(r.notice).toBe("この画面で選べる地域は 1 つです。URL で指定された地域のうち、関東で集計しています（近畿は使っていません）")
+    // 重複した値は 1 つにする。1 つなら知らせない
+    const same = singleRegionQuery(queryFromParams(new URLSearchParams("region=kanto,kanto")))
+    expect([same.query.filters?.regions, same.notice]).toEqual([["kanto"], null])
+  })
+
+  test("the stale label is built from the conditions actually used, including granularity and time zone", () => {
+    const range = { from: makeDate(2026, 11, 1)!, to: makeDate(2026, 11, 25)! }
+    const shown = { range, filters: { ...S.defaultAnalysisFilters, regions: ["kanto" as const] }, granularity: "month" as const, timeZone: "Asia/Tokyo" }
+    expect(describeConditions(shown, { timeZone: "Asia/Tokyo" })).toBe("2026/11/01〜2026/11/25・関東・月別の結果（前の条件）")
+    expect(describeConditions(shown, { timeZone: "America/New_York" })).toBe("2026/11/01〜2026/11/25・関東・月別・Asia/Tokyoの結果（前の条件）")
+    expect(describeConditions({ range: null, rangeLabel: "過去 24 か月と今後 3 か月", filters: S.defaultAnalysisFilters, timeZone: "Asia/Tokyo" }, { timeZone: "Asia/Tokyo" })).toBe(
+      "過去 24 か月と今後 3 か月・絞り込みなしの結果（前の条件）"
+    )
+    // ワークスペースで決まった地域も、集計に使った条件として示す
+    const ws = withScope("kyushu", S.defaultAnalysisFilters)
+    expect(ws.status === "ready" && describeConditions({ range, filters: ws.filters, timeZone: "Asia/Tokyo" }, { timeZone: "Asia/Tokyo" })).toBe("2026/11/01〜2026/11/25・九州・沖縄の結果（前の条件）")
   })
 })

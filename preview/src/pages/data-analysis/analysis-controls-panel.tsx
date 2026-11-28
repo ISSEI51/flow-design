@@ -78,7 +78,15 @@ export function AnalysisControls({ page, onReload }: { page: string; onReload: (
             {radio("analysis-hidden", "show", session.hiddenCountPolicy, "件数を示す", () => setSession({ hiddenCountPolicy: "show" }))}
             {radio("analysis-hidden", "hide", session.hiddenCountPolicy, "一覧では件数を示さない", () => setSession({ hiddenCountPolicy: "hide" }))}
             <p className="w-full text-caption text-muted-foreground">
-              一覧の件数だけを隠す設定。集計の指標（解約した企業数）は表示するため、指標と一覧の件数の差から推測できる。集計値の公開の範囲は、製品が別に決める。
+              一覧の件数だけを隠す設定。閲覧できない明細の有無にかかわらず、一覧の応答と文は同じ形になる。集計の指標（解約した企業数）は表示するため、指標と一覧の件数の差から推測できる。集計値の公開の範囲は、製品が別に決める。
+            </p>
+          </fieldset>
+          <fieldset className="flex flex-wrap items-center gap-x-4">
+            <legend className="mb-1 font-medium">閲覧の権限がない企業の詳細</legend>
+            {radio("analysis-forbidden", "forbidden", session.forbiddenDetail, "権限不足として示す", () => setSession({ forbiddenDetail: "forbidden" }))}
+            {radio("analysis-forbidden", "not-found", session.forbiddenDetail, "存在しない場合と同じに示す", () => setSession({ forbiddenDetail: "not-found" }))}
+            <p className="w-full text-caption text-muted-foreground">
+              権限不足として示すと、企業が存在し、集計に含まれることがわかる。企業の存在そのものが機密の場合は、存在しない場合と同じに示す（実際の応答の違いはバックエンドがなくす）。
             </p>
           </fieldset>
           <fieldset className="flex flex-wrap items-center gap-x-4">

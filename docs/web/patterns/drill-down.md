@@ -116,7 +116,7 @@ List & Detail の設計方針（[list-and-detail.md](list-and-detail.md)）を�
 - 割合、平均、一意の件数は、明細の単純な合計で再現できない場合がある。
 - 「その他」から進む場合は、表示の文字ではなく、実際に含まれる分類（`groupOther` の `members`）で絞り込む。
 - `groupOther` の `aggregate` は必須。件数や金額など加算できる指標は `"sum"`、割合、平均、一意の件数など加算できない指標は、製品が元のデータから再集計する関数を渡す（Drill-down の資料のページでは、「その他」の地域の解約率を、含まれる地域の契約から再集計している）。再集計の結果が取得できない場合と、合計が有限にならない場合は値を `null` にする（0 にしない）。
-- 値が欠損・NaN・Infinity の分類は、まとめから除いて `skipped` で返す。`includeSkippedInOther: true` の場合は、欠損した分類も「その他」の `members` に含める（値の計算には含めない。「その他」から明細へ進むときに、欠損した分類の明細も対象にする場合）。`aggregate` に `"sum"` か関数以外を渡すと RangeError。分類の key の重複と、「その他」の key（`otherKey`、既定 `"__other"`）と同じ分類は RangeError（製品のデータの誤り）。`limit` が 0 以下ならすべてを「その他」に、件数以上なら「その他」を作らない。1 件だけを「その他」にしない。
+- 値が欠損・NaN・Infinity の分類は、まとめから除いて `skipped` で返す。`includeSkippedInOther: true` の場合は、欠損した分類も「その他」の `members` に含める（値の計算には含めない。「その他」から明細へ進むときに、欠損した分類の明細も対象にする場合）。欠損した分類がある場合は、まとめる値のある分類が 0 件か 1 件でも「その他」を作る（欠損した分類だけの「その他」の値は `null`。0 にしない）。`aggregate` に `"sum"` か関数以外を渡すと RangeError。分類の key の重複と、「その他」の key（`otherKey`、既定 `"__other"`）と同じ分類は RangeError（製品のデータの誤り）。`limit` が 0 以下ならすべてを「その他」に、件数以上なら「その他」を作らない。1 件だけを「その他」にしない。
 - 件数や集計の値からも、権限のない情報を推測できる場合がある。明細だけでなく、集計の結果や閲覧できない明細の件数を公開するかも製品が判断する（検証画面の「一覧の、閲覧できない明細の件数」：件数を示す／一覧では件数を示さない）。権限のない明細の件数を常に公開する仕様にしない。
 - 一覧で件数を隠しても、集計の指標（解約した企業数）を表示する場合は、指標と一覧の件数の差から件数を推測できる。件数を推測させてはいけない場合は、集計の指標の公開の範囲も製品が決める（検証画面は一覧の件数だけを隠し、そのことを操作の説明に書いている）。
 - 権限や集計の時点の違いで、集計の値と閲覧できる明細の件数が異なる場合は、理由を示す（「表示できるのは 100社。4社は閲覧の権限がない取引先です」。検証画面の過去12か月、担当者の権限）。
@@ -192,7 +192,7 @@ List & Detail の設計方針（[list-and-detail.md](list-and-detail.md)）を�
 
 ```tsx
 // 内訳の行：選択（Cross-filtering）と移動（Drill-down）を別の要素にする
-<button aria-pressed={cross.isSelected("by-plan", "standard")} onClick={() => cross.toggle({ source: "by-plan", field: "plan", value: "standard", label: "スタンダード" })}>スタンダード 20.4%</button>
+<button aria-pressed={cross.isSelected("by-plan", "plan", "standard")} onClick={() => cross.toggle({ source: "by-plan", field: "plan", value: "standard", label: "スタンダード" })}>スタンダード 20.4%</button>
 <DrillDownLink origin="by-plan:standard" href={drillHref({ dplan: "standard" })}>スタンダードの内訳を見る</DrillDownLink>
 
 // 離れるときに記録し、戻ったときに復元する（製品の責務：記録の保存と、履歴との接続）
@@ -203,7 +203,7 @@ const onClickCapture = (e) => {
 useAnalysisPositionRestore({ position: record?.position ?? null, ready: allRegionsReady, root: rootRef, scrollElement: mainRef, fallbackFocus: () => h1Ref.current })
 
 // 比較期間の系列から進む
-const period = drillPeriodFor("baseline", { period: a.query.period, comparison: a.comparison, current: a.period })
+const period = drillPeriodFor("baseline", { comparison: a.comparison, current: a.period })
 ```
 
 プレビュー：`#/drill-down`、`#/analysis-app?page=retention`。

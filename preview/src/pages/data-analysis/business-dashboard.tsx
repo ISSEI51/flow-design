@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import { toDateString } from "@/lib/date"
 
+import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { comparisonRange, describeRange, zonedStartOfDay, fullPeriodOf, getPeriodElapsed, type ComparisonMode, type ComparisonRange, type PeriodUnit } from "@/patterns/analysis-period"
 import { AnalysisPeriodFilter, ComparisonSelect } from "@/patterns/analysis-controls"
@@ -19,7 +20,7 @@ import type { Loadable } from "@/patterns/data-states"
 
 import { bridgeData, mrrTrend, overviewData, profitByRegion, withScope, type OverviewData } from "../../data/data-analysis/analysis-model"
 import { analysisServer } from "../../data/data-analysis/analysis-server"
-import { describeDataKey, scopeOf, useAnalysisData, useSession } from "./analysis-session"
+import { scopeOf, staleLabelOf, useAnalysisData, useSession, type ShownConditions } from "./analysis-session"
 import {
   ANALYSIS_TODAY,
   DATA_START,
@@ -30,7 +31,7 @@ import {
   type Region,
 } from "../../data/data-analysis/subscriptions"
 import { ComparisonTable, DiffBarChart, MrrTrendChart, countFormat, fmt, marginFormat, ratioFormat, ready, yenFormat, type ComparisonRowSpec } from "./analysis-parts"
-import { paramsFromQuery, queryFromParams, replaceHash, type Route } from "./analysis-route"
+import { paramsFromQuery, queryFromParams, replaceHash, singleRegionQuery, type Route } from "./analysis-route"
 
 // Strategic Dashboard（経営・意思決定）の例：事業の状況。
 // 考える順：現在の状況（主要指標と目標）→ 推移（MRR）→ 増減の要因 → 収益性 → 期間の比較 → 次にすること。
@@ -94,7 +95,7 @@ export function RegionSelect({
       <span id="analysis-region-label" className="text-caption text-muted-foreground">
         {label}
       </span>
-      <Select items={regionItems} value={disabledReason ? "kyushu-okinawa" : (value[0] ?? "all")} disabled={Boolean(disabledReason)} onValueChange={(v) => onChange(!v || String(v) === "all" ? [] : [v as Region])}>
+      <Select items={regionItems} value={value[0] ?? "all"} disabled={Boolean(disabledReason)} onValueChange={(v) => onChange(!v || String(v) === "all" ? [] : [v as Region])}>
         <SelectTrigger aria-labelledby="analysis-region-label" size="sm" className="w-44 max-w-full text-ui" data-testid="analysis-region-filter">
           <SelectValue />
         </SelectTrigger>
@@ -120,19 +121,54 @@ export function loadable(status: BrowseDataStatus, value: number | null | undefi
 
 const regionError = (name: string, reload: () => void) => ({ title: `${name}を取得できませんでした`, description: "ほかの領域は表示しています。この領域だけを再取得できます。", onRetry: reload })
 
+/** ワークスペースで地域が決まっている場合の、地域の選択を無効にする理由 */
+export const workspaceRegionReason = (workspace: string) => (workspace === "kyushu" ? "このワークスペースは九州・沖縄だけ" : null)
+
+/**
+ * ワークスペース（データのスコープ）と画面の条件が重ならない場合の表示。取得はしない（条件を外して全件を取得しない）。
+ * 復元した URL の地域が、ワークスペースの外にある場合など
+ */
+export function OutOfScopeNotice({ filters, onClear }: { filters: AnalysisFilters; onClear: () => void }) {
+  return (
+    <div role="status" className="flex min-w-0 flex-col items-start gap-3" data-testid="analysis-out-of-scope">
+      <p className="text-ui font-medium">このワークスペースでは対象がありません</p>
+      <p className="max-w-[40rem] text-ui text-muted-foreground">
+        指定された地域（{filters.regions.map((r) => regionLabels[r]).join("、")}）は、このワークスペースのデータに含まれません。地域の条件を外すと、このワークスペースのデータで集計します。
+      </p>
+      <Button variant="outline" size="sm" onClick={onClear}>
+        地域の条件を外す
+      </Button>
+    </div>
+  )
+}
+
+/** 地域を 1 つだけ選べる画面で、URL の地域を減らしたことの知らせ */
+export function RegionNotice({ notice }: { notice: string | null }) {
+  return notice ? (
+    <p role="status" className="text-caption text-foreground" data-testid="analysis-region-notice">
+      {notice}
+    </p>
+  ) : null
+}
+
 export function BusinessDashboard({ route }: { route: Route }) {
   const { session } = useSession()
   const scope = scopeOf(session)
   // 集計のタイムゾーンは製品が明示的に渡す。結果の意味が変わるため、取得の条件のキーに含まれる（useAnalysisQuery の key）。
   const context = useMemo(() => analysisContextFor(session.timeZone), [session.timeZone])
-  const initialQuery = useMemo(() => queryFromParams(route.params), []) // eslint-disable-line react-hooks/exhaustive-deps
+  // URL の地域が複数の場合は、この画面で選べる 1 つにし、知らせる（画面に示す条件と、集計の条件を同じにする）
+  const restored = useMemo(() => singleRegionQuery(queryFromParams(route.params)), []) // eslint-disable-line react-hooks/exhaustive-deps
   const a = useAnalysisQuery<AnalysisFilters>({
     defaultQuery: { period: { kind: "relative", id: "this-month" }, comparison: "previous-month", filters: defaultAnalysisFilters },
-    initialQuery,
+    initialQuery: restored.query,
     context,
     aggregationKey: "revenue:12/365",
     onQueryChange: (q) => replaceHash(`#/analysis-app?${paramsFromQuery("business", q).toString()}`),
   })
+  // 使わなかった地域を URL に残さない
+  useEffect(() => {
+    if (restored.notice) replaceHash(`#/analysis-app?${paramsFromQuery("business", a.query).toString()}`)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const period = a.period
   // 比較の対象は利用者の選択を維持する。期間の変更で使えなくなった場合は、比較できない理由と変更の方法を示す（自動で変えない）。
   // 時点の指標（MRR、契約企業数）は、同じ比較の対象を「同じ時点」の方式で比べる。
@@ -140,18 +176,29 @@ export function BusinessDashboard({ route }: { route: Route }) {
     period.status === "ready" && a.comparison.status === "ready" ? comparisonRange({ period, mode: a.query.comparison, basis: "point-in-time", custom: a.comparison.mode === "custom" ? a.comparison.range : null, context }) : a.comparison
 
   const full = period.status === "ready" ? fullPeriodOf(period, context) : null
-  const key = a.key
-  const filters = withScope(session.workspace, a.query.filters)
-  // 取得の結果に、集計に使った比較の条件を含める。再取得の間に前の結果を表示するとき、比較の見出しも前の結果の条件で示す
-  const overview = useAnalysisData("overview", key, () => ({ ...overviewData({ period: period as never, full, comparison: a.comparison, pointComparison: pointCmp, filters }), cmp: a.comparison, pointCmp }), scope)
-  const trendKey = JSON.stringify({ f: a.query.filters, forecast: analysisServer.forecast, tz: session.timeZone })
-  const trend = useAnalysisData("trend", trendKey, () => mrrTrend({ filters, withForecast: analysisServer.forecast }), scope)
-  const bridge = useAnalysisData("bridge", key, () => ({ ...bridgeData({ period: period as never, comparison: a.comparison, filters }), cmp: a.comparison }), scope)
-  const profit = useAnalysisData("profit", key, () => ({ rows: profitByRegion({ period: period as never, comparison: a.comparison, filters }), cmp: a.comparison }), scope)
-  const stale = (d: { status: string; dataKey: string | null }) => (d.status === "refreshing" ? describeDataKey(d.dataKey, key) : null)
+  // ワークスペースの条件と画面の条件の積集合（実際に集計に使う条件）。重ならない場合は取得しない
+  const scoped = withScope(session.workspace, a.query.filters)
+  const filters = scoped.status === "ready" ? scoped.filters : null
+  const key = filters ? a.key : null
+  // 取得の結果に、集計に使った比較の条件と、実際に集計に使った条件（cond）を含める。
+  // 再取得の間に前の結果を表示するとき、比較の見出しと、表示中の結果の条件（staleLabel）を、前の結果の条件で示す
+  const condOf = (): ShownConditions => ({ range: period.status === "ready" ? period.range : null, filters: filters!, timeZone: session.timeZone })
+  const overview = useAnalysisData("overview", key, () => ({ ...overviewData({ period: period as never, full, comparison: a.comparison, pointComparison: pointCmp, filters: filters! }), cmp: a.comparison, pointCmp, cond: condOf() }), scope)
+  const trendKey = filters ? JSON.stringify({ f: filters, forecast: analysisServer.forecast, tz: session.timeZone }) : null
+  const trend = useAnalysisData(
+    "trend",
+    trendKey,
+    () => ({ ...mrrTrend({ filters: filters!, withForecast: analysisServer.forecast }), cond: { range: null, rangeLabel: "過去 24 か月と今後 3 か月", filters: filters!, timeZone: session.timeZone } as ShownConditions }),
+    scope
+  )
+  const bridge = useAnalysisData("bridge", key, () => ({ ...bridgeData({ period: period as never, comparison: a.comparison, filters: filters! }), cmp: a.comparison, cond: condOf() }), scope)
+  const profit = useAnalysisData("profit", key, () => ({ rows: profitByRegion({ period: period as never, comparison: a.comparison, filters: filters! }), cmp: a.comparison, cond: condOf() }), scope)
+  const stale = (d: Parameters<typeof staleLabelOf>[0]) => staleLabelOf(d, session)
 
   const range = period.status === "ready" ? period.range : null
-  const o = overview.data as (OverviewData & { cmp: ComparisonRange; pointCmp: ComparisonRange }) | undefined
+  const o = overview.data as (OverviewData & { cmp: ComparisonRange; pointCmp: ComparisonRange; cond: ShownConditions }) | undefined
+  // 領域の注記は、表示中の結果の集計に使った条件で示す（ワークスペースで決まる地域を含む）
+  const shownRegions = o?.cond.filters.regions ?? filters?.regions ?? []
   // 表示中のデータの比較の条件（再取得の間は前の結果の条件）。データがまだない場合は現在の条件
   const cmp = o?.cmp ?? a.comparison
   const pcmp = o?.pointCmp ?? pointCmp
@@ -202,9 +249,13 @@ export function BusinessDashboard({ route }: { route: Route }) {
           context={context}
           min={DATA_START}
         />
-        <RegionSelect value={a.query.filters.regions} onChange={(regions) => a.setFilters({ regions })} disabledReason={session.workspace === "kyushu" ? "このワークスペースは九州・沖縄だけ" : null} />
+        <RegionSelect value={filters?.regions ?? a.query.filters.regions} onChange={(regions) => a.setFilters({ regions })} disabledReason={workspaceRegionReason(session.workspace)} />
       </div>
+      <RegionNotice notice={restored.notice} />
 
+      {!filters ? (
+        <OutOfScopeNotice filters={a.query.filters} onClear={() => a.setFilters({ regions: [] })} />
+      ) : (
       <SectionStack spacing="section">
         {/* 1 Overview：現在の状況 */}
         <AnalysisRegion
@@ -213,7 +264,7 @@ export function BusinessDashboard({ route }: { route: Route }) {
           staleLabel={stale(overview)}
           error={st === "error" ? regionError("主要な指標", overview.reload) : null}
           data-testid="business-overview"
-          conditions={a.query.filters.regions.length ? <AnalysisScopeNote>{regionLabels[a.query.filters.regions[0]]}の契約だけを集計しています。売上の目標は全社の目標のため表示しません。</AnalysisScopeNote> : null}
+          conditions={shownRegions.length ? <AnalysisScopeNote>{shownRegions.map((r) => regionLabels[r]).join("、")}の契約だけを集計しています。売上の目標は全社の目標のため表示しません。</AnalysisScopeNote> : null}
         >
           <MetricGroup minItemWidth="15rem" className="gap-y-12">
             <Metric
@@ -313,6 +364,7 @@ export function BusinessDashboard({ route }: { route: Route }) {
           title="MRR の推移"
           divider
           status={trend.status}
+          staleLabel={stale(trend)}
           error={trend.status === "error" ? regionError("MRR の推移", trend.reload) : null}
           conditions={<AnalysisScopeNote kind="override">期間：過去 24 か月と今後 3 か月（ページの期間とは別）</AnalysisScopeNote>}
           data-testid="business-trend"
@@ -396,6 +448,7 @@ export function BusinessDashboard({ route }: { route: Route }) {
           </ul>
         </AnalysisRegion>
       </SectionStack>
+      )}
     </PageLayout>
   )
 }
