@@ -123,9 +123,12 @@ export function PatternsIntegrationApp() {
     let path = destination.path
     if (plan?.kind === "same-user" && draft) {
       const target = await lookupCustomer(draft.ws, draft.id).catch(() => undefined)
-      const pendingMutation = !draft.unconfirmed
+      const keys = Object.keys(draft.values) as (keyof typeof draft.values)[]
+      const sent = draft.submitted
+      // 結果を確かめていない保存は、送った値（submitted）でサーバーの状態と照合する。期限切れの時点の入力（values）とは分ける
+      const pendingMutation = !draft.unconfirmed || !sent
         ? undefined
-        : target && (Object.keys(draft.values) as (keyof typeof draft.values)[]).every((k) => String(target[k]) === String(draft.values[k]))
+        : target && keys.every((k) => String(target[k]) === String(sent[k]))
           ? ("applied" as const)
           : target
             ? ("not-applied" as const)
@@ -138,8 +141,11 @@ export function PatternsIntegrationApp() {
         target: target === undefined || target === null ? "missing" : target.version === draft.version || pendingMutation === "applied" ? "unchanged" : "changed",
         pendingMutation,
       })
-      if (decision.restoreWork && pendingMutation !== "applied") {
-        restoredDraft.current = draft
+      if (decision.restoreWork && target) {
+        // 保存されていた場合は、サーバーの版を基準にする。保存の後に入力した内容（values が送った値と異なる項目）だけを戻す
+        const onlySaved = pendingMutation === "applied" && keys.every((k) => String(draft.values[k]) === String(sent?.[k]))
+        restoredDraft.current = onlySaved ? null : { ...draft, version: target.version }
+        if (pendingMutation === "applied") notice = onlySaved ? "保存されていたことを確かめました" : "保存されていたことを確かめました。その後の入力は、まだ保存していません"
       } else {
         restoredDraft.current = null
         notice =
@@ -202,11 +208,12 @@ export function PatternsIntegrationApp() {
       <SignedInApp
         user={phase.user}
         notice={phase.notice}
-        takeDraft={(ws, id) => {
+        peekDraft={(ws, id) => {
           const d = restoredDraft.current
-          if (!d || d.ws !== ws || d.id !== id || d.userId !== phase.user.id) return null
-          restoredDraft.current = null
-          return d
+          return d && d.ws === ws && d.id === id && d.userId === phase.user.id ? d : null
+        }}
+        consumeDraft={(d) => {
+          if (restoredDraft.current === d) restoredDraft.current = null
         }}
         onExpired={onExpired}
         onSignedOut={() => {
@@ -297,13 +304,15 @@ function PiSidebar({ ws, currentId, user, onNavigate, onSignOut }: { ws: string;
 function SignedInApp({
   user,
   notice,
-  takeDraft,
+  peekDraft,
+  consumeDraft,
   onExpired,
   onSignedOut,
 }: {
   user: PiUser
   notice: string | null
-  takeDraft: (ws: string, id: string) => PiDraft | null
+  peekDraft: (ws: string, id: string) => PiDraft | null
+  consumeDraft: (draft: PiDraft) => void
   onExpired: (user: PiUser, draft: PiDraft | null) => void
   onSignedOut: () => void
 }) {
@@ -338,8 +347,11 @@ function SignedInApp({
     [user.id, ws, reloadAccess]
   )
   const grants = access.grants
-  const grantsKey = grants ? [...grants.permissions].sort().join("+") : null
-  const scope = `${user.id}:${ws}:${grantsKey ?? "-"}`
+  // 画面と操作のスコープは、利用者とワークスペース。権限の再確認や関係のない権限の変更では変えない（入力や実行中の操作を作り直さない）。
+  // 取得したデータのスコープには、閲覧の権限の有無を加える（閲覧の権限を失ったら破棄する）
+  const scope = `${user.id}:${ws}`
+  const canView = grants?.permissions.includes("view") ?? false
+  const dataScope = `${scope}:${canView ? "view" : "none"}`
   const viewAccess = contentAccessOf(access)
 
   // ---------------------------------------------------------------- 接続と障害
@@ -381,7 +393,7 @@ function SignedInApp({
     for (const t of toastsRef.current) dismiss(t.id)
   }, [ws, cancelNavigation, dismiss])
 
-  const feed = usePiFeed({ userId: user.id, ws, scope, holdIncoming: centerOpen, enabled: grants !== null && services.notifications !== "outage" })
+  const feed = usePiFeed({ userId: user.id, ws, scope: dataScope, holdIncoming: centerOpen, enabled: grants !== null && services.notifications !== "outage" })
 
   const ctx = useMemo<PiContextValue>(() => {
     const permitOf = makePermit(access, connectivity.status, "operational")
@@ -389,6 +401,7 @@ function SignedInApp({
       user,
       ws,
       scope,
+      dataScope,
       nav,
       access,
       viewAccess,
@@ -398,12 +411,13 @@ function SignedInApp({
       permitLatest: (p) =>
         decideAccess(access.latest(), { permissions: [p] }).allowed && (p === "view" || getMutationAvailability({ connectivity: connRef.current }).allowed),
       draftSource,
-      takeRestoredDraft: takeDraft,
+      peekRestoredDraft: peekDraft,
+      consumeRestoredDraft: consumeDraft,
       reportReachable: connectivity.reportReachable,
       reportFailure: connectivity.reportFailure,
       outageSeq,
     }
-  }, [user, ws, scope, nav, access, viewAccess, connectivity.status, connectivity.reportReachable, connectivity.reportFailure, health, takeDraft, outageSeq])
+  }, [user, ws, scope, dataScope, nav, access, viewAccess, connectivity.status, connectivity.reportReachable, connectivity.reportFailure, health, peekDraft, consumeDraft, outageSeq])
 
   // ---------------------------------------------------------------- システムの状態の表示
   const issues: SystemIssue[] = []
@@ -412,7 +426,7 @@ function SignedInApp({
   if (services.analysis === "outage")
     issues.push({ id: "analysis", condition: "partial-outage", scope: "pages", title: "分析を表示できません", impact: "顧客の一覧、詳細、編集は利用できます。" })
   const { banner } = summarizeIssues(issues)
-  const stable = useStableIssues(banner, { scopeKey: scope, immediate: (i) => i.condition === "offline" })
+  const stable = useStableIssues(banner, { scopeKey: dataScope, immediate: (i) => i.condition === "offline" })
 
   // ---------------------------------------------------------------- 画面
   const restoreList = useMemo(() => route.page === "customers" && hasListSnapshot(scope, route.params), [route])

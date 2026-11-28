@@ -22,6 +22,7 @@ export type PiKind =
   | "status"
   | "delete"
   | "contact"
+  | "export"
 
 export const APP = "/#/patterns-integration"
 

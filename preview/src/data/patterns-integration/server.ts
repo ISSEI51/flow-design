@@ -43,6 +43,7 @@ export type PiKind =
   | "status"
   | "delete"
   | "contact"
+  | "export"
 
 export type Permission = "view" | "edit" | "delete" | "export"
 export type SaveMode = "success" | "failed" | "invalid" | "conflict" | "unknown" | "forbidden"
@@ -101,7 +102,7 @@ export type PiSettings = { email: boolean; contract: boolean; digest: boolean }
 
 const config = {
   db: createDb(),
-  latency: { list: 120, detail: 120, save: 300, bulk: 300, lookup: 200, summary: 200, details: 150, access: 120, login: 200, notifications: 120, read: 150, settings: 200, import: 300, probe: 50, status: 200, delete: 200, contact: 200 } as Record<PiKind, number>,
+  latency: { list: 120, detail: 120, save: 300, bulk: 300, lookup: 200, summary: 200, details: 150, access: 120, login: 200, notifications: 120, read: 150, settings: 200, import: 300, probe: 50, status: 200, delete: 200, contact: 200, export: 100 } as Record<PiKind, number>,
   hold: {} as Partial<Record<PiKind, boolean>>,
   held: [] as Held[],
   requests: [] as PiRequest[],
@@ -129,6 +130,10 @@ const config = {
   statusMode: "success" as "success" | "failed",
   /** 連絡の記録の保存の結果 */
   contactMode: "success" as "success" | "failed",
+  /** 取り込みの要求ごとの行の結果（照会に使う） */
+  imports: {} as Record<string, { ws: string; rows: ImportRowRecord[] }>,
+  /** ワークスペースごとの次の顧客の番号 */
+  nextId: {} as Record<string, number>,
   /** 初回のセットアップを終えた利用者 */
   setupDone: [] as string[],
 }
@@ -257,7 +262,17 @@ export async function fetchCustomers(ws: string, q: ListQuery, signal: AbortSign
   return page
 }
 
-/** 一覧の検索条件に一致する ID（エクスポートと全件の選択の確定に使う） */
+/** エクスポート。要求の時点のセッションとエクスポートの権限を確かめる（受け付けた時点と応答の直前） */
+export async function exportCustomers(ws: string, target: { ids: string[] } | { search: string; filters: ListFilters }) {
+  const token = currentToken()
+  authorize(ws, "export", token)
+  const list = ("ids" in target ? rows(ws).filter((c) => target.ids.includes(c.id)) : filterRows(ws, target.search, target.filters)).map(clone)
+  await receive("export", ws, JSON.stringify(target), target)
+  authorize(ws, "export", token)
+  return list
+}
+
+/** 一覧の検索条件に一致する ID（全件の選択の確定と、件数の表示に使う） */
 export function matchingIds(ws: string, search: string, filters: ListFilters) {
   return filterRows(ws, search, filters).map((c) => c.id)
 }
@@ -279,7 +294,8 @@ export const peekCustomer = (ws: string, id: string) => rows(ws).find((c) => c.i
 
 export type CustomerValues = { name: string; email: string; phone: string; plan: string; status: PiCustomer["status"]; note: string }
 
-export async function saveCustomer(ws: string, id: string, values: CustomerValues, version: number): Promise<FormSaveResult<CustomerValues>> {
+/** 保存。成功の結果には、保存した後の版（version）を含める（続けて保存するときの競合の確認に使う） */
+export async function saveCustomer(ws: string, id: string, values: CustomerValues, version: number): Promise<FormSaveResult<CustomerValues> & { version?: number }> {
   const token = currentToken()
   const mode = config.saveMode
   try {
@@ -307,7 +323,7 @@ export async function saveCustomer(ws: string, id: string, values: CustomerValue
     throw new Error("network: connection closed")
   }
   apply()
-  return { status: "success", values }
+  return { status: "success", values, version: target.version }
 }
 
 /** 保存の結果が不明な場合の照会。現在のセッションと閲覧の権限で応答する（権限がなければ、保存されたかも返さない） */
@@ -429,6 +445,8 @@ export async function fetchSummary(ws: string, cond: AnalysisConditions, signal:
   const health = config.services.analysis
   const result = summarize(rows(ws), cond)
   await receive("summary", ws, JSON.stringify(cond), cond, signal)
+  // 応答の直前にも、要求のセッションと閲覧の権限を確かめる（fetchCustomer と同じ）
+  authorize(ws, "view", token)
   if (health === "outage") throw new Error("分析のサービスで障害が起きています")
   return result
 }
@@ -441,6 +459,7 @@ export async function fetchMetricDetails(ws: string, metric: MetricId, cond: Ana
     .filter((c) => c.status === metricStatus[metric] && matchesConditions(c, cond))
     .map(clone)
   await receive("details", ws, JSON.stringify([metric, cond]), { metric, cond }, signal)
+  authorize(ws, "view", token)
   return list
 }
 
@@ -508,19 +527,26 @@ export async function saveSetting<K extends keyof PiSettings>(userId: string, ke
 // ---------------------------------------------------------------- 取り込み
 export type ImportRow = { name: string; email: string; plan: string }
 /** 取り込み。メールアドレスの形式が正しくない行は失敗にする。importMode が incomplete の場合は、件数の一部だけを返す（結果の完全性を確かめられない） */
-export async function importCustomers(ws: string, list: ImportRow[]) {
+export type ImportRowRecord = { row: number; outcome: "created" | "failed"; reason?: string }
+
+/**
+ * 取り込み。importId は製品が作る要求の ID（同じ取り込みの照会に使う。応答を受け取れなかった場合も照会できる）。
+ * サーバーは行ごとの結果を importId ごとに記録する
+ */
+export async function importCustomers(ws: string, importId: string, list: ImportRow[]) {
   const token = currentToken()
   authorize(ws, "edit", token)
   const mode = config.importMode
-  await receive("import", ws, String(list.length), list)
-  const created: number[] = []
-  const failed: { row: number; message: string }[] = []
+  await receive("import", ws, importId, list)
+  const records: ImportRowRecord[] = []
   list.forEach((r, i) => {
     if (!/^[^\s@]+@[^\s@]+$/.test(r.email)) {
-      failed.push({ row: i + 1, message: "メールアドレスの形式が正しくありません" })
+      records.push({ row: i + 1, outcome: "failed", reason: "メールアドレスの形式が正しくありません" })
       return
     }
-    const n = rows(ws).length + 1
+    // ID はワークスペースごとの連番（削除の後も、使った番号を使い直さない）
+    const n = config.nextId[ws] ?? Math.max(0, ...rows(ws).map((c) => Number(c.id.slice(1)) || 0)) + 1
+    config.nextId[ws] = n + 1
     rows(ws).push({
       id: `c${String(n).padStart(2, "0")}`,
       name: r.name,
@@ -534,19 +560,29 @@ export async function importCustomers(ws: string, list: ImportRow[]) {
       contacts: [],
       version: 1,
     })
-    created.push(i + 1)
+    records.push({ row: i + 1, outcome: "created" })
   })
+  config.imports[importId] = { ws, rows: records }
+  const created = records.filter((r) => r.outcome === "created").length
   if (mode === "incomplete") {
-    // 件数の一部（失敗の件数）を返さない
-    return { created: created.length }
+    // 件数の一部（失敗の件数）と行ごとの結果を返さない
+    return { created }
   }
-  return {
-    created: created.length,
-    updated: 0,
-    skipped: 0,
-    failed: failed.length,
-    rows: [...created.map((row) => ({ row, outcome: "created" as const })), ...failed.map((f) => ({ row: f.row, outcome: "failed" as const, reason: f.message }))],
-  }
+  return { created, updated: 0, skipped: 0, failed: records.length - created, rows: records }
+}
+
+/**
+ * 取り込みの結果の照会。現在のセッションと閲覧の権限で応答する。
+ * サーバーが要求を受け付けていない場合は null（どの行も取り込んでいない）
+ */
+export async function lookupImport(ws: string, importId: string) {
+  const token = currentToken()
+  authorize(ws, "view", token)
+  const record = config.imports[importId]
+  const snapshot = record && record.ws === ws ? clone(record.rows) : null
+  await receive("lookup", ws, importId)
+  authorize(ws, "view", token)
+  return snapshot
 }
 
 // ---------------------------------------------------------------- 接続の確認
@@ -578,6 +614,8 @@ function reset() {
   config.probeOk = true
   config.contactMode = "success"
   config.statusMode = "success"
+  config.imports = {}
+  config.nextId = {}
   config.setupDone = []
 }
 

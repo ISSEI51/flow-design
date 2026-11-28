@@ -29,7 +29,8 @@ export const historyMarks = () => (window.history.state ?? {}) as Marks & Record
 const indexOf = (state: unknown) => ((state ?? {}) as Marks).fdPiIdx
 
 export type PiNav = {
-  navigate: (href: string, options?: { replace?: boolean; onCancel?: () => void }) => void
+  /** onNavigated：実際に移動したときだけ呼ぶ（未保存の変更の確認で「編集を続ける」を選んだ場合は呼ばない） */
+  navigate: (href: string, options?: { replace?: boolean; onCancel?: () => void; onNavigated?: () => void }) => void
   linkProps: (href: string) => { href: string; onClick: (e: MouseEvent) => void }
   /** 確認なしで移動する（認可の失効、ログアウトの後など。利用者の未保存の変更の保護より、失効を優先する場合だけ） */
   force: (href: string) => void
@@ -87,7 +88,14 @@ export function usePiRouter() {
   }, [])
 
   const navigate = useCallback<PiNav["navigate"]>(
-    (href, { replace = false, onCancel } = {}) => guardRef.current.confirmNavigation(() => go(href, replace), { onCancel }),
+    (href, { replace = false, onCancel, onNavigated } = {}) =>
+      guardRef.current.confirmNavigation(
+        () => {
+          go(href, replace)
+          onNavigated?.()
+        },
+        { onCancel }
+      ),
     [go]
   )
 

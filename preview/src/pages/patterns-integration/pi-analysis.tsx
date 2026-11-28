@@ -11,6 +11,7 @@ import { DrillDownLink, captureAnalysisPosition, useAnalysisPositionRestore, typ
 import { Metric, MetricGroup } from "@/patterns/metric"
 import { PageHeader, PageHeaderContent, PageHeaderDescription, PageHeaderTitle } from "@/patterns/page-header"
 import { PageLayout } from "@/patterns/page-layout"
+import { Section, SectionHeader, SectionTitle } from "@/patterns/section-layout"
 
 import {
   conditionsText,
@@ -86,7 +87,7 @@ function ConditionSelect({
 }
 
 export function AnalysisScreen({ params }: { params: URLSearchParams }) {
-  const { ws, scope, nav, outageSeq } = usePi()
+  const { ws, scope, dataScope, nav, outageSeq } = usePi()
   const { mainRef } = useAppShell()
   const root = useRef<HTMLDivElement>(null)
   const initialCond = conditionsFrom(params)
@@ -102,7 +103,7 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
   const summary = useBrowseData({
     query: a.key ?? "",
     enabled: a.key !== null,
-    scopeKey: scope,
+    scopeKey: dataScope,
     // 応答に、計算に使った条件（conditions）を含める。表示中の結果の条件は、この値から示す
     fetcher: (_key, { signal }) => fetchSummary(ws, cond, signal),
   })
@@ -118,11 +119,15 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
   const st = summary.status === "idle" ? "loading" : summary.status
   const stale = summary.status === "refreshing" && shown ? conditionsText(shown.conditions) : null
 
-  const [restore] = useState(() => {
+  // 描画の中では記録を読むだけにし、使い終えたことは commit の後に記録する
+  const [snapshotUsed] = useState(() => {
     const s = analysisSnapshot
-    analysisSnapshot = null
-    return params.get("back") === "1" && s && s.scope === scope && s.cond === condKey(initialCond) ? s.position : null
+    return params.get("back") === "1" && s && s.scope === scope && s.cond === condKey(initialCond) ? s : null
   })
+  useEffect(() => {
+    if (snapshotUsed && analysisSnapshot === snapshotUsed) analysisSnapshot = null
+  }, [snapshotUsed])
+  const restore = snapshotUsed?.position ?? null
   useAnalysisPositionRestore({
     position: restore,
     ready: summary.isCurrent,
@@ -165,8 +170,10 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
             status={st}
             staleLabel={stale}
             data-testid="analysis-metrics"
-            error={st === "error" ? { title: "主要な指標を取得できませんでした", description: "顧客の一覧と編集は、この障害の影響を受けません。", onRetry: summary.reload } : null}
-            conditions={shown && (shown.conditions.region || shown.conditions.plan) ? <AnalysisScopeNote>{conditionsText(shown.conditions)}で集計しています。</AnalysisScopeNote> : null}
+            // 影響の範囲は、画面の上部の知らせ（SystemBanner）で示す。ここでは同じ説明を繰り返さない
+            error={st === "error" ? { title: "主要な指標を取得できませんでした", onRetry: summary.reload } : null}
+            // 集計の条件の注記は、表示中の結果が現在の条件の結果のときだけ示す（再取得中は staleLabel が条件を示す。失敗の後は結果を示さない）
+            conditions={st === "ready" && shown && (shown.conditions.region || shown.conditions.plan) ? <AnalysisScopeNote>{conditionsText(shown.conditions)}で集計しています。</AnalysisScopeNote> : null}
           >
             <MetricGroup>
               {metricIds.map((m) => (
@@ -179,15 +186,19 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
                   action={
                     shown && (
                       <DrillDownLink origin={`metric-${m}`} href={detailsHref(m)} onClick={drill(detailsHref(m))}>
-                        明細を見る
+                        {/* 3 つの指標のリンクを区別できる名前にする（見た目の文は短く保つ） */}
+                        <span className="sr-only">{metricLabel[m]}の</span>明細を見る
                       </DrillDownLink>
                     )
                   }
                 />
               ))}
             </MetricGroup>
-          </AnalysisRegion>
-          <AnalysisRegion title="地域ごとの月額の売上" divider status={st} staleLabel={stale} data-testid="analysis-regions" error={st === "error" ? { title: "地域ごとの月額の売上を取得できませんでした", onRetry: summary.reload } : null}>
+            {/* 同じ取得の結果のため、別の領域にせず、同じ領域の中に置く（更新中と条件の表示を 1 回にする） */}
+            <Section className="mt-12" data-testid="analysis-regions">
+              <SectionHeader>
+                <SectionTitle>地域ごとの月額の売上</SectionTitle>
+              </SectionHeader>
             <Table data-scroll-key="regions">
               <TableHeader>
                 <TableRow>
@@ -210,6 +221,7 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
                 ))}
               </TableBody>
             </Table>
+            </Section>
           </AnalysisRegion>
         </ProtectedContent>
       </div>
@@ -219,7 +231,7 @@ export function AnalysisScreen({ params }: { params: URLSearchParams }) {
 
 // ---------------------------------------------------------------- 明細
 export function MetricDetailsScreen({ params }: { params: URLSearchParams }) {
-  const { ws, scope, nav } = usePi()
+  const { ws, dataScope, nav } = usePi()
   const metricParam = params.get("metric")
   const metric: MetricId = metricParam === "active" || metricParam === "paused" ? metricParam : "revenue"
   // 分析の画面で、表示中の結果の計算に使った条件（URL）をそのまま使う。見た目の文から条件を作り直さない
@@ -227,7 +239,7 @@ export function MetricDetailsScreen({ params }: { params: URLSearchParams }) {
   const wsParam = ws === "hq" ? null : ws
   const details = useBrowseData({
     query: JSON.stringify([metric, cond]),
-    scopeKey: scope,
+    scopeKey: dataScope,
     fetcher: (_k, { signal }) => fetchMetricDetails(ws, metric, cond, signal),
   })
   const list = details.data ?? []
