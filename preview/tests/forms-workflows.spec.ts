@@ -241,9 +241,12 @@ test.describe("Create & Edit: validation and the save button", { tag: "@webkit" 
     const cdp = await page.context().newCDPSession(page)
     await cdp.send("Input.imeSetComposition", { text: "やまだ", selectionStart: 3, selectionEnd: 3 })
     await expect(company).toHaveValue("やまだ")
-    // 変換中は保存できず、理由も示さない（確定していないため）
+    // 変換中は保存できず、理由を画面には示さない（確定していないため）。
+    // 支援技術には、Focusable Disabled の保存ボタンの説明として、変換中であることだけを伝える（D5。説明を空にしない）
     await disabled(submitOf(page, "ce"))
-    await expect(page.getByTestId("ce-save-notice")).toHaveText("")
+    await expect(page.getByTestId("ce-save-notice").locator(":scope > :not(.sr-only)")).toHaveCount(0)
+    await expect(page.getByTestId("ce-save-notice")).toHaveText("文字を変換しています。確定すると、入力した値を確かめます")
+    await expect(submitOf(page, "ce")).toHaveAccessibleDescription("文字を変換しています。確定すると、入力した値を確かめます")
     await cdp.send("Input.insertText", { text: "山田商事" })
     await expect(company).toHaveValue("山田商事")
     await enabled(submitOf(page, "ce"))

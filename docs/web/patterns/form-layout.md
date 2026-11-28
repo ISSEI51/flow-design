@@ -113,7 +113,7 @@
 | 理由がない | 何も表示しない。要素は残し、`aria-describedby` の参照先を保つ |
 | `hidden` | 理由を示さない（`reason` の文は示す） |
 
-- Focusable Disabled の保存ボタンの `aria-describedby` の参照先を空にしない。項目の理由がなく、保存の結果が不明、保存中、変換中のために押せない場合は、`reason` を渡す（例：`reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}`）。以前は `hidden={form.submitting || form.composing}` で理由を消していたため、結果が不明の間と保存中に、保存ボタンの説明が空になっていた（検品：「edit with an unknown result: the focusable disabled save button is described by the reason and does not save」）。`hidden` は互換のため残す。変更の記録：`reason` は追加の API。代替案（製品が別の要素に文を書き、`aria-describedby` に複数の id を渡す）は、製品ごとに文と参照がずれるため標準にしない。
+- Focusable Disabled の保存ボタンの `aria-describedby` の参照先を空にしない。項目の理由がなく、保存の結果が不明、保存中、変換中のために押せない場合は、`reason` を渡す（例：`reason={form.status === "unknown" ? "unknown" : form.submitting ? "submitting" : form.composing ? "composing" : undefined}`）。以前は `hidden={form.submitting || form.composing}` で理由を消していたため、結果が不明の間と保存中に、保存ボタンの説明が空になっていた（検品：「edit with an unknown result: the focusable disabled save button is described by the reason and does not save」）。`hidden` は互換のため残す。確定した仕様（変換中は理由を画面に示さない）は変えず、支援技術への説明だけを加えた（検品：「IME composition is not validated and blocks saving until committed」は、画面の文がないことと、保存ボタンの説明を確かめる）。変更の記録：`reason` は追加の API。代替案（製品が別の要素に文を書き、`aria-describedby` に複数の id を渡す）は、製品ごとに文と参照がずれるため標準にしない。
 
 - 文は上の表の順に 1 つだけ示す。「保存できます」の部分は `goal` で変える（ステップでは「次へ進めます」）。
 - `detail` と `onFocusField` を渡すと、該当する項目へ移動するボタンを置く。理由の項目が `detailLimit`（既定 3）以下なら項目ごとに並べ（「会社名（未入力）」「顧客コード（確認できなかった）」）、超える場合は「最初の項目（会社名）へ移動」だけを置く。修正が必要な項目、確認できなかった項目、未入力と入力の途中の項目の順に並べる。
