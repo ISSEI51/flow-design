@@ -221,9 +221,14 @@ function useNotificationFeed<T extends NotificationLike>({
   })
   const guard = useScopeGuard(scopeKey)
   const [stored, setLocal] = React.useState<LocalState<T>>(() => emptyLocal(scopeKey))
-  // 別のスコープの保留中の新着と更新中の状態は、1 回の描画でも返さない。
+  // 別のスコープの保留中の新着と更新中の状態は、1 回の描画でも返さない（描画の中で照合する）。
   const local = stored.scope === scopeKey ? stored : emptyLocal<T>(scopeKey)
-  if (stored.scope !== scopeKey) setLocal(local)
+  // 保持している状態のスコープは、commit の時点（layout effect）で新しいスコープに置き換える。描画の中では setState しない
+  // （commit されなかった描画（中断された transition）の更新で、表示中のスコープの状態を初期化しないため）。
+  // 新しいスコープの更新（イベント、購読、応答）は commit の後に始まるため、この置き換えより前には届かない。
+  React.useLayoutEffect(() => {
+    if (stored.scope !== scopeKey) setLocal((s) => (s.scope === scopeKey ? s : emptyLocal<T>(scopeKey)))
+  }, [stored.scope, scopeKey])
 
   const fetched = data.data
   const page = fetched?.page
